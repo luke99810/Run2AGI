@@ -253,7 +253,8 @@ def main() -> None:
             p.unlink()
     total = 0
     for f, content in files.items():
-        (OUT_DIR / f).write_text(content, encoding="utf-8")
+        # ★ newline="\n"：理由同 gen_types.py —— 跨平台逐字节一致。
+        (OUT_DIR / f).write_text(content, encoding="utf-8", newline="\n")
         total += content.count("    (")
     print(f"✓ 已生成 tests/contract/（{len(files)} 个文件，{total} 个用例 ×2 条校验路径）")
 

@@ -433,7 +433,10 @@ def main() -> None:
     total = 0
     for path, content in outputs:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        # ★ newline="\n" 是必须的：默认会把换行翻成 os.linesep，
+        #   于是 Windows 写出 CRLF、Linux 写出 LF —— 同一份 schema 在两台机器上
+        #   生成出逐字节不同的文件，而"输出确定性"正是这个生成器的第一条约束。
+        path.write_text(content, encoding="utf-8", newline="\n")
         total += 1
     py_types = len(PyEmitter().build().split("\nclass ")) - 1
     print(f"✓ 已生成 Python + TypeScript 两套类型（{len(PLAN)} 份 schema，{py_types} 个模型）")
