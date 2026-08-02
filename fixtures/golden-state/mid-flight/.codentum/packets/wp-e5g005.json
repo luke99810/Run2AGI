@@ -1,0 +1,30 @@
+{
+  "id": "wp-e5g005",
+  "kind": "integrate",
+  "state": "pending",
+  "role": "integrator",
+  "ownsPaths": ["src/"],
+  "readsPaths": ["packages/contracts/", "tests/"],
+  "deps": ["wp-b2d002", "wp-c3e003", "wp-d4f004"],
+  "acceptance": {
+    "kind": "test",
+    "predicate": "pnpm vitest run tests/e2e --reporter=json",
+    "authoredBy": "qa"
+  },
+  "budget": {
+    "currency": "USD",
+    "limitUsd": 2,
+    "spentUsd": 0,
+    "degradationChain": ["drop_semantic_memory"]
+  },
+  "routing": {
+    "model": "claude-opus-5",
+    "effort": "high"
+  },
+  "attempts": 0,
+  "evidence": [],
+  "provenance": {
+    "createdBy": "planner",
+    "createdAt": "2026-08-02T09:12:00.000Z"
+  }
+}

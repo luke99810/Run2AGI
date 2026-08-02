@@ -1,0 +1,37 @@
+# ★ 第 0 周就必须有这个文件。
+# Windows 检出的 .sh 带 CRLF，在 Linux 容器里执行会报 "bad interpreter"，
+# 而报错信息完全不指向真正的原因 —— 能卡半天。
+
+# 默认：仓库内统一 LF，检出时按平台
+* text=auto eol=lf
+
+# 必须 LF（会在容器 / CI 里执行）
+*.sh        text eol=lf
+*.bash      text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+
+# 必须 CRLF（Windows 原生脚本）
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# 二进制，不做行尾转换
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.webp      binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.gz        binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+
+# 生成物：diff 时折叠，避免评审噪音
+package-lock.json  linguist-generated=true
+pnpm-lock.yaml     linguist-generated=true
+poetry.lock        linguist-generated=true

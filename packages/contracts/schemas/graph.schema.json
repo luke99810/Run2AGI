@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/graph.schema.json",
+  "title": "GraphFile",
+  "x-note": "对应 .codentum/graph.json。★ 已于 2026-08-02 第 0 周冻结。改动需三人同意 + 新 ADR + 走变更窗口。",
+  "description": "依赖图 + 所有权图。\n★ 四张图性质完全不同，只有所有权图需要并发控制 —— 所以只有它带 version 字段。\n溯源图与知识图不在此文件（见 knowledge.schema.json）。",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "dependency", "ownership"],
+
+  "properties": {
+    "schemaVersion": { "const": 1 },
+
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges"],
+      "x-typeName": "DependencyGraph",
+      "description": "★ 静态 DAG，规划期确定，不需要并发控制。成环由准入校验器拒绝。",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "identifiers.schema.json#/$defs/PacketId" }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "x-typeName": "DependencyEdge",
+            "properties": {
+              "from": { "$ref": "identifiers.schema.json#/$defs/PacketId" },
+              "to": { "$ref": "identifiers.schema.json#/$defs/PacketId" }
+            }
+          }
+        }
+      }
+    },
+
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locks", "version"],
+      "x-typeName": "OwnershipGraph",
+      "description": "★ 运行时变化，四张图里唯一需要并发控制的。",
+      "properties": {
+        "locks": {
+          "type": "array",
+          "description": "★ I1 单写者：任意两条 lock 的 pathPrefix 不得互为前缀关系。\n这条不由 schema 保证（JSON Schema 表达不了），由 control-plane/locks 的前缀树强制，并由 e2e 并发用例验证。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pathPrefix", "heldBy", "acquiredAt"],
+            "x-typeName": "PathLock",
+            "properties": {
+              "pathPrefix": { "type": "string" },
+              "heldBy": { "$ref": "identifiers.schema.json#/$defs/PacketId" },
+              "acquiredAt": { "$ref": "identifiers.schema.json#/$defs/Timestamp" }
+            }
+          }
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "乐观锁版本号。提交时比对，不一致则拒绝并要求重试。"
+        }
+      }
+    }
+  }
+}

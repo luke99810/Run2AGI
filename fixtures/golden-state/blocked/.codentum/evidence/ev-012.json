@@ -1,0 +1,12 @@
+{
+  "ref": "ev-012",
+  "packetId": "wp-b2d002",
+  "role": "coder",
+  "kind": "test_run",
+  "verdict": "fail",
+  "artifacts": ["sha256:22bb33cc44dd55ee66ff77889900112233445566778899001122334455bbcc00"],
+  "prevDigest": "sha256:a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "digest": "sha256:b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1",
+  "at": "2026-08-02T10:14:33.000Z",
+  "detail": "attempt 2/3：session 过期判定仍未过 —— 与 attempt 1 同一处失败，触发 L0.5 Peer-Debug"
+}

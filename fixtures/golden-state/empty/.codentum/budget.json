@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "currency": "USD",
+  "limitUsd": 20,
+  "spentUsd": 0,
+  "byRole": {},
+  "byModel": {},
+  "degradationChain": ["drop_semantic_memory", "shrink_review_context", "summarize_history"],
+  "alerts": []
+}

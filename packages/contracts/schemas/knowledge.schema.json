@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/knowledge.schema.json",
+  "title": "KnowledgeFile",
+  "x-note": "对应 .codentum/knowledge/ 下的文件。★ 已于 2026-08-02 第 0 周冻结。改动需三人同意 + 新 ADR + 走变更窗口。",
+  "description": "知识图与溯源图的边。★ 这两张图与依赖图/所有权图性质完全不同：溯源图只追加、自动派生；知识图有环。都不需要并发控制。",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "knowledge", "provenance"],
+
+  "properties": {
+    "schemaVersion": { "const": 1 },
+
+    "knowledge": {
+      "type": "array",
+      "description": "知识图的边。★ 有环 —— 三种关系是它区别于前三张图的地方。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "relation", "confidence"],
+        "x-typeName": "KnowledgeEdge",
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "relation": {
+            "enum": ["supports", "refutes", "supersedes"],
+            "description": "★ refutes 是证伪门的产物；supersedes 表达退级 —— 记忆不被改回去，而是被新的取代。"
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+
+    "provenance": {
+      "type": "array",
+      "description": "溯源图的边。★ 只追加，从 decisions.jsonl 与 artifact 的 derivedFrom 自动派生，不手工登记。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "relation", "at"],
+        "x-typeName": "ProvenanceEdge",
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "relation": {
+            "enum": ["produced", "derived_from", "accepted_by", "rejected_by"]
+          },
+          "at": { "$ref": "identifiers.schema.json#/$defs/Timestamp" }
+        }
+      }
+    }
+  }
+}

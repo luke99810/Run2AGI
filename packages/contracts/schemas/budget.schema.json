@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/budget.schema.json",
+  "title": "BudgetFile",
+  "x-note": "对应 .codentum/budget.json。★ 已于 2026-08-02 第 0 周冻结。改动需三人同意 + 新 ADR + 走变更窗口。",
+  "description": "★★ 全案预算一律用美元，不用 token。\n不同模型家族的分词器差异可达 ~30%，异构路由下按 token 记预算会静默失真，且失真方向随路由变化，事后查不出来。\ntoken 数只作可观测指标存在（见 interfaces/model-gateway.ts 的 Usage）。",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "currency", "limitUsd", "spentUsd"],
+
+  "properties": {
+    "schemaVersion": { "const": 1 },
+
+    "currency": {
+      "const": "USD",
+      "description": "★ 常量。留这个字段不是为了将来支持多币种，是为了让读代码的人一眼看到「这里是钱不是 token」。"
+    },
+
+    "limitUsd": { "type": "number", "exclusiveMinimum": 0 },
+    "spentUsd": { "type": "number", "minimum": 0 },
+
+    "byRole": {
+      "type": "object",
+      "additionalProperties": { "type": "number", "minimum": 0 },
+      "description": "按角色分摊。桌面端成本面板读它。"
+    },
+
+    "byModel": {
+      "type": "object",
+      "additionalProperties": { "type": "number", "minimum": 0 },
+      "description": "按模型分摊。模型路由的调优依据。"
+    },
+
+    "degradationChain": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "★ 预算不足时的降级顺序，必须显式声明。\n不声明就会退化成随机截断上下文 —— 而随机截断不可复现，replay 随之失效。"
+    },
+
+    "alerts": {
+      "type": "array",
+      "description": "已触发的预算告警。桌面端据此显示黄/红。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["level", "at", "message"],
+        "x-typeName": "BudgetAlert",
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": ["warn", "hard_stop"],
+            "x-typeName": "BudgetAlertLevel"
+          },
+          "at": { "$ref": "identifiers.schema.json#/$defs/Timestamp" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "BudgetGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "limitUsd", "spentUsd", "degradationChain"],
+      "x-typeName": "BudgetGrant",
+      "description": "单个 packet 的预算额度。★ 与 BudgetFile 同样只认美元。",
+      "properties": {
+        "currency": { "const": "USD" },
+        "limitUsd": { "type": "number", "exclusiveMinimum": 0 },
+        "spentUsd": { "type": "number", "minimum": 0 },
+        "degradationChain": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "★ 预算不足时的降级顺序，必须显式声明。"
+        }
+      }
+    }
+  }
+}

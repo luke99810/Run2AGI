@@ -1,0 +1,31 @@
+{
+  "id": "wp-b2d002",
+  "kind": "impl",
+  "state": "blocked",
+  "role": "coder",
+  "ownsPaths": ["src/auth/"],
+  "readsPaths": ["packages/contracts/", "tests/", "src/api/types.ts"],
+  "deps": ["wp-a1c001"],
+  "acceptance": {
+    "kind": "test",
+    "predicate": "pnpm vitest run tests/auth --reporter=json",
+    "authoredBy": "qa"
+  },
+  "budget": {
+    "currency": "USD",
+    "limitUsd": 2.5,
+    "spentUsd": 2.5,
+    "degradationChain": ["drop_semantic_memory", "summarize_history"]
+  },
+  "routing": {
+    "model": "claude-opus-5",
+    "effort": "high"
+  },
+  "attempts": 3,
+  "evidence": ["ev-011", "ev-012", "ev-013"],
+  "provenance": {
+    "createdBy": "planner",
+    "createdAt": "2026-08-02T09:12:00.000Z",
+    "parent": "wp-a1c001"
+  }
+}

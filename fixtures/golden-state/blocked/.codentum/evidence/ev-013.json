@@ -1,0 +1,12 @@
+{
+  "ref": "ev-013",
+  "packetId": "wp-b2d002",
+  "role": "coder",
+  "kind": "test_run",
+  "verdict": "fail",
+  "artifacts": ["sha256:33cc44dd55ee66ff7788990011223344556677889900112233445566ccdd0011"],
+  "prevDigest": "sha256:b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1",
+  "digest": "sha256:c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+  "at": "2026-08-02T10:40:58.000Z",
+  "detail": "attempt 3/3：packet 预算 2.50 USD 用尽，中止并释放 src/auth/ 锁，升级至 L1 Helper"
+}

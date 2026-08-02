@@ -1,0 +1,89 @@
+# ── 依赖与构建产物 ────────────────────────────────
+node_modules/
+dist/
+build/
+out/
+.next/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Electron 打包
+release/
+*.exe
+*.dmg
+*.AppImage
+*.deb
+
+# ── ★ 凭证与密钥：绝不入库 ────────────────────────
+# 这个项目的交付门禁里有"凭证泄漏扫描"，自己的仓库先守住
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+*.credentials.json
+
+# ── 运行时状态（每个开发者本地不同）────────────────
+# ★ 前导 / 是必须的 —— 只忽略仓库根目录下的运行时状态。
+#   不写 / 的话这些模式会在任意层级匹配，把
+#   fixtures/golden-state/*/.codentum/ 里的快照一起吞掉，
+#   而且是静默的：文件在磁盘上好好的，就是没进库，
+#   直到别人 clone 下来发现 C 的渲染测试全红才会发现。
+/.codentum/state/
+/.codentum/evidence/
+/.codentum/locks.json
+*.local
+*.local.*
+
+# ── git worktree（三人各自的工作目录，不入库）──────
+/codentum-a/
+/codentum-b/
+/codentum-c/
+../codentum-a/
+../codentum-b/
+../codentum-c/
+
+# ── 测试与覆盖率 ──────────────────────────────────
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# ── 编辑器与操作系统 ──────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 日志与临时 ────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# ── TypeScript 增量构建信息 ──────────────────────
+*.tsbuildinfo
+
+# ── Python ────────────────────────────────────────
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/rolespec.schema.json",
+  "title": "RoleSpec",
+  "x-note": "★ 已于 2026-08-02 第 0 周冻结。改动需三人同意 + 新 ADR + 走变更窗口。★ 字段名一律 camelCase，与生成的 TS 类型逐字对应。",
+  "description": "一个角色 = 一组写权限 + 一组可见上下文 + 一组可触发的状态转换。提示词只是让它高效地用好这组权限。★ RoleSpec 是 Single Source，派生四处：工具面 / 卷挂载 / 状态转换表 / 所有权注册——任一处手工维护都会漂移，且漂移时通常不报错，只是权限悄悄变宽。",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "usesModel", "writes", "reads", "tools", "transitions"],
+
+  "properties": {
+    "id": { "$ref": "identifiers.schema.json#/$defs/RoleId" },
+
+    "summary": { "type": "string", "description": "一句话职责。" },
+
+    "usesModel": {
+      "type": "boolean",
+      "description": "是否调用模型。\n★ guardian 必须为 false —— 确定性拦截器不碰模型。\n⚠️ 这条【不由本 schema 保证】（JSON Schema 表达不了「id=guardian 时 usesModel 必须为 false」这种条件约束），由加载 RoleSpec 的代码强制。不要因为 schema 过了就以为它被检查过。"
+    },
+
+    "writes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "可写路径模式。派生卷挂载（读写）与所有权注册。"
+    },
+
+    "reads": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "★ 只读挂载。测试目录与 contracts 对 coder 必须在此而非 writes——这是『改测试』『改契约』两种作弊的堵法，靠挂载权限而非提示词。"
+    },
+
+    "invisible": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "★ 完全不可见（不出现在上下文里，也无法检索）。约束优先级：不可见 > 无权限 > 被拦截 > 提示词劝阻。reviewer 必须把 coder 的推理链列在这里——存储层强制，不是提示词。"
+    },
+
+    "tools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "★ 工具面白名单。未列出的工具不出现在工具列表里——是看不见，不是调用时被拒。"
+    },
+
+    "transitions": {
+      "type": "array",
+      "description": "此角色可触发的 WorkPacket 状态转换。派生控制平面的状态转换表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "$ref": "identifiers.schema.json#/$defs/PacketState" },
+          "to": { "$ref": "identifiers.schema.json#/$defs/PacketState" },
+          "requiresGate": {
+            "type": "string",
+            "description": "需要通过的门禁 id，如 green-line、acceptance、secret-scan。"
+          }
+        },
+        "x-typeName": "RoleTransition"
+      }
+    },
+
+    "modelPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "x-typeName": "ModelPolicy",
+      "description": "模型隔离用于错误去相关：同一模型既写又审，盲区会在两处同时出现，评审就成了摆设。",
+      "properties": {
+        "defaultModel": { "$ref": "identifiers.schema.json#/$defs/ModelId" },
+        "defaultEffort": { "$ref": "identifiers.schema.json#/$defs/Effort" },
+        "mustDifferFrom": {
+          "type": "array",
+          "items": { "$ref": "identifiers.schema.json#/$defs/RoleId" },
+          "description": "★ 硬约束，由 ModelGateway.open() 校验，违反则拒绝开会话（不是警告）。coder ≠ reviewer；evolver ≠ verifier。"
+        },
+        "batchEligible": {
+          "type": "boolean",
+          "description": "延迟不敏感（evolver）→ 走 Batch，约五折且无取舍。"
+        }
+      }
+    },
+
+    "skills": {
+      "type": "array",
+      "description": "此角色可用的 Skill。作用域默认最小。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "scope"],
+        "x-typeName": "RoleSkill",
+        "properties": {
+          "id": { "type": "string" },
+          "scope": {
+            "type": "string",
+            "enum": ["global", "role", "once"],
+            "x-typeName": "SkillScope",
+            "description": "三级作用域。默认取最小的 once。"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["draft", "candidate", "active", "deprecated", "retired"],
+            "x-typeName": "SkillState",
+            "description": "Skill 五态状态机。非法转换由准入校验器拒绝。"
+          }
+        }
+      }
+    },
+
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "x-typeName": "EscalationPolicy",
+      "description": "分级求助：L0 自修复 → L0.5 Peer-Debug → L1 Helper → L2 War Room → L3 人工。",
+      "properties": {
+        "maxSelfRepair": { "type": "integer", "minimum": 0 },
+        "peerDebugEnabled": { "type": "boolean" },
+        "escalateTo": {
+          "allOf": [{ "$ref": "identifiers.schema.json#/$defs/RoleId" }],
+          "description": "升级到哪个角色。典型是 helper。"
+        }
+      }
+    },
+
+    "promptRef": {
+      "type": "string",
+      "description": "packages/roles/prompts/ 下的文件引用。★ 提示词不承载硬约束——判据：这条约束如果 Agent 不配合会怎样？会失效 → 它不该在提示词里。"
+    }
+  }
+}

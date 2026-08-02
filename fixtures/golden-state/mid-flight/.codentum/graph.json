@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "dependency": {
+    "nodes": ["wp-a1c001", "wp-b2d002", "wp-c3e003", "wp-d4f004", "wp-e5g005"],
+    "edges": [
+      { "from": "wp-a1c001", "to": "wp-b2d002" },
+      { "from": "wp-a1c001", "to": "wp-c3e003" },
+      { "from": "wp-a1c001", "to": "wp-d4f004" },
+      { "from": "wp-b2d002", "to": "wp-e5g005" },
+      { "from": "wp-c3e003", "to": "wp-e5g005" },
+      { "from": "wp-d4f004", "to": "wp-e5g005" }
+    ]
+  },
+  "ownership": {
+    "locks": [
+      { "pathPrefix": "src/auth/", "heldBy": "wp-b2d002", "acquiredAt": "2026-08-02T09:14:03.000Z" },
+      { "pathPrefix": "src/api/", "heldBy": "wp-c3e003", "acquiredAt": "2026-08-02T09:14:07.000Z" },
+      { "pathPrefix": "src/web/", "heldBy": "wp-d4f004", "acquiredAt": "2026-08-02T09:15:41.000Z" }
+    ],
+    "version": 7
+  }
+}

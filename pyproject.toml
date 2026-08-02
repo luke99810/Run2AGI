@@ -1,0 +1,95 @@
+[project]
+name = "codentum"
+version = "0.0.0"
+description = "自进化多智能体软件开发系统 —— 核心引擎"
+requires-python = ">=3.11"
+
+dependencies = [
+  "pydantic>=2.9",       # ★ 运行时校验 —— 部分补偿失去 tsc 的静态检查
+  "langgraph>=0.2",      # 执行平面的角色图，见 ADR-0004
+  "anthropic>=0.40",     # 经 ModelGateway 统一出口，不散调
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.13",
+  "ruff>=0.8",
+  "pytest>=8.3",
+]
+
+[tool.setuptools]
+packages = [
+  "codentum_control_plane",
+  "codentum_harness",
+  "codentum_roles",
+  "codentum_delivery",
+  "codentum_contracts",
+]
+
+# ══════════════════════════════════════════════════════════════
+#  ★ mypy —— 失去 tsc 之后，这里就是那道确定性门禁
+#
+#  ADR-0003 承认：mypy 可以用 `# type: ignore` 绕过，tsc 不能。
+#  所以配置必须尽量堵死绕过的口子，并配一条 CI 计数规则：
+#
+#     # type: ignore 必须带具体错误码 + 一行理由注释
+#     数量只许降不许升，裸的 ignore 视同破坏门禁
+#
+#  不这样做，「能绕过的约束等于没有约束」就会应验在我们自己身上。
+# ══════════════════════════════════════════════════════════════
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+# strict 之外再加的几条 —— 这几条正是"堵绕过口子"的部分
+warn_unreachable = true
+warn_unused_ignores = true          # ★ 没用的 ignore 会报错，防止 ignore 越堆越多
+disallow_any_explicit = false       # 允许显式 Any，但下面禁止隐式
+disallow_any_generics = true
+enable_error_code = [
+  "ignore-without-code",            # ★★ 裸的 `# type: ignore` 直接报错，必须写 [错误码]
+  "redundant-expr",
+  "truthy-bool",
+  "possibly-undefined",
+  "unused-awaitable",
+]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "langgraph.*"
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# ══════════════════════════════════════════════════════════════
+#  ruff
+# ══════════════════════════════════════════════════════════════
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pycodestyle / pyflakes
+  "I",                # import 排序
+  "UP",               # pyupgrade
+  "B",                # bugbear
+  "SIM",              # 简化
+  "RUF",
+  "ASYNC",
+  "S",                # ★ bandit 安全规则
+  "T20",              # ★ 禁止 print —— 引擎里要用日志，print 不可观测
+  "PTH",              # 用 pathlib 而非 os.path
+]
+ignore = [
+  "S101",             # pytest 里要用 assert
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["T20"]      # 工具脚本就是要往终端打字
+"tests/*" = ["S101", "T20"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

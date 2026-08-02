@@ -1,0 +1,12 @@
+{"at":"2026-08-02T09:11:44.000Z","actor":"integrator","action":"packet_accepted","packetId":"wp-a1c001","reasonCode":"gate_passed","detail":"acceptance"}
+{"at":"2026-08-02T09:52:10.000Z","actor":"coder","action":"attempt_failed","packetId":"wp-b2d002","reasonCode":"acceptance_not_met","detail":"attempt 1/3 —— tests/auth 4 项未过"}
+{"at":"2026-08-02T09:52:12.000Z","actor":"manager","action":"escalation","packetId":"wp-b2d002","reasonCode":"L0_self_repair","detail":"允许自修复重试"}
+{"at":"2026-08-02T10:14:33.000Z","actor":"coder","action":"attempt_failed","packetId":"wp-b2d002","reasonCode":"acceptance_not_met","detail":"attempt 2/3 —— 同一处 session 过期逻辑仍未过"}
+{"at":"2026-08-02T10:14:35.000Z","actor":"manager","action":"escalation","packetId":"wp-b2d002","reasonCode":"L0.5_peer_debug","detail":"同类失败重复出现，转 Peer-Debug"}
+{"at":"2026-08-02T10:40:58.000Z","actor":"coder","action":"attempt_failed","packetId":"wp-b2d002","reasonCode":"budget_exhausted","detail":"attempt 3/3 —— packet 预算 2.50 USD 用尽"}
+{"at":"2026-08-02T10:41:00.000Z","actor":"manager","action":"lock_released","packetId":"wp-b2d002","reasonCode":"blocked_release","detail":"src/auth/ —— 卡住即释放锁，不占用下游"}
+{"at":"2026-08-02T10:41:02.000Z","actor":"manager","action":"escalation","packetId":"wp-b2d002","reasonCode":"L1_helper","detail":"转 Helper 介入诊断"}
+{"at":"2026-08-02T10:41:12.000Z","actor":"manager","action":"lock_acquired","packetId":"wp-c3e003","reasonCode":"path_free","detail":"src/api/"}
+{"at":"2026-08-02T10:44:02.000Z","actor":"manager","action":"budget_alert","reasonCode":"warn_92pct","detail":"18.40 / 20.00 USD"}
+{"at":"2026-08-02T10:47:30.000Z","actor":"helper","action":"packet_created","packetId":"wp-f6h006","reasonCode":"diagnosis_complete","detail":"定位到 session 过期判定，产出 fix packet"}
+{"at":"2026-08-02T10:47:31.000Z","actor":"guardian","action":"approval_required","packetId":"wp-f6h006","reasonCode":"contract_adjacent","detail":"改动紧邻契约边界，需人工审批"}

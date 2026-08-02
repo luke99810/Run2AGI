@@ -1,0 +1,142 @@
+# ══════════════════════════════════════════════════════════════
+#  团队的路径独占表
+#
+#  ★ 这个文件与 Codentum 系统内部的 boundaries.yaml 同构 ——
+#    我们用自己设计的机制来组织自己的团队。
+#
+#  不变量 I1（单写者）：任一路径只能有一个 owner。
+#  → 合并冲突在结构上不可能发生，而不是靠"沟通协调"避免。
+#
+#  改这个文件 = 改团队契约，需三人同意并记 ADR。
+# ══════════════════════════════════════════════════════════════
+
+version: 1
+
+# ★ 契约冻结日。此后改 packages/contracts/** 需：三人同意 + 新 ADR + 走变更窗口。
+#
+# ⚠️ 这一行等于「宣布冻结」。若 B / C 还没过目全部 8 份 schema 与 4 个接口签名，
+#    把它改回 null，走完确认再填 —— 冻结的意义在于三个人都认它，
+#    单方面填上去只是给自己一个不存在的确定感。
+frozen_at: 2026-08-02
+
+# ★ gitAuthor 必须与 `git config user.name` 逐字相同。
+#   I3 契约冻结检查靠它把 commit 的作者对回 A/B/C ——
+#   对不上就无法判断"是不是只有 A 改了 contracts"，检查会报「无法执行」。
+#
+#   ⚠️ 它报「无法执行」而不是「通过」是刻意的：
+#      一个因为配置缺失而静默放行的门禁，比没有门禁更危险。
+members:
+  A:
+    role: 队长 / 架构
+    gitAuthor: wangfengzhou
+    responsibility: 控制平面 + 契约 + 集成仲裁 + 不变量守护
+  B:
+    role: 执行层
+    gitAuthor: null            # ← B 用 `git config user.name` 查到后填这里
+    responsibility: Harness + 角色实现 + 进化层（P4 起）
+  C:
+    role: 产品层
+    gitAuthor: null            # ← C 同上
+    responsibility: 桌面端 + 交付链路
+
+modules:
+  # ── A ────────────────────────────────────────────────────────
+  - name: contracts
+    owner: A
+    paths: ["packages/contracts/**"]
+    note: >
+      ★ 契约冻结（对应系统的 I3）。只有 A 能写。
+      其他人需要改 → 提 ContractChangeRequest，不要自己改。
+      别人自己改契约是这个项目最容易出现、也最难查的问题：
+      它会让另外两人的代码在毫无征兆的情况下失配。
+
+  - name: control-plane
+    owner: A
+    paths: ["packages/control-plane/**"]
+    note: 确定性代码，零 LLM。错误不可恢复，所以单元测试覆盖要求最高。
+
+  - name: fixtures
+    owner: A
+    paths: ["fixtures/**"]
+    note: >
+      ★ golden-state 快照是 C 的解耦点 —— 有了它 C 第一天就能开工，
+      不用等控制平面跑起来。第 0 周必须产出 ≥3 个。
+
+  - name: e2e-tests
+    owner: A
+    paths: ["tests/e2e/**"]
+    note: 端到端验收，跨三人模块，由集成责任人持有。
+
+  - name: docs
+    owner: A
+    paths: ["docs/**"]
+    note: B/C 提 PR。ADR 记录团队决策：谁定的、为什么、否决了什么。
+
+  # ── B ────────────────────────────────────────────────────────
+  - name: harness
+    owner: B
+    paths: ["packages/harness/**"]
+    reads: ["packages/contracts/**"]
+    note: >
+      单次执行的受控外壳。核心约束：准备阶段与收敛阶段【不含模型】——
+      进模型前约束已物理生效，出模型后判定由代码做出。
+
+  - name: roles
+    owner: B
+    paths: ["packages/roles/**"]
+    reads: ["packages/contracts/**"]
+    note: >
+      RoleSpec 是 Single Source —— 派生工具面 / 卷挂载 / transitions /
+      所有权注册四处配置。任一处手工维护都会漂移。
+
+  # ── C ────────────────────────────────────────────────────────
+  - name: desktop
+    owner: C
+    paths: ["packages/desktop/**"]
+    reads: ["packages/contracts/**", "fixtures/golden-state/**"]
+    note: >
+      ★ 对系统状态零写权限 —— 纯读端，订阅状态做投影。
+      Console 挂掉系统照常运行。这是架构属性，也是 C 犯错不会传播的原因。
+
+  - name: delivery
+    owner: C
+    paths: ["packages/delivery/**"]
+    reads: ["packages/contracts/**"]
+    note: >
+      ⚠️ secret-scan 的验收测试由 A 先写（实现简单但后果严重，
+      对应系统里 QA-first 的制衡）。
+
+  # ── 共享 / 自动生成 ──────────────────────────────────────────
+  - name: docker
+    owner: C
+    paths: ["docker/**"]
+    note: 冷启动测试容器归 C；team-mode 的 compose 由 A 或 B 各写一次即可。
+
+  - name: scripts
+    owner: A
+    paths: ["scripts/**"]
+    note: 改动前知会全员（所有人都在用）。
+
+  - name: generated
+    owner: null
+    paths:
+      - "tests/contract/**"
+      - "packages/contracts/python/codentum_contracts/state.py"   # ★ gen_types 生成
+      - "packages/contracts/typescript/state.ts"                  # ★ 同上，给桌面端
+    note: >
+      ★ 从 contracts/schemas 自动生成，任何人都不手写（连 A 也不行）。
+      两侧都是生成物 —— 这是 ADR-0003 跨语言边界唯一有效的防漂移手段。
+      改数据形状：改 schema → python scripts/gen_types.py → 提交生成结果。
+      `gen:check` 会拦住反向操作。
+      注：interfaces.py 是【手写】的，因为方法签名 JSON Schema 表达不了。
+
+# ── 校验规则（可写成 CI 检查）────────────────────────────────
+invariants:
+  - id: I1-single-writer
+    rule: 任意两个 module 的 paths 不得相交
+  - id: I3-contract-freeze
+    rule: 除 owner=A 外，任何人的 commit 不得触及 packages/contracts/**
+  - id: no-handwritten-generated
+    rule: >
+      tests/contract/** 与 packages/contracts/state/index.ts 的变更必须来自生成脚本，
+      不得手工提交。已有可执行的检查：make gen-check

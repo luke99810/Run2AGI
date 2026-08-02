@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/evidence.schema.json",
+  "title": "Evidence",
+  "x-note": "对应 .codentum/evidence/<id>.json。★ 已于 2026-08-02 第 0 周冻结。改动需三人同意 + 新 ADR + 走变更窗口。",
+  "description": "★ I6 证据：状态推进必须附证据引用，声明不算。执行完成但证据没落盘 = 没做过。",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ref", "packetId", "role", "kind", "verdict", "artifacts", "prevDigest", "digest", "at"],
+
+  "properties": {
+    "ref": { "$ref": "identifiers.schema.json#/$defs/EvidenceRef" },
+    "packetId": { "$ref": "identifiers.schema.json#/$defs/PacketId" },
+    "role": { "$ref": "identifiers.schema.json#/$defs/RoleId" },
+
+    "kind": {
+      "type": "string",
+      "enum": ["test_run", "build", "review", "gate", "tool_log"],
+      "x-typeName": "EvidenceKind"
+    },
+
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail"],
+      "x-typeName": "Verdict",
+      "description": "★ 必须可复算：拿同样的输入重跑一遍应得到同样的结论。\n不可复算的判定不算证据，只算意见。"
+    },
+
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "identifiers.schema.json#/$defs/ArtifactRefStr" },
+      "description": "内容寻址的产出物引用。"
+    },
+
+    "prevDigest": {
+      "allOf": [{ "$ref": "identifiers.schema.json#/$defs/Digest" }],
+      "description": "★ 审计哈希链：上一条证据的 digest。链首用 sha256: 后跟 64 个 0。断链即篡改。"
+    },
+
+    "digest": {
+      "allOf": [{ "$ref": "identifiers.schema.json#/$defs/Digest" }],
+      "description": "本条证据的摘要，覆盖除 digest 自身外的全部字段。"
+    },
+
+    "at": { "$ref": "identifiers.schema.json#/$defs/Timestamp" },
+
+    "gate": {
+      "type": "string",
+      "description": "kind === 'gate' 时，是哪道门禁。如 green-line、acceptance、secret-scan。"
+    },
+
+    "detail": {
+      "type": "string",
+      "description": "给人看的补充说明。★ 判定不得依赖这个字段 —— 判定看 verdict。"
+    }
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/workpacket.schema.json",
+  "title": "WorkPacket",
+  "x-note": "★ 已于 2026-08-02 第 0 周冻结。改动需三人同意 + 新 ADR + 走变更窗口。★ 字段名一律 camelCase —— 与生成的 TS 类型逐字对应，生成器不做命名转换（转换规则本身就是漂移的来源）。",
+  "description": "调度的最小单位。一个 WorkPacket = 一段可独占的写权限 + 一条可判定的验收 + 一份预算。对应 K8s 的 Pod spec。",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "kind", "state", "role",
+    "ownsPaths", "readsPaths", "deps",
+    "acceptance", "budget", "attempts", "evidence", "provenance"
+  ],
+
+  "properties": {
+    "id": { "$ref": "identifiers.schema.json#/$defs/PacketId" },
+
+    "kind": {
+      "type": "string",
+      "enum": ["design", "contract", "impl", "test", "review", "integrate", "spike", "fix", "evolve"],
+      "x-typeName": "PacketKind",
+      "description": "spike = 探索性任务（算法类），产出是结论不是代码；结论固化后另开 impl packet。"
+    },
+
+    "state": { "$ref": "identifiers.schema.json#/$defs/PacketState" },
+
+    "role": { "$ref": "identifiers.schema.json#/$defs/RoleId" },
+
+    "ownsPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "★ I1 单写者：运行期间独占写权限。与任何其他 running packet 的 ownsPaths 不得相交 —— 由 control-plane/locks 强制，不靠约定。生成物不进 ownsPaths。\n注意：pending 的 packet 可以声明与在跑的锁重叠的路径（如集成 packet 声明 src/），锁只对 running 生效。"
+    },
+
+    "readsPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "只读挂载。★ 约束靠挂载权限物理生效，不靠提示词劝阻。\n对 coder 而言 tests/ 与 packages/contracts/ 必须在这里而不是 ownsPaths —— 这是「改测试」「改契约」两种作弊的堵法。"
+    },
+
+    "deps": {
+      "type": "array",
+      "items": { "$ref": "identifiers.schema.json#/$defs/PacketId" },
+      "description": "依赖图的边。必须是 DAG —— 成环由准入校验器拒绝。"
+    },
+
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "predicate", "authoredBy"],
+      "x-typeName": "Acceptance",
+      "description": "★ I2 验收可判定。由 QA 在实现之前写，Coder 看不见也改不了 —— 这是三种作弊里「缩小范围」的堵法。",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["test", "metric", "schema", "manual"],
+          "x-typeName": "AcceptanceKind",
+          "description": "metric 用于算法类任务（阈值判定）；manual 需人工审批，应尽量少。"
+        },
+        "predicate": {
+          "type": "string",
+          "description": "机器可判定的判据：可执行命令、指标表达式或 schema 引用。「做得好」不是判据。"
+        },
+        "threshold": {
+          "type": "number",
+          "description": "kind === 'metric' 时的阈值。"
+        },
+        "authoredBy": {
+          "allOf": [{ "$ref": "identifiers.schema.json#/$defs/RoleId" }],
+          "description": "★ 写这条验收的角色。不得等于 packet 的 role —— 自己给自己定验收即作弊。这条由准入校验器强制。"
+        }
+      }
+    },
+
+    "budget": {
+      "allOf": [{ "$ref": "budget.schema.json#/$defs/BudgetGrant" }],
+      "description": "本 packet 的预算额度。"
+    },
+
+    "routing": {
+      "allOf": [{ "$ref": "#/$defs/ModelRouting" }],
+      "description": "留空则用角色默认（RoleSpec.modelPolicy）。"
+    },
+
+    "attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "已尝试次数。分级求助的升级判据之一：L0 自修复 → L0.5 Peer-Debug → L1 Helper → L2 War Room → L3 人工。\n★ 执行体只读，不得据此改变行为。"
+    },
+
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "identifiers.schema.json#/$defs/EvidenceRef" },
+      "description": "★ I6 证据。执行完成但证据没落盘 = 没做过。"
+    },
+
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["createdBy", "createdAt"],
+      "x-typeName": "Provenance",
+      "description": "溯源图的节点信息，追加不改写。",
+      "properties": {
+        "createdBy": { "$ref": "identifiers.schema.json#/$defs/RoleId" },
+        "createdAt": { "$ref": "identifiers.schema.json#/$defs/Timestamp" },
+        "parent": {
+          "allOf": [{ "$ref": "identifiers.schema.json#/$defs/PacketId" }],
+          "description": "由哪个 packet 派生。"
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "ModelRouting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort"],
+      "x-typeName": "ModelRouting",
+      "description": "模型路由。",
+      "properties": {
+        "model": { "$ref": "identifiers.schema.json#/$defs/ModelId" },
+        "effort": { "$ref": "identifiers.schema.json#/$defs/Effort" },
+        "batch": {
+          "type": "boolean",
+          "description": "延迟不敏感的任务（如 evolve）走 Batch，约五折且无取舍。"
+        }
+      }
+    }
+  }
+}

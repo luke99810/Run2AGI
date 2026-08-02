@@ -1,0 +1,13 @@
+{
+  "ref": "ev-001",
+  "packetId": "wp-a1c001",
+  "role": "architect",
+  "kind": "gate",
+  "gate": "acceptance",
+  "verdict": "pass",
+  "artifacts": ["sha256:3f1a9c0b7d2e845169acbf03e5d7128a4b6c9e2f0a1d3b5c7e9f1a2b4c6d8e0f"],
+  "prevDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "digest": "sha256:9b2e4d6f8a0c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b",
+  "at": "2026-08-02T09:11:44.000Z",
+  "detail": "契约冻结：gen:check 无 diff，typecheck 通过"
+}

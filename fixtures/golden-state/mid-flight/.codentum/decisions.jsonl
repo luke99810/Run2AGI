@@ -1,0 +1,10 @@
+{"at":"2026-08-02T09:02:00.000Z","actor":"planner","action":"packet_created","packetId":"wp-a1c001","reasonCode":"plan_initial"}
+{"at":"2026-08-02T09:11:44.000Z","actor":"integrator","action":"packet_accepted","packetId":"wp-a1c001","reasonCode":"gate_passed","detail":"acceptance"}
+{"at":"2026-08-02T09:12:00.000Z","actor":"planner","action":"packet_created","packetId":"wp-b2d002","reasonCode":"contract_frozen_fanout"}
+{"at":"2026-08-02T09:12:00.000Z","actor":"planner","action":"packet_created","packetId":"wp-c3e003","reasonCode":"contract_frozen_fanout"}
+{"at":"2026-08-02T09:12:00.000Z","actor":"planner","action":"packet_created","packetId":"wp-d4f004","reasonCode":"contract_frozen_fanout"}
+{"at":"2026-08-02T09:12:00.000Z","actor":"planner","action":"packet_created","packetId":"wp-e5g005","reasonCode":"integration_barrier"}
+{"at":"2026-08-02T09:14:03.000Z","actor":"manager","action":"lock_acquired","packetId":"wp-b2d002","reasonCode":"path_free","detail":"src/auth/"}
+{"at":"2026-08-02T09:14:07.000Z","actor":"manager","action":"lock_acquired","packetId":"wp-c3e003","reasonCode":"path_free","detail":"src/api/"}
+{"at":"2026-08-02T09:15:38.000Z","actor":"guardian","action":"tool_blocked","packetId":"wp-c3e003","reasonCode":"path_readonly","detail":"尝试写 tests/api/auth.spec.ts —— 只读挂载，已拦截"}
+{"at":"2026-08-02T09:15:41.000Z","actor":"manager","action":"lock_acquired","packetId":"wp-d4f004","reasonCode":"path_free","detail":"src/web/"}

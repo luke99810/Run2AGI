@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/identifiers.schema.json",
+  "title": "Identifiers",
+  "x-note": "共享标识类型的唯一定义处。★ 其他 schema 一律用 $ref 引用，不要复制 enum —— 复制就是漂移的开始。",
+  "description": "跨 schema 共享的标识与枚举。本文件只有 $defs，没有根类型。",
+
+  "$defs": {
+    "PacketId": {
+      "type": "string",
+      "pattern": "^wp-[0-9a-z]{6,}$",
+      "x-brand": "PacketId",
+      "description": "WorkPacket 的全局唯一 id，创建后不变。"
+    },
+
+    "EvidenceRef": {
+      "type": "string",
+      "x-brand": "EvidenceRef",
+      "description": "证据引用。★ I6：状态推进必须附证据引用，声明不算。"
+    },
+
+    "ArtifactRefStr": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+:[0-9a-f]+$",
+      "x-typeName": "ArtifactRefStr",
+      "description": "内容寻址的产出物引用，格式 `<algo>:<hex>`。★ 内容寻址意味着 ref 变了就一定是内容变了，不可能同名不同物 —— 溯源图的可信度建立在这上面。"
+    },
+
+    "Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "x-typeName": "Digest",
+      "description": "摘要，格式 `sha256:<64位小写十六进制>`。\n★ 审计哈希链的链首用 sha256: 后跟 64 个 0 —— 哨兵值也必须是合法摘要格式，否则解析链首要走特例分支，而特例分支是最少被测到的分支。"
+    },
+
+    "PacketState": {
+      "type": "string",
+      "enum": ["pending", "ready", "running", "blocked", "review", "accepted", "rejected", "abandoned"],
+      "x-typeName": "PacketState",
+      "description": "WorkPacket 的状态。★ 定义在这里而不是 workpacket.schema.json —— RoleSpec 的 transitions 也要用它，两处各写一份 enum 就会漂移。合法转换由 RoleSpec 派生的转换表定义，不在此处硬编码。"
+    },
+
+    "RoleId": {
+      "type": "string",
+      "enum": ["intake", "architect", "planner", "qa", "coder", "helper", "reviewer", "integrator", "manager", "evolver", "guardian"],
+      "x-typeName": "RoleId",
+      "description": "11 个角色。★ guardian 是唯一 usesModel = false 的 —— 确定性拦截器不碰模型。"
+    },
+
+    "ModelId": {
+      "type": "string",
+      "x-typeName": "ModelId",
+      "description": "模型标识。"
+    },
+
+    "Effort": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "xhigh", "max"],
+      "x-typeName": "Effort",
+      "description": "推理强度。★ 需要加强时调这个，不要换模型 —— 提示词缓存按模型分桶，同一次尝试内换模型 = 整个前缀冷重写。"
+    },
+
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "x-typeName": "Timestamp",
+      "description": "ISO-8601 时间戳。"
+    }
+  }
+}

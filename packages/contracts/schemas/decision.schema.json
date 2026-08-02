@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codentum.dev/schemas/decision.schema.json",
+  "title": "DecisionRecord",
+  "x-note": "对应 .codentum/decisions.jsonl 的一行。★ 已于 2026-08-02 第 0 周冻结。改动需三人同意 + 新 ADR + 走变更窗口。",
+  "description": "决策追加日志的一条。★ 只追加不改写 —— 溯源图的边由它派生。",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["at", "actor", "action", "reasonCode"],
+
+  "properties": {
+    "at": { "$ref": "identifiers.schema.json#/$defs/Timestamp" },
+
+    "actor": {
+      "oneOf": [
+        { "$ref": "identifiers.schema.json#/$defs/RoleId" },
+        { "const": "operator" }
+      ],
+      "description": "谁做的决定。operator = 人工。"
+    },
+
+    "action": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "做了什么。如 packet_created、lock_acquired、lock_released、escalation、tool_blocked、approval_required、budget_alert。\n★ pattern 强制小写下划线 —— 它是给代码 switch 的，不是给人读的。"
+    },
+
+    "packetId": { "$ref": "identifiers.schema.json#/$defs/PacketId" },
+
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.]*$",
+      "description": "★ 机器可读的理由码，不是自然语言。控制平面据此决策，桌面端据此分类展示。\n★ pattern 不允许空格与中文 —— 这正是「写成一句话就等于没有理由码」这条的可执行版本。想说人话请写 detail。"
+    },
+
+    "detail": {
+      "type": "string",
+      "description": "给人看的补充说明。★ 任何判定都不得依赖这个字段。"
+    }
+  }
+}
