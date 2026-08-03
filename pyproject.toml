@@ -7,7 +7,11 @@ requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2.9",       # ★ 运行时校验 —— 部分补偿失去 tsc 的静态检查
   "langgraph>=0.2",      # 执行平面的角色图，见 ADR-0004
-  "anthropic>=0.40",     # 经 ModelGateway 统一出口，不散调
+  # ── 模型 Provider（ADR-0005）─────────────────────────────────
+  # ★ 两者都只在 ModelGateway 的实现里 import，别处一律不许直接调 SDK ——
+  #   绕过统一出口，成本记账与模型隔离就都失效了。
+  "openai>=1.0",         # ★ 默认：阿里云百炼 compatible-mode（赛题生态）
+  "anthropic>=0.40",     # 备：等价可切换实现，用于演示 Provider 切换 + 作对照基线
 ]
 
 [project.optional-dependencies]
