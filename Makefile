@@ -35,8 +35,11 @@ check-boundaries:
 secret-scan:
 	$(PY) scripts/secret_scan.py
 
+# ★ 不写死 tests/contract。写死的话，新增的测试目录会静默地不被 verify-offline
+#   覆盖 —— 而「没跑过的测试」和「跑过且通过的测试」在终端上长得一模一样。
+#   收集范围交给 pyproject 的 testpaths，保持单一来源。
 test:
-	$(PY) -m pytest tests/contract -q
+	$(PY) -m pytest -q
 
 verify-offline: gen-check check-fixtures check-boundaries test secret-scan
 

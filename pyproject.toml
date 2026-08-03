@@ -92,4 +92,8 @@ ignore = [
 "tests/*" = ["S101", "T20"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# packages/*/tests 也要收 —— 各包的单元测试放在自己包内，理由是
+# boundaries.yaml 只给 tests/contract（生成物）和 tests/e2e（A）登记了 owner，
+# 一个放在 tests/unit 的目录会是「无主路径」。与其单方面改团队契约，
+# 不如让单元测试落在各自包的地盘里：谁的代码谁的测试，边界天然对齐。
+testpaths = ["tests", "packages/control-plane/tests"]
