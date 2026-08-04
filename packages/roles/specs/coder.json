@@ -1,0 +1,17 @@
+{
+  "id": "coder",
+  "summary": "实现 WorkPacket，产出 diff、自测结果与证据。",
+  "usesModel": true,
+  "writes": ["workspace/**"],
+  "reads": ["packages/contracts/**", "tests/**", "docs/adr/**"],
+  "invisible": ["evidence/**/reasoning.md"],
+  "tools": ["read_file", "write_file", "run_tests", "create_diff", "request_help"],
+  "transitions": [
+    { "from": "running", "to": "review", "requiresGate": "self-test" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus",
+    "defaultEffort": "medium"
+  }
+}

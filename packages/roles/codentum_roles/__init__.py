@@ -1,3 +1,4 @@
+# ruff: noqa: RUF002
 """codentum_roles —— 角色体系
 
 ★ 一个角色 = 一组写权限 + 一组可见上下文 + 一组可触发的状态转换。
@@ -26,3 +27,19 @@
 
 owner: B ｜ 评审: A ｜ 详见 ../README.md 与 docs/01-角色详细设计与Skill清单.md
 """
+
+from .loader import (
+    RoleSpecLoadError,
+    default_specs_dir,
+    load_builtin_role_specs,
+    load_role_spec_file,
+    load_role_specs_dir,
+)
+
+__all__ = [
+    "RoleSpecLoadError",
+    "default_specs_dir",
+    "load_builtin_role_specs",
+    "load_role_spec_file",
+    "load_role_specs_dir",
+]
