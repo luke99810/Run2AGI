@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from codentum_contracts.interfaces import BudgetGrantRuntime, SpawnRequest
 from codentum_contracts.state import ModelRouting, PacketId, RoleSpec
 
+from codentum_harness.context_broker import ContextBundle, ContextCandidate, assemble_context_bundle
 from codentum_harness.mounts import derive_mounts
 from codentum_harness.tool_surface import ToolDescriptor, derive_tool_surface
 
@@ -24,6 +26,7 @@ class PreparedExecution:
     request: SpawnRequest
     tools: tuple[str, ...]
     mount_paths: tuple[str, ...]
+    context: ContextBundle | None
 
 
 def prepare_spawn_request(
@@ -36,10 +39,16 @@ def prepare_spawn_request(
     routing: ModelRouting,
     budget: BudgetGrantRuntime,
     attempt: int,
+    context_candidates: Sequence[ContextCandidate] | None = None,
+    context_char_budget: int | None = None,
 ) -> PreparedExecution:
     """Build a SpawnRequest without invoking the model or control-plane."""
     if attempt < 1:
         raise ValueError("attempt must start at 1")
+    if context_candidates is None and context_char_budget is not None:
+        raise ValueError("context_candidates are required when context_char_budget is provided")
+    if context_candidates is not None and context_char_budget is None:
+        raise ValueError("context_char_budget is required when context_candidates are provided")
 
     workspace_path = Path(workspace)
     tool_surface = derive_tool_surface(role_spec, tool_registry)
@@ -47,6 +56,11 @@ def prepare_spawn_request(
         role_spec,
         project_root=project_root,
         workspace_root=workspace_path,
+    )
+    context = (
+        assemble_context_bundle(role_spec, candidates=context_candidates, char_budget=context_char_budget)
+        if context_candidates is not None and context_char_budget is not None
+        else None
     )
     request = SpawnRequest(
         packet_id=packet_id,
@@ -62,4 +76,5 @@ def prepare_spawn_request(
         request=request,
         tools=tool_surface.tool_names,
         mount_paths=tuple(m.mount_path for m in mounts),
+        context=context,
     )
