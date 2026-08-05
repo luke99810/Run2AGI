@@ -1,0 +1,17 @@
+{
+  "id": "qa",
+  "summary": "在实现前写验收测试，并执行验收报告。",
+  "usesModel": true,
+  "writes": ["tests/acceptance/**", "evidence/qa/**"],
+  "reads": ["packages/contracts/**", "fixtures/**"],
+  "tools": ["read_file", "write_acceptance_tests", "run_acceptance_tests"],
+  "transitions": [
+    { "from": "ready", "to": "running" },
+    { "from": "running", "to": "review", "requiresGate": "acceptance" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-max",
+    "defaultEffort": "high",
+    "mustDifferFrom": ["coder"]
+  }
+}
