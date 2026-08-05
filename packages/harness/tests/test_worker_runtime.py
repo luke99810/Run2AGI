@@ -13,10 +13,14 @@ from codentum_contracts import (
     EvidenceRef,
     ModelRouting,
     PacketId,
+    RoleSpec,
     SpawnRequest,
     WorkerCompleted,
 )
 from codentum_contracts.interfaces import WorkerEvent
+from codentum_harness.context_broker import ContextCandidate
+from codentum_harness.prepare import prepare_spawn_request
+from codentum_harness.tool_surface import ToolDescriptor
 from codentum_harness.worker import LocalWorkerRuntime, WorktreeIsolationError
 
 
@@ -95,7 +99,7 @@ def test_events_are_replayable_by_sequence(git_repo: Path, tmp_path: Path) -> No
 
     initial, later = asyncio.run(_collect_event_slices(runtime, request(workspace)))
 
-    assert [event.kind for event in initial] == ["started"]
+    assert [event.kind for event in initial] == ["started", "checkpoint"]
     assert [event.kind for event in later] == ["finished"]
 
 
@@ -110,12 +114,51 @@ def test_spawn_writes_evidence_manifest_and_event_log(git_repo: Path, tmp_path: 
     assert manifest["worker_id"] == handle.worker_id
     assert manifest["packet_id"] == "wp-abcdef"
     assert manifest["tools"] == ["read_file", "write_file"]
+    assert (evidence_dir / "checkpoints" / "0000.json").exists()
 
     events = [
         json.loads(line)
         for line in (evidence_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert [event["kind"] for event in events] == ["started"]
+    assert [event["kind"] for event in events] == ["started", "checkpoint"]
+    assert events[1]["payload"]["path"] == "checkpoints/0000.json"
+
+
+def test_spawn_prepared_writes_context_into_checkpoint(git_repo: Path, tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    prepared = prepare_spawn_request(
+        packet_id=PacketId("wp-abcdef"),
+        role_spec=role_spec(),
+        tool_registry={
+            "read_file": ToolDescriptor("read_file"),
+            "write_file": ToolDescriptor("write_file"),
+        },
+        project_root=git_repo,
+        workspace=workspace,
+        routing=ModelRouting(model="qwen-plus", effort="medium"),
+        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        attempt=1,
+        context_candidates=(
+            ContextCandidate(
+                ref="packet",
+                artifact_path=".codentum/backlog/packets/wp-abcdef.yaml",
+                text="implement app shell",
+                required=True,
+                priority=1,
+            ),
+        ),
+        context_char_budget=100,
+    )
+    runtime = LocalWorkerRuntime(repo_root=git_repo)
+
+    handle = asyncio.run(runtime.spawn_prepared(prepared))
+
+    checkpoint = json.loads(
+        (
+            workspace / ".codentum" / "evidence" / handle.worker_id / "checkpoints" / "0000.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert checkpoint["context"]["slices"][0]["ref"] == "packet"
 
 
 async def _spawn_and_settle(runtime: LocalWorkerRuntime, req: SpawnRequest) -> WorkerCompleted:
@@ -132,8 +175,19 @@ async def _collect_event_slices(
     handle = await runtime.spawn(req)
     initial = [event async for event in runtime.events(handle)]
     await runtime.settle(handle)
-    later = [event async for event in runtime.events(handle, since_seq=1)]
+    later = [event async for event in runtime.events(handle, since_seq=len(initial))]
     return initial, later
+
+
+def role_spec() -> RoleSpec:
+    return RoleSpec(
+        id="coder",
+        usesModel=True,
+        writes=("workspace/src/**",),
+        reads=("packages/contracts/**",),
+        tools=("read_file", "write_file"),
+        transitions=(),
+    )
 
 
 def run_git(cwd: Path, *args: str) -> str:

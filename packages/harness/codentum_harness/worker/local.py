@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from codentum_contracts.interfaces import (
     AbortReason,
@@ -26,7 +27,13 @@ from codentum_contracts.interfaces import (
     WorkerOutcome,
 )
 
+from codentum_harness.checkpoint import write_initial_checkpoint
+from codentum_harness.context_broker import ContextBundle
+
 from .worktree import GitWorktreeManager
+
+if TYPE_CHECKING:
+    from codentum_harness.prepare import PreparedExecution
 
 __all__ = [
     "LocalWorkerRuntime",
@@ -45,6 +52,13 @@ class LocalWorkerRuntime:
         self._sessions: dict[str, _Session] = {}
 
     async def spawn(self, req: SpawnRequest) -> WorkerHandle:
+        return await self._spawn(req, context=None)
+
+    async def spawn_prepared(self, prepared: PreparedExecution) -> WorkerHandle:
+        """Spawn a prepared execution while preserving the frozen WorkerRuntime API."""
+        return await self._spawn(prepared.request, context=prepared.context)
+
+    async def _spawn(self, req: SpawnRequest, *, context: ContextBundle | None) -> WorkerHandle:
         workspace = self._worktrees.create(req.workspace)
         worker_id = f"{req.packet_id}-attempt-{req.attempt}"
         if worker_id in self._sessions:
@@ -59,12 +73,21 @@ class LocalWorkerRuntime:
         evidence_dir = workspace / ".codentum" / "evidence" / worker_id
         session = _Session(handle=handle, request=req, evidence_dir=evidence_dir)
         session.write_manifest(workspace)
+        checkpoint = session.write_checkpoint0(context)
         session.append(
             "started",
             {
                 "workspace": str(workspace),
                 "tools": list(req.tools),
                 "mounts": [m.mount_path for m in req.mounts],
+            },
+        )
+        session.append(
+            "checkpoint",
+            {
+                "checkpoint_seq": checkpoint.seq,
+                "digest": checkpoint.digest,
+                "path": "checkpoints/0000.json",
             },
         )
         self._sessions[worker_id] = session
@@ -159,6 +182,14 @@ class _Session:
         (self.evidence_dir / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
+        )
+
+    def write_checkpoint0(self, context: ContextBundle | None) -> CheckpointRef:
+        return write_initial_checkpoint(
+            worker_id=self.handle.worker_id,
+            request=self.request,
+            evidence_dir=self.evidence_dir,
+            context=context,
         )
 
     def append(self, kind: str, payload: dict[str, object]) -> None:
