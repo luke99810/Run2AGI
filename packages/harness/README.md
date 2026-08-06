@@ -34,6 +34,7 @@
 | `context-broker/` | 可见性矩阵 + 配方 + 预算降级链 + 检索确定性梯度 |
 | `tool-surface/` | 从 RoleSpec 派生工具面。**角色看不见的工具不出现在列表里** |
 | `worker/` | 执行体封装：Git worktree 隔离、卷挂载、生命周期 |
+| `runner/` | Worker 的真实执行适配器；P0 先提供本地命令 Runner，后续接百炼 / Hermes / Claude Code |
 | `checkpoint/` | 执行中断点与恢复 |
 | `replay/` | 回放：同样的输入能重建同样的执行上下文 |
 
