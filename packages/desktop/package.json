@@ -3,35 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./out/main/index.js",
   "scripts": {
-    "postinstall": "install-electron",
-    "dev": "electron-vite dev",
-    "build": "npm run typecheck && npm run build:app",
-    "build:app": "electron-vite build",
-    "preview": "electron-vite preview",
-    "test": "vitest run",
-    "test:python-engine": "vitest run shell/main/python-engine/PythonEngineClient.test.ts --reporter=verbose",
-    "test:python-package": "node scripts/python-package-smoke.cjs",
-    "test:screenshot": "npm run build && npm run test:screenshot:only",
-    "test:screenshot:only": "node scripts/screenshot-smoke.cjs",
-    "typecheck": "tsc --noEmit",
-    "verify": "npm test && npm run typecheck && npm run build:app && npm run test:screenshot:only"
-  },
-  "dependencies": {
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@swc/core": "^1.15.47",
-    "@types/node": "^24.2.0",
-    "@types/react": "^19.1.10",
-    "@types/react-dom": "^19.1.7",
-    "@vitejs/plugin-react": "^4.7.0",
-    "electron": "^43.2.0",
-    "electron-vite": "^5.0.0",
-    "typescript": "^5.9.2",
-    "vite": "^7.1.1",
-    "vitest": "^4.1.10"
+    "typescript": "^5.6.0"
   }
 }
