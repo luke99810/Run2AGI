@@ -23,7 +23,7 @@
 |---|---|
 | owner | **B** |
 | 评审 | A（不变量守护者） |
-| 依赖 | `contracts` （仅此一个，**不依赖 control-plane**） |
+| 依赖 | `contracts` + `roles`（加载 RoleSpec）；**不依赖 control-plane** |
 
 ---
 
@@ -34,8 +34,21 @@
 | `context-broker/` | 可见性矩阵 + 配方 + 预算降级链 + 检索确定性梯度 |
 | `tool-surface/` | 从 RoleSpec 派生工具面。**角色看不见的工具不出现在列表里** |
 | `worker/` | 执行体封装：Git worktree 隔离、卷挂载、生命周期 |
+| `runner/` | Worker 的真实执行适配器；P0 先提供本地命令 Runner，后续接百炼 / Hermes / Claude Code |
+| `prompt_bundle/` | 把已强制过的 RoleSpec / SpawnRequest / ContextBundle 稳定渲染成模型输入包 |
 | `checkpoint/` | 执行中断点与恢复 |
 | `replay/` | 回放：同样的输入能重建同样的执行上下文 |
+
+---
+
+## 组装入口
+
+`codentum_harness.runtime` 是产品侧 / 演示脚本的 composition root：
+`LocalWorkerRuntimeConfig` + `RunnerConfig` → `build_local_worker_runtime()`。
+控制平面仍然只拿到冻结的 `WorkerRuntime`，不需要知道 Runner 是空实现、本地命令，还是后续的百炼 / Hermes / Claude Code。
+
+本地命令 Runner 支持 `{prompt_dir}`、`{system_prompt}`、`{user_prompt}`、`{prompt_manifest}`
+等占位符，外部编码 Agent 命令可直接读取已落盘的 Prompt Bundle。
 
 ---
 
