@@ -42,7 +42,7 @@ def request(workspace: Path) -> SpawnRequest:
         mounts=(),
         tools=("read_file", "write_file"),
         routing=ModelRouting(model="qwen-plus", effort="medium"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
         workspace=str(workspace),
         attempt=1,
     )
@@ -89,7 +89,7 @@ def test_settle_runs_injected_runner_after_workspace_exists(git_repo: Path, tmp_
         marker.write_text("ran\n", encoding="utf-8")
         return WorkerCompleted(
             evidence=(EvidenceRef("ev-worker"),),
-            spent_usd=0.01,
+            spent_cny=0.01,
             touched_paths=("worker.txt",),
         )
 

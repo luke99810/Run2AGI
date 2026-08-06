@@ -92,11 +92,11 @@ def check_owns_paths(packet: WorkPacket, **_ctx: object) -> Violation | None:
 
 def check_budget_limit(packet: WorkPacket, **_ctx: object) -> Violation | None:
     """预算额度必须 > 0。"""
-    if packet.budget.limitUsd <= 0:
+    if packet.budget.limitCny <= 0:
         return Violation(
             code="BUDGET_ZERO_LIMIT",
-            detail=f"预算额度必须 > 0，当前 ${packet.budget.limitUsd}。",
-            field="budget.limitUsd",
+            detail=f"预算额度必须 > 0，当前 ${packet.budget.limitCny}。",
+            field="budget.limitCny",
         )
     return None
 

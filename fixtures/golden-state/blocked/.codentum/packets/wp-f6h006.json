@@ -3,19 +3,28 @@
   "kind": "fix",
   "state": "pending",
   "role": "coder",
-  "ownsPaths": ["src/auth/session.ts"],
-  "readsPaths": ["packages/contracts/", "tests/"],
-  "deps": ["wp-b2d002"],
+  "ownsPaths": [
+    "src/auth/session.ts"
+  ],
+  "readsPaths": [
+    "packages/contracts/",
+    "tests/"
+  ],
+  "deps": [
+    "wp-b2d002"
+  ],
   "acceptance": {
     "kind": "manual",
     "predicate": "operator_approval:contract_adjacent_change",
     "authoredBy": "architect"
   },
   "budget": {
-    "currency": "USD",
-    "limitUsd": 1.5,
-    "spentUsd": 0,
-    "degradationChain": ["drop_semantic_memory"]
+    "currency": "CNY",
+    "limitCny": 1.5,
+    "spentCny": 0,
+    "degradationChain": [
+      "drop_semantic_memory"
+    ]
   },
   "routing": {
     "model": "claude-opus-5",

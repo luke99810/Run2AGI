@@ -152,7 +152,7 @@ class LocalWorkerRuntime:
                 reason_code=FailureCode.RUNTIME_ERROR,
                 detail="no worker runner configured",
                 evidence=(),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
             session.append("finished", {"status": session.outcome.status})
             return session.outcome
@@ -164,7 +164,7 @@ class LocalWorkerRuntime:
         session = self._get(handle)
         if session.task is not None and not session.task.done():
             session.task.cancel()
-        session.outcome = WorkerAborted(reason=reason, spent_usd=0.0)
+        session.outcome = WorkerAborted(reason=reason, spent_cny=0.0)
         session.append("finished", {"status": session.outcome.status, "reason": reason})
 
     async def resume(self, ref: CheckpointRef) -> WorkerHandle:
@@ -185,7 +185,7 @@ class LocalWorkerRuntime:
                 reason_code=FailureCode.RUNTIME_ERROR,
                 detail=str(exc),
                 evidence=(),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
         session.append("finished", {"status": outcome.status})
         return outcome

@@ -39,7 +39,7 @@ def request(workspace: Path) -> SpawnRequest:
         mounts=(),
         tools=("read_file", "write_file"),
         routing=ModelRouting(model="qwen-plus", effort="medium"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
         workspace=str(workspace),
         attempt=1,
     )

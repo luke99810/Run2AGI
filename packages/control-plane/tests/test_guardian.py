@@ -23,7 +23,7 @@ def _pkt(pid="wp-guard01", role="coder", attempts=0):
         role=role,  # type: ignore[arg-type]
         ownsPaths=("src/test/",), readsPaths=(), deps=(),
         acceptance={"kind":"test","predicate":"pytest","authoredBy":"qa"},
-        budget={"currency":"USD","limitUsd":5.0,"spentUsd":0.0,"degradationChain":("x",)},
+        budget={"currency":"CNY","limitCny":5.0,"spentCny":0.0,"degradationChain":("x",)},
         attempts=attempts, evidence=(),
         provenance={"createdBy":"planner","createdAt":"2026-08-05T00:00:00Z"},
     )

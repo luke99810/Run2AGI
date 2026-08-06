@@ -110,11 +110,11 @@ export interface Acceptance {
   readonly authoredBy: RoleId;
 }
 
-/** 单个 packet 的预算额度。★ 与 BudgetFile 同样只认美元。 */
+/** 单个 packet 的预算额度。★ 与 BudgetFile 同样只认人民币。 */
 export interface BudgetGrant {
-  readonly currency: "USD";
-  readonly limitUsd: number;
-  readonly spentUsd: number;
+  readonly currency: "CNY";
+  readonly limitCny: number;
+  readonly spentCny: number;
   /** ★ 预算不足时的降级顺序，必须显式声明。 */
   readonly degradationChain: readonly string[];
 }
@@ -144,16 +144,16 @@ export interface Provenance {
 // ══════════════════════════════════════════════════════════
 
 /**
- * ★★ 全案预算一律用美元，不用 token。
+ * ★★ 全案预算一律用人民币，不用 token。
  * 不同模型家族的分词器差异可达 ~30%，异构路由下按 token 记预算会静默失真，且失真方向随路由变化，事后查不出来。
  * token 数只作可观测指标存在（见 interfaces/model-gateway.ts 的 Usage）。
  */
 export interface BudgetFile {
   readonly schemaVersion: 1;
   /** ★ 常量。留这个字段不是为了将来支持多币种，是为了让读代码的人一眼看到「这里是钱不是 token」。 */
-  readonly currency: "USD";
-  readonly limitUsd: number;
-  readonly spentUsd: number;
+  readonly currency: "CNY";
+  readonly limitCny: number;
+  readonly spentCny: number;
   /** 按角色分摊。桌面端成本面板读它。 */
   readonly byRole?: Readonly<Record<string, number>>;
   /** 按模型分摊。模型路由的调优依据。 */

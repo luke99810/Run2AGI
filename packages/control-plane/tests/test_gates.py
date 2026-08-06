@@ -44,9 +44,9 @@ def _pkt(
             "authoredBy": acceptance_authoredBy,
         },
         budget={
-            "currency": "USD",
-            "limitUsd": 5.0,
-            "spentUsd": 0.0,
+            "currency": "CNY",
+            "limitCny": 5.0,
+            "spentCny": 0.0,
             "degradationChain": ("drop_semantic",),
         },
         attempts=0,

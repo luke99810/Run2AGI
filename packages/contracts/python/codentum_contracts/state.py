@@ -159,10 +159,10 @@ class Acceptance(_Base):
 
 
 class BudgetGrant(_Base):
-    """单个 packet 的预算额度。★ 与 BudgetFile 同样只认美元。"""
-    currency: Literal["USD"]
-    limitUsd: float
-    spentUsd: float
+    """单个 packet 的预算额度。★ 与 BudgetFile 同样只认人民币。"""
+    currency: Literal["CNY"]
+    limitCny: float
+    spentCny: float
     degradationChain: tuple[str, ...]
     """★ 预算不足时的降级顺序，必须显式声明。"""
 
@@ -193,15 +193,15 @@ class Provenance(_Base):
 
 class BudgetFile(_Base):
     """
-    ★★ 全案预算一律用美元，不用 token。
+    ★★ 全案预算一律用人民币，不用 token。
     不同模型家族的分词器差异可达 ~30%，异构路由下按 token 记预算会静默失真，且失真方向随路由变化，事后查不出来。
     token 数只作可观测指标存在（见 interfaces/model-gateway.ts 的 Usage）。
     """
     schemaVersion: Literal[1]
-    currency: Literal["USD"]
+    currency: Literal["CNY"]
     """★ 常量。留这个字段不是为了将来支持多币种，是为了让读代码的人一眼看到「这里是钱不是 token」。"""
-    limitUsd: float
-    spentUsd: float
+    limitCny: float
+    spentCny: float
     byRole: Mapping[str, float] | None = None
     """按角色分摊。桌面端成本面板读它。"""
     byModel: Mapping[str, float] | None = None

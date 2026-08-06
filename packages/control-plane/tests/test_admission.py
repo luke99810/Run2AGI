@@ -48,7 +48,7 @@ def _pkt(
     deps: tuple[str, ...] = (),
     acceptance_predicate: str = "pytest",
     acceptance_authoredBy: str = "qa",
-    limitUsd: float = 5.0,
+    limitCny: float = 5.0,
     degradationChain: tuple[str, ...] = ("drop_semantic",),
     routing_model: str | None = "qwen-plus",
     routing_effort: str = "medium",
@@ -67,9 +67,9 @@ def _pkt(
             "authoredBy": acceptance_authoredBy,
         },
         budget={
-            "currency": "USD",
-            "limitUsd": limitUsd,
-            "spentUsd": 0.0,
+            "currency": "CNY",
+            "limitCny": limitCny,
+            "spentCny": 0.0,
             "degradationChain": degradationChain,
         },
         routing=(
@@ -209,25 +209,25 @@ class TestOwnsPaths:
 
 class TestBudget:
     def test_zero_limit_rejected(self) -> None:
-        pkt = _pkt(limitUsd=0)
+        pkt = _pkt(limitCny=0)
         v = check_budget_limit(pkt)
         assert v is not None
         assert v.code == "BUDGET_ZERO_LIMIT"
 
     def test_negative_limit_rejected(self) -> None:
-        pkt = _pkt(limitUsd=-1)
+        pkt = _pkt(limitCny=-1)
         v = check_budget_limit(pkt)
         assert v is not None
         assert v.code == "BUDGET_ZERO_LIMIT"
 
     def test_empty_degradation_rejected(self) -> None:
-        pkt = _pkt(degradationChain=(), limitUsd=5.0)
+        pkt = _pkt(degradationChain=(), limitCny=5.0)
         v = check_budget_degradation(pkt)
         assert v is not None
         assert v.code == "BUDGET_NO_DEGRADATION"
 
     def test_valid_budget_allowed(self) -> None:
-        pkt = _pkt(limitUsd=5.0, degradationChain=("drop_semantic",))
+        pkt = _pkt(limitCny=5.0, degradationChain=("drop_semantic",))
         v1 = check_budget_limit(pkt)
         assert v1 is None
         v2 = check_budget_degradation(pkt)
@@ -374,7 +374,7 @@ class TestAdmissionChecker:
             role="coder",
             acceptance_authoredBy="coder",  # I2_SELF_REVIEW
             ownsPaths=(),                   # OWNSPATHS_EMPTY
-            limitUsd=0,                     # BUDGET_ZERO_LIMIT
+            limitCny=0,                     # BUDGET_ZERO_LIMIT
             degradationChain=(),            # BUDGET_NO_DEGRADATION
         )
         verdict = checker.check(pkt)

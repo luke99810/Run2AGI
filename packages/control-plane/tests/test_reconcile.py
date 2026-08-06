@@ -119,9 +119,9 @@ def _make_packet(
             "authoredBy": "qa",
         },
         budget={
-            "currency": "USD",
-            "limitUsd": 5.0,
-            "spentUsd": 0.0,
+            "currency": "CNY",
+            "limitCny": 5.0,
+            "spentCny": 0.0,
             "degradationChain": ("drop_semantic",),
         },
         attempts=0,
@@ -288,7 +288,7 @@ class _MockWorkerRuntime:
     def __init__(self, outcome: WorkerOutcome | None = None) -> None:
         self._outcome = outcome or WorkerCompleted(
             evidence=(),
-            spent_usd=0.5,
+            spent_cny=0.5,
             touched_paths=("src/app/main.py",),
         )
         self._handles: dict[str, WorkerHandle] = {}
@@ -315,7 +315,7 @@ class _MockWorkerRuntime:
 def _completed_outcome() -> WorkerCompleted:
     return WorkerCompleted(
         evidence=(),
-        spent_usd=0.5,
+        spent_cny=0.5,
         touched_paths=("src/test/",),
     )
 
@@ -347,7 +347,7 @@ class TestRunningToReview:
             reason_code=FailureCode.ACCEPTANCE_NOT_MET,
             detail="test failed",
             evidence=(),
-            spent_usd=0.3,
+            spent_cny=0.3,
         )
         mock = _MockWorkerRuntime(outcome=failed)
         empty_loop.worker_runtime = mock

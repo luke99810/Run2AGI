@@ -158,8 +158,8 @@ class ReconcileLoop:
                     },
                     budget={
                         "currency": raw["budget"]["currency"],
-                        "limitUsd": raw["budget"]["limitUsd"],
-                        "spentUsd": raw["budget"]["spentUsd"],
+                        "limitCny": raw["budget"]["limitCny"],
+                        "spentCny": raw["budget"]["spentCny"],
                         "degradationChain": tuple(raw["budget"].get("degradationChain", ())),
                     },
                     routing=(
@@ -386,13 +386,13 @@ class ReconcileLoop:
 
         # 全局预算检查：是否有足够余额
         if self.budget_tracker is not None:
-            if not self.budget_tracker.can_afford(packet.budget.limitUsd):
+            if not self.budget_tracker.can_afford(packet.budget.limitCny):
                 # 预算不足 → blocked
                 return self._apply_transition(
                     packet, target="blocked",
                     detail=(
                         f"全局预算不足：剩余 ${self.budget_tracker.remaining:.2f}，"
-                        f"需要 ${packet.budget.limitUsd:.2f}"
+                        f"需要 ${packet.budget.limitCny:.2f}"
                     ),
                     evidence_refs=(),
                 )
@@ -449,8 +449,8 @@ class ReconcileLoop:
 
         if hasattr(outcome, "status") and outcome.status == "completed":
             # 记录支出到全局预算
-            if self.budget_tracker is not None and hasattr(outcome, "spent_usd"):
-                spent = getattr(outcome, "spent_usd", 0.0)
+            if self.budget_tracker is not None and hasattr(outcome, "spent_cny"):
+                spent = getattr(outcome, "spent_cny", 0.0)
                 if spent > 0:
                     self.budget_tracker.spend(
                         spent,
@@ -461,14 +461,14 @@ class ReconcileLoop:
             return self._apply_transition(
                 packet,
                 target="review",
-                detail=f"Worker 完成，spent=${outcome.spent_usd:.4f}",
+                detail=f"Worker 完成，spent=${outcome.spent_cny:.4f}",
                 evidence_refs=tuple(outcome.evidence) if outcome.evidence else (),
                 extra_updates={"attempts": packet.attempts + 1},
             )
         elif hasattr(outcome, "status") and outcome.status == "failed":
             # 失败也记录支出（已经花了钱）
-            if self.budget_tracker is not None and hasattr(outcome, "spent_usd"):
-                spent = getattr(outcome, "spent_usd", 0.0)
+            if self.budget_tracker is not None and hasattr(outcome, "spent_cny"):
+                spent = getattr(outcome, "spent_cny", 0.0)
                 if spent > 0:
                     self.budget_tracker.spend(
                         spent,
@@ -621,7 +621,7 @@ class ReconcileLoop:
             tools=(),  # ★ WorkerRuntime 负责填
             routing=packet.routing if packet.routing else ModelRouting(model="default", effort="medium"),
             budget=BudgetGrantRuntime(
-                limit_usd=packet.budget.limitUsd,
+                limit_cny=packet.budget.limitCny,
                 degradation_chain=packet.budget.degradationChain,
             ),
             workspace=str(Path(self.state_dir).parent),

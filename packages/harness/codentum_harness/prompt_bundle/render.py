@@ -124,7 +124,7 @@ def _render_user(request: SpawnRequest, *, context: ContextBundle | None) -> str
         f"- workspace: {request.workspace}",
         f"- model: {request.routing.model}",
         f"- effort: {request.routing.effort}",
-        f"- budget_usd: {request.budget.limit_usd:g}",
+        f"- budget_usd: {request.budget.limit_cny:g}",
         "",
         "## Visible Tools",
         "",
