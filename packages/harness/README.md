@@ -47,6 +47,9 @@
 `LocalWorkerRuntimeConfig` + `RunnerConfig` → `build_local_worker_runtime()`。
 控制平面仍然只拿到冻结的 `WorkerRuntime`，不需要知道 Runner 是空实现、本地命令，还是后续的百炼 / Hermes / Claude Code。
 
+本地命令 Runner 支持 `{prompt_dir}`、`{system_prompt}`、`{user_prompt}`、`{prompt_manifest}`
+等占位符，外部编码 Agent 命令可直接读取已落盘的 Prompt Bundle。
+
 ---
 
 ## 核心结构：三段式，只有中段有模型

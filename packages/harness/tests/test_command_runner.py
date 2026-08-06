@@ -98,6 +98,27 @@ def test_command_runner_renders_safe_placeholders(git_repo: Path) -> None:
     assert (runner_dir / "stdout.txt").read_text(encoding="utf-8") == f"wp-abcdef\n{git_repo}\n"
 
 
+def test_command_runner_exposes_prompt_bundle_placeholders(git_repo: Path) -> None:
+    prompt_dir = git_repo / ".codentum" / "evidence" / "wp-abcdef-attempt-1" / "prompt"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "user.md").write_text("do the work\n", encoding="utf-8")
+
+    runner = CommandRunner(
+        (
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text(), end='')",
+            "{user_prompt}",
+        )
+    )
+
+    outcome = runner(request(git_repo))
+
+    assert isinstance(outcome, WorkerCompleted)
+    runner_dir = git_repo / ".codentum" / "evidence" / "wp-abcdef-attempt-1" / "runner"
+    assert (runner_dir / "stdout.txt").read_text(encoding="utf-8") == "do the work\n"
+
+
 def run_git(cwd: Path, *args: str) -> str:
     return subprocess.run(  # noqa: S603 - fixed executable and argument list, no shell.
         [_git(), "-C", str(cwd), *args],

@@ -45,9 +45,16 @@ class CommandRunner:
         worker_id = f"{req.packet_id}-attempt-{req.attempt}"
         evidence_dir = workspace / ".codentum" / "evidence" / worker_id / "runner"
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        prompt_dir = evidence_dir.parent / "prompt"
 
         argv = tuple(
-            _render_arg(arg, req=req, worker_id=worker_id, evidence_dir=evidence_dir)
+            _render_arg(
+                arg,
+                req=req,
+                worker_id=worker_id,
+                evidence_dir=evidence_dir,
+                prompt_dir=prompt_dir,
+            )
             for arg in self.command
         )
         env = os.environ.copy()
@@ -125,12 +132,23 @@ class CommandRunner:
         )
 
 
-def _render_arg(arg: str, *, req: SpawnRequest, worker_id: str, evidence_dir: Path) -> str:
+def _render_arg(
+    arg: str,
+    *,
+    req: SpawnRequest,
+    worker_id: str,
+    evidence_dir: Path,
+    prompt_dir: Path,
+) -> str:
     return arg.format(
         attempt=req.attempt,
         evidence_dir=str(evidence_dir),
         packet_id=req.packet_id,
+        prompt_dir=str(prompt_dir),
+        prompt_manifest=str(prompt_dir / "manifest.json"),
         role=req.role,
+        system_prompt=str(prompt_dir / "system.md"),
+        user_prompt=str(prompt_dir / "user.md"),
         worker_id=worker_id,
         workspace=req.workspace,
     )
