@@ -30,6 +30,7 @@ from codentum_contracts.interfaces import (
 )
 from codentum_contracts.state import (
     DependencyGraph,
+    ModelRouting,
     EvidenceRef,
     OwnershipGraph,
     PacketId,
@@ -618,7 +619,7 @@ class ReconcileLoop:
             role=packet.role,
             mounts=tuple(mounts),
             tools=(),  # ★ WorkerRuntime 负责填
-            routing=packet.routing or {"model": "default", "effort": "medium"},
+            routing=packet.routing if packet.routing else ModelRouting(model="default", effort="medium"),
             budget=BudgetGrantRuntime(
                 limit_usd=packet.budget.limitUsd,
                 degradation_chain=packet.budget.degradationChain,

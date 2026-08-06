@@ -39,7 +39,7 @@ class GitWorktreeManager:
 
         path.parent.mkdir(parents=True, exist_ok=True)
         self._git(["worktree", "add", "--detach", str(path), ref])
-        return path
+        return Path(str(path).replace("\\", "/"))
 
     def remove(self, workspace: Path | str) -> None:
         """Remove a worker worktree."""

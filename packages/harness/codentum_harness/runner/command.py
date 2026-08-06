@@ -181,7 +181,7 @@ def _write_result(evidence_dir: Path, result: dict[str, object]) -> EvidenceRef:
         encoding="utf-8",
     )
     worker_evidence = evidence_dir.parent
-    return EvidenceRef(f"file:{(evidence_dir / 'result.json').relative_to(worker_evidence)}")
+    return EvidenceRef(f"file:{(evidence_dir / 'result.json').relative_to(worker_evidence).as_posix()}")
 
 
 def _coerce_output(value: bytes | str | None) -> str:

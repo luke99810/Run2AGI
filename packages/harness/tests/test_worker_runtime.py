@@ -56,7 +56,7 @@ def test_spawn_creates_isolated_git_worktree(git_repo: Path, tmp_path: Path) -> 
 
     assert handle.runtime_ref == str(workspace)
     assert (workspace / "README.md").read_text(encoding="utf-8") == "hello\n"
-    assert run_git(workspace, "rev-parse", "--show-toplevel") == f"{workspace}\n"
+    assert Path(run_git(workspace, "rev-parse", "--show-toplevel").strip()) == workspace
 
 
 def test_spawn_rejects_workspace_inside_controller_checkout(git_repo: Path) -> None:
