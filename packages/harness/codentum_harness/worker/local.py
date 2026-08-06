@@ -13,7 +13,6 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from codentum_contracts.interfaces import (
     AbortReason,
@@ -26,39 +25,71 @@ from codentum_contracts.interfaces import (
     WorkerHandle,
     WorkerOutcome,
 )
+from codentum_contracts.state import RoleId, RoleSpec
+from codentum_roles import load_builtin_role_specs
 
 from codentum_harness.checkpoint import write_initial_checkpoint
-from codentum_harness.context_broker import ContextBundle
+from codentum_harness.context_broker import ContextBundle, ContextCandidate, assemble_context_bundle
+from codentum_harness.prepare import PreparedExecution
 
 from .worktree import GitWorktreeManager
 
-if TYPE_CHECKING:
-    from codentum_harness.prepare import PreparedExecution
-
 __all__ = [
     "LocalWorkerRuntime",
+    "WorkerContextLoader",
     "WorkerRunner",
 ]
 
 WorkerRunner = Callable[[SpawnRequest], WorkerOutcome]
+WorkerContextLoader = Callable[[SpawnRequest, RoleSpec], tuple[ContextCandidate, ...]]
 
 
 class LocalWorkerRuntime:
     """Local implementation of the frozen WorkerRuntime protocol."""
 
-    def __init__(self, *, repo_root: Path | str, runner: WorkerRunner | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        repo_root: Path | str,
+        runner: WorkerRunner | None = None,
+        role_specs: tuple[RoleSpec, ...] | None = None,
+        context_loader: WorkerContextLoader | None = None,
+        context_char_budget: int | None = None,
+    ) -> None:
+        if context_loader is not None and context_char_budget is None:
+            raise ValueError("context_char_budget is required when context_loader is provided")
+
         self._worktrees = GitWorktreeManager(repo_root)
         self._runner = runner
+        specs = load_builtin_role_specs() if role_specs is None else role_specs
+        self._role_specs = {spec.id: spec for spec in specs}
+        self._context_loader = context_loader
+        self._context_char_budget = context_char_budget
         self._sessions: dict[str, _Session] = {}
 
     async def spawn(self, req: SpawnRequest) -> WorkerHandle:
-        return await self._spawn(req, context=None)
+        prepared = self._prepare(req)
+        return await self._spawn(prepared)
 
-    async def spawn_prepared(self, prepared: PreparedExecution) -> WorkerHandle:
-        """Spawn a prepared execution while preserving the frozen WorkerRuntime API."""
-        return await self._spawn(prepared.request, context=prepared.context)
+    def _prepare(self, req: SpawnRequest) -> PreparedExecution:
+        spec = self._load_role_spec(req.role)
+        context = None
+        if self._context_loader is not None:
+            assert self._context_char_budget is not None
+            context = assemble_context_bundle(
+                spec,
+                candidates=self._context_loader(req, spec),
+                char_budget=self._context_char_budget,
+            )
+        return PreparedExecution(
+            request=req,
+            tools=tuple(req.tools),
+            mount_paths=tuple(m.mount_path for m in req.mounts),
+            context=context,
+        )
 
-    async def _spawn(self, req: SpawnRequest, *, context: ContextBundle | None) -> WorkerHandle:
+    async def _spawn(self, prepared: PreparedExecution) -> WorkerHandle:
+        req = prepared.request
         workspace = self._worktrees.create(req.workspace)
         worker_id = f"{req.packet_id}-attempt-{req.attempt}"
         if worker_id in self._sessions:
@@ -73,7 +104,7 @@ class LocalWorkerRuntime:
         evidence_dir = workspace / ".codentum" / "evidence" / worker_id
         session = _Session(handle=handle, request=req, evidence_dir=evidence_dir)
         session.write_manifest(workspace)
-        checkpoint = session.write_checkpoint0(context)
+        checkpoint = session.write_checkpoint0(prepared.context)
         session.append(
             "started",
             {
@@ -95,6 +126,12 @@ class LocalWorkerRuntime:
         if self._runner is not None:
             session.task = asyncio.create_task(self._run(session))
         return handle
+
+    def _load_role_spec(self, role: RoleId) -> RoleSpec:
+        spec = self._role_specs.get(role)
+        if spec is None:
+            raise RuntimeError(f"RoleSpec is not loaded for role: {role}")
+        return spec
 
     async def events(self, handle: WorkerHandle, since_seq: int = 0) -> AsyncIterator[WorkerEvent]:
         session = self._get(handle)

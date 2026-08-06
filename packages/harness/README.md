@@ -23,7 +23,7 @@
 |---|---|
 | owner | **B** |
 | 评审 | A（不变量守护者） |
-| 依赖 | `contracts` （仅此一个，**不依赖 control-plane**） |
+| 依赖 | `contracts` + `roles`（加载 RoleSpec）；**不依赖 control-plane** |
 
 ---
 

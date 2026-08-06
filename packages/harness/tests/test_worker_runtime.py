@@ -19,8 +19,6 @@ from codentum_contracts import (
 )
 from codentum_contracts.interfaces import WorkerEvent
 from codentum_harness.context_broker import ContextCandidate
-from codentum_harness.prepare import prepare_spawn_request
-from codentum_harness.tool_surface import ToolDescriptor
 from codentum_harness.worker import LocalWorkerRuntime, WorktreeIsolationError
 
 
@@ -124,21 +122,16 @@ def test_spawn_writes_evidence_manifest_and_event_log(git_repo: Path, tmp_path: 
     assert events[1]["payload"]["path"] == "checkpoints/0000.json"
 
 
-def test_spawn_prepared_writes_context_into_checkpoint(git_repo: Path, tmp_path: Path) -> None:
+def test_spawn_prepares_context_into_checkpoint_with_single_public_entrypoint(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
-    prepared = prepare_spawn_request(
-        packet_id=PacketId("wp-abcdef"),
-        role_spec=role_spec(),
-        tool_registry={
-            "read_file": ToolDescriptor("read_file"),
-            "write_file": ToolDescriptor("write_file"),
-        },
-        project_root=git_repo,
-        workspace=workspace,
-        routing=ModelRouting(model="qwen-plus", effort="medium"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
-        attempt=1,
-        context_candidates=(
+
+    def load_context(req: SpawnRequest, spec: RoleSpec) -> tuple[ContextCandidate, ...]:
+        assert req.packet_id == "wp-abcdef"
+        assert spec.id == "coder"
+        return (
             ContextCandidate(
                 ref="packet",
                 artifact_path=".codentum/backlog/packets/wp-abcdef.yaml",
@@ -146,12 +139,15 @@ def test_spawn_prepared_writes_context_into_checkpoint(git_repo: Path, tmp_path:
                 required=True,
                 priority=1,
             ),
-        ),
+        )
+
+    runtime = LocalWorkerRuntime(
+        repo_root=git_repo,
+        context_loader=load_context,
         context_char_budget=100,
     )
-    runtime = LocalWorkerRuntime(repo_root=git_repo)
 
-    handle = asyncio.run(runtime.spawn_prepared(prepared))
+    handle = asyncio.run(runtime.spawn(request(workspace)))
 
     checkpoint = json.loads(
         (
