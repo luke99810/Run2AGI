@@ -77,6 +77,15 @@ def test_settle_runs_injected_runner_after_workspace_exists(git_repo: Path, tmp_
     def runner(req: SpawnRequest) -> WorkerCompleted:
         marker = Path(req.workspace) / "worker.txt"
         assert marker.parent.exists()
+        prompt = (
+            Path(req.workspace)
+            / ".codentum"
+            / "evidence"
+            / f"{req.packet_id}-attempt-{req.attempt}"
+            / "prompt"
+            / "user.md"
+        )
+        assert prompt.exists()
         marker.write_text("ran\n", encoding="utf-8")
         return WorkerCompleted(
             evidence=(EvidenceRef("ev-worker"),),
@@ -113,6 +122,7 @@ def test_spawn_writes_evidence_manifest_and_event_log(git_repo: Path, tmp_path: 
     assert manifest["packet_id"] == "wp-abcdef"
     assert manifest["tools"] == ["read_file", "write_file"]
     assert (evidence_dir / "checkpoints" / "0000.json").exists()
+    assert (evidence_dir / "prompt" / "manifest.json").exists()
 
     events = [
         json.loads(line)

@@ -24,6 +24,7 @@ class PreparedExecution:
     """Prepared metadata for one worker attempt."""
 
     request: SpawnRequest
+    role_spec: RoleSpec
     tools: tuple[str, ...]
     mount_paths: tuple[str, ...]
     context: ContextBundle | None
@@ -74,6 +75,7 @@ def prepare_spawn_request(
     )
     return PreparedExecution(
         request=request,
+        role_spec=role_spec,
         tools=tool_surface.tool_names,
         mount_paths=tuple(m.mount_path for m in mounts),
         context=context,

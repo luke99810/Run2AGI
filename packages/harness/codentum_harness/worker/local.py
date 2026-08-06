@@ -31,6 +31,7 @@ from codentum_roles import load_builtin_role_specs
 from codentum_harness.checkpoint import write_initial_checkpoint
 from codentum_harness.context_broker import ContextBundle, ContextCandidate, assemble_context_bundle
 from codentum_harness.prepare import PreparedExecution
+from codentum_harness.prompt_bundle import WorkerPromptBundle, write_worker_prompt_bundle
 
 from .worktree import GitWorktreeManager
 
@@ -83,6 +84,7 @@ class LocalWorkerRuntime:
             )
         return PreparedExecution(
             request=req,
+            role_spec=spec,
             tools=tuple(req.tools),
             mount_paths=tuple(m.mount_path for m in req.mounts),
             context=context,
@@ -105,6 +107,7 @@ class LocalWorkerRuntime:
         session = _Session(handle=handle, request=req, evidence_dir=evidence_dir)
         session.write_manifest(workspace)
         checkpoint = session.write_checkpoint0(prepared.context)
+        session.write_prompt_bundle(prepared.role_spec, prepared.context)
         session.append(
             "started",
             {
@@ -225,6 +228,18 @@ class _Session:
         return write_initial_checkpoint(
             worker_id=self.handle.worker_id,
             request=self.request,
+            evidence_dir=self.evidence_dir,
+            context=context,
+        )
+
+    def write_prompt_bundle(
+        self,
+        role_spec: RoleSpec,
+        context: ContextBundle | None,
+    ) -> WorkerPromptBundle:
+        return write_worker_prompt_bundle(
+            request=self.request,
+            role_spec=role_spec,
             evidence_dir=self.evidence_dir,
             context=context,
         )

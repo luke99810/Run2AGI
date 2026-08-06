@@ -38,6 +38,7 @@ def test_prepare_spawn_request_derives_tools_mounts_and_workspace(tmp_path: Path
     )
 
     assert prepared.request.role == "coder"
+    assert prepared.role_spec.id == "coder"
     assert prepared.request.workspace == str(workspace)
     assert prepared.request.tools == ("read_file", "write_file")
     assert "write_contract" not in prepared.request.tools
