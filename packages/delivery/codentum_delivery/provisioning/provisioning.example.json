@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "projectId": "example-project",
+  "title": "部署前配置",
+  "fields": [
+    {
+      "id": "provider.api_key",
+      "label": "模型服务 API Key",
+      "kind": "secret",
+      "required": true,
+      "description": "仅定义收集项；此文件不包含实际值。",
+      "validation": {
+        "minLength": 16,
+        "maxLength": 512
+      }
+    },
+    {
+      "id": "service.endpoint",
+      "label": "服务地址",
+      "kind": "url",
+      "required": true,
+      "validation": {
+        "allowedSchemes": ["https"]
+      }
+    }
+  ]
+}

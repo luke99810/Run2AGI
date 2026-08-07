@@ -1,12 +1,83 @@
 {
   "name": "@codentum/desktop",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Codentum local-first Agent development workspace",
+  "author": {
+    "name": "Codentum Team"
+  },
+  "copyright": "Copyright © 2026 Codentum Team",
   "private": true,
   "type": "module",
+  "main": "out/main/index.js",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "postinstall": "install-electron",
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "npm run typecheck && npm run test && electron-vite build",
+    "screenshot": "node scripts/screenshot-smoke.mjs",
+    "sidecar:build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../delivery/codentum_delivery/packaging/build-sidecar.ps1",
+    "sidecar:test": "python ../delivery/codentum_delivery/sidecar.py --self-test",
+    "release:metadata": "node scripts/prepare-release.mjs",
+    "dist:win": "npm run sidecar:build && npm run build && electron-builder --win nsis",
+    "dist:dir": "npm run sidecar:build && npm run build && electron-builder --dir --win"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "typescript": "^5.6.0"
+    "@swc/core": "^1.15.47",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "pixelmatch": "^7.1.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10"
+  },
+  "build": {
+    "appId": "cn.codentum.desktop",
+    "productName": "Codentum",
+    "artifactName": "Codentum-Setup.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../delivery/dist/codentum-sidecar",
+        "to": "python/codentum-sidecar",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../../fixtures/golden-state",
+        "to": "fixtures/golden-state",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "icon": "icon.svg",
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Codentum",
+      "uninstallDisplayName": "Codentum"
+    }
   }
 }

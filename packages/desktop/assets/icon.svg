@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Codentum">
+  <defs>
+    <linearGradient id="surface" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#20c997"/>
+      <stop offset="1" stop-color="#0b8f72"/>
+    </linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="260" fill="url(#surface)"/>
+  <path d="M710 303c-60-59-139-91-226-91-178 0-322 134-322 300s144 300 322 300c87 0 166-32 226-91" fill="none" stroke="#fff" stroke-width="112" stroke-linecap="round"/>
+  <path d="M521 381h279M521 643h279" fill="none" stroke="#d7fff2" stroke-width="76" stroke-linecap="round"/>
+  <circle cx="802" cy="381" r="55" fill="#fff"/>
+  <circle cx="802" cy="643" r="55" fill="#fff"/>
+</svg>

@@ -4,29 +4,25 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-
-    // 严格性这一段是门禁，不是风格偏好。
-    // ★ ADR-0003 把核心引擎换成了 Python，桌面端反而成了唯一还有 tsc 的地方 ——
-    //   更没有理由把它调松。
+    "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "noPropertyAccessFromIndexSignature": true,
-
-    "noEmit": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
-
-    // 契约类型：由 scripts/gen_types.py 从 schema 生成，与 Python 侧同源
-    "paths": { "@codentum/contracts": ["../contracts/typescript/state.ts"] },
-    "baseUrl": "."
-
-    // C 装好 React 后加上： "jsx": "react-jsx"，并把 include 加上 "**/*.tsx"
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@codentum/contracts": ["../contracts/typescript/state.ts"],
+      "@desktop/*": ["./*"]
+    },
+    "types": ["node"]
   },
-  "include": ["**/*.ts", "../contracts/typescript/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["**/*.ts", "**/*.tsx", "../contracts/typescript/*.ts"],
+  "exclude": ["node_modules", "out", "release"]
 }
