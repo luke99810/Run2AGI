@@ -72,6 +72,7 @@ class ModelGatewayConfig:
         base_url: str | None = None,
         require_pricing: bool = True,
         compare_model_families: bool = False,
+        provider_timeout_seconds: float = 120.0,
     ) -> ModelGatewayConfig:
         return cls(
             kind="bailian",
@@ -80,6 +81,7 @@ class ModelGatewayConfig:
             base_url=base_url,
             require_pricing=require_pricing,
             compare_model_families=compare_model_families,
+            provider_timeout_seconds=provider_timeout_seconds,
         )
 
 
