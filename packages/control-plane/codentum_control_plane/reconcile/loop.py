@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from codentum_contracts.interfaces import (
     AbortReason,
@@ -425,6 +428,20 @@ class ReconcileLoop:
                 self._active_workers[packet.id] = handle
             except Exception as exc:
                 # spawn 失败 —— 释放锁，回退
+                #
+                # ★ 这里原来只 `return None`，异常连日志都不打。后果不是崩溃，
+                #   是 packet 永远停在 ready：run_until_stable 看不到任何转换，
+                #   就认为系统已经"稳定"并正常退出。整条链路静默卡死，
+                #   而唯一的线索是"状态没动"。
+                #   实测踩过一次：repo_root 配成 worker 工作区（而不是被开发的
+                #   项目仓库），B 的 WorktreeIsolationError 被吞掉，
+                #   表面现象只是"跑不到 accepted"，排查方向完全被误导。
+                #   本项目的主张是「可靠性来自不变量，不来自提示词」——
+                #   那么失败就必须是显式的，这是同一条原则的下位要求。
+                logger.warning(
+                    "spawn 失败，packet %s 保持 ready 并释放锁：%s: %s",
+                    packet.id, type(exc).__name__, exc,
+                )
                 self._lock_table.release(packet.id)
                 return None
 
