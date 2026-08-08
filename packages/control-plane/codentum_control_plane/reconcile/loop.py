@@ -93,6 +93,14 @@ class ReconcileLoop:
     _tick_count: int = field(default=0, init=False)
     _dirty: bool = field(default=False, init=False)
 
+    _loop: object = field(default=None, init=False, repr=False)
+    """Persistent event loop shared between spawn() and settle() calls.
+    
+    Must be a single long-lived loop (not asyncio.run() which creates/destroys
+    per call) because B's LocalWorkerRuntime spawns background tasks during
+    spawn() that must survive until settle().
+    """
+
     # ════════════════════════════════════════════════════════════
     #  状态加载 / 持久化
     # ════════════════════════════════════════════════════════════
@@ -399,17 +407,23 @@ class ReconcileLoop:
 
         # 如果有 WorkerRuntime，尝试 spawn
         if self.worker_runtime is not None:
+            # ★ 确保持久 event loop 已创建
+            # 不能用 asyncio.run() 因为 B 的 LocalWorkerRuntime 在 spawn() 中创建
+            # 后台 task，必须用同一个 loop 在 settle() 中等待
+            if self._loop is None:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
             try:
                 # 异步 spawn —— reconcile 是同步循环，
                 # 这里使用同步适配（由 WorkerRuntime 实现者保证 spawn 立即返回句柄）
                 # 注意：settle() 在 _try_running_to_review 中异步等待。
-                handle = asyncio.run(
+                handle = self._loop.run_until_complete(
                     self.worker_runtime.spawn(
                         self._build_spawn_request(packet)
                     )
                 )
                 self._active_workers[packet.id] = handle
-            except Exception:
+            except Exception as exc:
                 # spawn 失败 —— 释放锁，回退
                 self._lock_table.release(packet.id)
                 return None
@@ -438,7 +452,7 @@ class ReconcileLoop:
             return None
 
         try:
-            outcome = asyncio.run(self.worker_runtime.settle(handle))
+            outcome = self._loop.run_until_complete(self.worker_runtime.settle(handle))
         except Exception:
             # Worker 还在跑或出错了 —— 下轮再看
             return None
@@ -624,7 +638,9 @@ class ReconcileLoop:
                 limit_cny=packet.budget.limitCny,
                 degradation_chain=packet.budget.degradationChain,
             ),
-            workspace=str(Path(self.state_dir).parent),
+            workspace=str(
+                Path(self.state_dir).parent.parent / "codentum-workers" / packet.id / f"attempt-{packet.attempts + 1}"
+            ),
             attempt=packet.attempts + 1,
         )
 
