@@ -7,6 +7,7 @@ when the real A/B engine has not been supplied.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, TypeAlias
@@ -106,6 +107,7 @@ def validate_handshake(value: object) -> dict[str, JsonValue]:
     engine_version = value.get("engineVersion")
     revision = value.get("stateRevision")
     run_id = value.get("runId")
+    project_root = value.get("projectRoot")
     raw_capabilities = value.get("capabilities")
     if not isinstance(connected, bool):
         raise ProtocolViolation("invalid_handshake", "connected must be boolean")
@@ -117,6 +119,15 @@ def validate_handshake(value: object) -> dict[str, JsonValue]:
         raise ProtocolViolation("invalid_handshake", "a connected engine must provide a valid runId")
     if not connected and run_id is not None:
         raise ProtocolViolation("invalid_handshake", "a disconnected engine must not advertise runId")
+    if connected and (
+        not isinstance(project_root, str)
+        or not project_root
+        or len(project_root) > 4096
+        or not os.path.isabs(project_root)
+    ):
+        raise ProtocolViolation("invalid_handshake", "a connected engine must provide an absolute projectRoot")
+    if not connected and project_root is not None:
+        raise ProtocolViolation("invalid_handshake", "a disconnected engine must not advertise projectRoot")
     if not isinstance(raw_capabilities, dict):
         raise ProtocolViolation("invalid_handshake", "capabilities must be an object")
     if set(raw_capabilities) != set(CAPABILITY_NAMES):
@@ -136,7 +147,9 @@ def validate_handshake(value: object) -> dict[str, JsonValue]:
     }
     if connected:
         assert isinstance(run_id, str)
+        assert isinstance(project_root, str)
         normalized["runId"] = run_id
+        normalized["projectRoot"] = os.path.realpath(project_root)
     reason = value.get("unavailableReason")
     if reason is not None:
         if not isinstance(reason, str) or not reason or len(reason) > 512:

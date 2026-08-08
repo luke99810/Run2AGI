@@ -21,6 +21,8 @@ export interface SnapshotSourceDescriptor {
 export interface DraftAttachment {
   readonly id: string
   readonly name: string
+  readonly kind: 'file' | 'folder'
+  readonly fileCount: number
   readonly sizeBytes: number
   readonly sha256: string
 }
@@ -135,6 +137,7 @@ export interface DesktopBridge {
   readSnapshot(sourceId: string): Promise<StateSnapshot>
   selectProject(): Promise<SnapshotSourceDescriptor | null>
   selectDraftFiles(scopeId: string): Promise<RequirementDraftSnapshot>
+  selectDraftFolders(scopeId: string): Promise<RequirementDraftSnapshot>
   loadRequirementDraft(scopeId: string): Promise<RequirementDraftSnapshot>
   saveRequirementDraft(scopeId: string, draft: RequirementDraftSnapshot): Promise<void>
   moveRequirementDraft(sourceScopeId: string, targetScopeId: string): Promise<RequirementDraftSnapshot>

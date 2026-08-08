@@ -1,7 +1,7 @@
 import { useCallback, useState, type ReactNode } from 'react'
 import type { OperatorAction } from '../../shared/protocol'
 import type { CommandDispatcher, CommandRequest } from './command-types'
-import { createOperatorCommand, hasCapability, type NavigationKey } from './domain'
+import { createOperatorCommand, hasCapability, sameProjectPath, type NavigationKey } from './domain'
 import { useDesktop } from './useDesktop'
 import { Sidebar } from '../../panels/Sidebar'
 import { Topbar } from '../../panels/Topbar'
@@ -47,6 +47,10 @@ export function App(): ReactNode {
     if (snapshot.source.kind !== 'project') throw new Error('演示快照只读，不能发送执行命令')
     if (!desktop.handshake.connected) throw new Error(desktop.handshake.unavailableReason ?? '本地引擎未连接')
     if (desktop.handshake.runId === undefined) throw new Error('引擎未提供权威运行编号')
+    const projectRoot = snapshot.source.rootPath
+    if (projectRoot === undefined || !sameProjectPath(desktop.handshake.projectRoot, projectRoot)) {
+      throw new Error('本地引擎绑定的项目与当前工作区不一致')
+    }
     if (!hasCapability(desktop.handshake.capabilities, request.action)) {
       throw new Error(`引擎未开放此操作能力：${request.action}`)
     }
@@ -59,7 +63,10 @@ export function App(): ReactNode {
       ...(request.packetId === undefined ? {} : { packetId: request.packetId }),
       ...(request.moduleId === undefined ? {} : { moduleId: request.moduleId }),
       action: request.action as OperatorAction,
-      payload: request.payload ?? {},
+      payload: {
+        ...(request.payload ?? {}),
+        projectRoot
+      },
       requestedAt: new Date().toISOString()
     }))
   }, [desktop])
@@ -67,7 +74,21 @@ export function App(): ReactNode {
   let view: ReactNode
   switch (navigation) {
     case 'home':
-      view = <HomeView snapshot={desktop.snapshot} handshake={desktop.handshake} dispatch={dispatch} selectProjectFiles={desktop.selectProjectFiles} onOpenExecution={() => setNavigation('execution')} onOpenBoard={() => setNavigation('board')} />
+      view = (
+        <HomeView
+          snapshot={desktop.snapshot}
+          handshake={desktop.handshake}
+          dispatch={dispatch}
+          selectDraftFiles={desktop.selectDraftFiles}
+          selectDraftFolders={desktop.selectDraftFolders}
+          loadRequirementDraft={desktop.loadRequirementDraft}
+          saveRequirementDraft={desktop.saveRequirementDraft}
+          moveRequirementDraft={desktop.moveRequirementDraft}
+          discardDraftAttachment={desktop.discardDraftAttachment}
+          onOpenExecution={() => setNavigation('execution')}
+          onOpenBoard={() => setNavigation('board')}
+        />
+      )
       break
     case 'execution':
       view = (

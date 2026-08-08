@@ -1,15 +1,32 @@
 import type { ReactNode } from 'react'
-import type { EngineHandshake, ProjectFileReference, StateSnapshot } from '../shared/protocol'
+import type { DraftAttachment, EngineHandshake, RequirementDraftSnapshot, StateSnapshot } from '../shared/protocol'
 import type { CommandDispatcher } from '../renderer/src/command-types'
-import { formatCny, hasCapability, packetCounts, roleLabel } from '../renderer/src/domain'
+import { formatCny, hasCapability, packetCounts, roleLabel, sameProjectPath } from '../renderer/src/domain'
 import { RequirementComposer } from '../inputs/RequirementComposer'
 import { EmptyState, Icon } from '../panels/Common'
 
-export function HomeView({ snapshot, handshake, dispatch, selectProjectFiles, onOpenExecution, onOpenBoard }: {
+export function HomeView({
+  snapshot,
+  handshake,
+  dispatch,
+  selectDraftFiles,
+  selectDraftFolders,
+  loadRequirementDraft,
+  saveRequirementDraft,
+  moveRequirementDraft,
+  discardDraftAttachment,
+  onOpenExecution,
+  onOpenBoard
+}: {
   readonly snapshot: StateSnapshot | null
   readonly handshake: EngineHandshake
   readonly dispatch: CommandDispatcher
-  readonly selectProjectFiles: (sourceId: string) => Promise<readonly ProjectFileReference[]>
+  readonly selectDraftFiles: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly selectDraftFolders: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly loadRequirementDraft: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly saveRequirementDraft: (scopeId: string, draft: RequirementDraftSnapshot) => Promise<void>
+  readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
   readonly onOpenExecution: () => void
   readonly onOpenBoard: () => void
 }): ReactNode {
@@ -19,13 +36,16 @@ export function HomeView({ snapshot, handshake, dispatch, selectProjectFiles, on
   const budget = snapshot?.budget
   const stateDirectoryMissing = snapshot?.warnings.some((warning) => warning.startsWith('[missing] State directory is unavailable:')) ?? false
   const isProject = snapshot?.source.kind === 'project'
-  const requirementAvailable = isProject && handshake.connected && handshake.runId !== undefined && hasCapability(handshake.capabilities, 'submit_requirement')
+  const projectBound = isProject && sameProjectPath(handshake.projectRoot, snapshot?.source.rootPath)
+  const requirementAvailable = projectBound && handshake.connected && handshake.runId !== undefined && hasCapability(handshake.capabilities, 'submit_requirement')
   const requirementUnavailableReason = !isProject
     ? '请先打开真实项目；演示快照不能发起任务'
     : !handshake.connected
       ? 'A/B 执行引擎尚未连接'
       : handshake.runId === undefined
         ? '引擎未提供权威运行编号'
+        : !projectBound
+          ? 'A/B 执行引擎未绑定当前项目'
         : '当前引擎未开放需求接收能力'
 
   return (
@@ -40,11 +60,16 @@ export function HomeView({ snapshot, handshake, dispatch, selectProjectFiles, on
         </p>
         <RequirementComposer
           canSubmit={requirementAvailable}
-          canReferenceFiles={isProject}
+          canAddFiles={snapshot !== null}
           {...(requirementUnavailableReason === undefined ? {} : { unavailableReason: requirementUnavailableReason })}
           sourceId={snapshot?.source.id ?? null}
           dispatch={dispatch}
-          selectProjectFiles={selectProjectFiles}
+          selectDraftFiles={selectDraftFiles}
+          selectDraftFolders={selectDraftFolders}
+          loadRequirementDraft={loadRequirementDraft}
+          saveRequirementDraft={saveRequirementDraft}
+          moveRequirementDraft={moveRequirementDraft}
+          discardDraftAttachment={discardDraftAttachment}
         />
       </section>
 

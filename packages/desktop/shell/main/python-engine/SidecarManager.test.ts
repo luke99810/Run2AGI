@@ -42,7 +42,7 @@ describe('resolveSidecarLaunch', () => {
         if (request.method === 'handshake') {
           setTimeout(() => send({ id: request.id, ok: true, result: {
             connected: true, protocolVersion: 1, engineVersion: 'test-engine',
-            stateRevision: 3, runId: 'run-1', capabilities
+            stateRevision: 3, runId: 'run-1', projectRoot: process.cwd(), capabilities
           }}), 80);
         } else if (request.method === 'shutdown') {
           send({ id: request.id, ok: true, result: { stopped: true } });

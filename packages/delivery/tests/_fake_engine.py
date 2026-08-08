@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from pathlib import Path
 
 CAPABILITIES = {
     "requirements": True,
@@ -41,6 +42,7 @@ for line in sys.stdin:
                 "engineVersion": "fake-test-engine",
                 "stateRevision": revision,
                 "runId": "run-1",
+                "projectRoot": str(Path.cwd().resolve()),
                 "capabilities": CAPABILITIES,
             },
         )

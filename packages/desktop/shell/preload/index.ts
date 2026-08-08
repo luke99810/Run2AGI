@@ -7,6 +7,7 @@ const bridge: DesktopBridge = {
   readSnapshot: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.readSnapshot, sourceId),
   selectProject: () => ipcRenderer.invoke(IPC_CHANNELS.selectProject),
   selectDraftFiles: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.selectDraftFiles, scopeId),
+  selectDraftFolders: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.selectDraftFolders, scopeId),
   loadRequirementDraft: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.loadRequirementDraft, scopeId),
   saveRequirementDraft: (scopeId, draft) => ipcRenderer.invoke(IPC_CHANNELS.saveRequirementDraft, scopeId, draft),
   moveRequirementDraft: (sourceScopeId, targetScopeId) => ipcRenderer.invoke(IPC_CHANNELS.moveRequirementDraft, sourceScopeId, targetScopeId),

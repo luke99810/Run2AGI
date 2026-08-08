@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { MAX_PROJECT_FILE_REFERENCES, type CommandReceipt, type ProjectFileReference } from '../shared/protocol'
+import {
+  MAX_DRAFT_ATTACHMENTS,
+  MAX_REQUIREMENT_DRAFT_CHARS,
+  type CommandReceipt,
+  type DraftAttachment,
+  type RequirementDraftSnapshot
+} from '../shared/protocol'
 import type { CommandDispatcher } from '../renderer/src/command-types'
 import { Icon } from '../panels/Common'
+
+const EMPTY_DRAFT: RequirementDraftSnapshot = { text: '', attachments: [] }
+const SAVE_DELAY_MS = 300
 
 function receiptText(receipt: CommandReceipt): string {
   if (receipt.status === 'applied') return '需求已由引擎应用，正在等待新的项目状态。'
@@ -10,22 +19,18 @@ function receiptText(receipt: CommandReceipt): string {
   return `引擎拒绝了请求${receipt.reason === undefined ? '' : `：${receipt.reason}`}`
 }
 
-interface RequirementDraft {
-  readonly value: string
-  readonly references: readonly ProjectFileReference[]
-}
-
-const EMPTY_DRAFT: RequirementDraft = { value: '', references: [] }
-
-function sameDraft(left: RequirementDraft, right: RequirementDraft): boolean {
-  return left.value === right.value &&
-    left.references.length === right.references.length &&
-    left.references.every((reference, index) => {
-      const other = right.references[index]
+function sameDraft(left: RequirementDraftSnapshot, right: RequirementDraftSnapshot): boolean {
+  return left.text === right.text &&
+    left.attachments.length === right.attachments.length &&
+    left.attachments.every((attachment, index) => {
+      const other = right.attachments[index]
       return other !== undefined &&
-        reference.path === other.path &&
-        reference.sizeBytes === other.sizeBytes &&
-        reference.sha256 === other.sha256
+        attachment.id === other.id &&
+        attachment.name === other.name &&
+        attachment.kind === other.kind &&
+        attachment.fileCount === other.fileCount &&
+        attachment.sizeBytes === other.sizeBytes &&
+        attachment.sha256 === other.sha256
     })
 }
 
@@ -35,108 +40,184 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
 }
 
-export function RequirementComposer({ canSubmit, canReferenceFiles, unavailableReason, sourceId, dispatch, selectProjectFiles }: {
+function shouldCarryDraft(previousScope: string, nextScope: string): boolean {
+  return nextScope.startsWith('project:') &&
+    (previousScope === 'unassigned' || previousScope.startsWith('fixture:'))
+}
+
+export function RequirementComposer({
+  canSubmit,
+  canAddFiles,
+  unavailableReason,
+  sourceId,
+  dispatch,
+  selectDraftFiles,
+  selectDraftFolders,
+  loadRequirementDraft,
+  saveRequirementDraft,
+  moveRequirementDraft,
+  discardDraftAttachment
+}: {
   readonly canSubmit: boolean
-  readonly canReferenceFiles: boolean
+  readonly canAddFiles: boolean
   readonly unavailableReason?: string
   readonly sourceId: string | null
   readonly dispatch: CommandDispatcher
-  readonly selectProjectFiles: (sourceId: string) => Promise<readonly ProjectFileReference[]>
+  readonly selectDraftFiles: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly selectDraftFolders: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly loadRequirementDraft: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly saveRequirementDraft: (scopeId: string, draft: RequirementDraftSnapshot) => Promise<void>
+  readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
 }): ReactNode {
-  const draftKey = sourceId ?? 'unassigned'
-  const drafts = useRef(new Map<string, RequirementDraft>())
-  const activeDraftKey = useRef(draftKey)
-  const [draft, setDraft] = useState<RequirementDraft>(EMPTY_DRAFT)
+  const draftScope = sourceId ?? 'unassigned'
+  const activeScope = useRef<string | null>(null)
+  const drafts = useRef(new Map<string, RequirementDraftSnapshot>())
+  const loadGeneration = useRef(0)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const [draft, setDraft] = useState<RequirementDraftSnapshot>(EMPTY_DRAFT)
+  const [loadingDraft, setLoadingDraft] = useState(true)
   const [submitting, setSubmitting] = useState(false)
-  const [selectingFiles, setSelectingFiles] = useState(false)
+  const [selectingKind, setSelectingKind] = useState<DraftAttachment['kind'] | null>(null)
+  const [removingAttachment, setRemovingAttachment] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<CommandReceipt | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (activeDraftKey.current === draftKey) return
-    const previousKey = activeDraftKey.current
-    activeDraftKey.current = draftKey
-    const previousDraft = drafts.current.get(previousKey)
-    const shouldCarryUnboundDraft = sourceId?.startsWith('project:') === true &&
-      (previousKey === 'unassigned' || previousKey.startsWith('fixture:'))
-    const nextDraft = drafts.current.get(draftKey)
-      ?? (shouldCarryUnboundDraft ? previousDraft : undefined)
-      ?? EMPTY_DRAFT
-    drafts.current.set(draftKey, nextDraft)
-    setDraft(nextDraft)
+    const generation = ++loadGeneration.current
+    const previousScope = activeScope.current
+    const previousDraft = previousScope === null ? undefined : drafts.current.get(previousScope)
+    if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+    saveTimer.current = undefined
+    setLoadingDraft(true)
     setReceipt(null)
     setError(null)
-  }, [draftKey, sourceId])
 
-  function updateDraft(updater: (current: RequirementDraft) => RequirementDraft): void {
-    setDraft((current) => {
-      const next = updater(current)
-      drafts.current.set(draftKey, next)
-      return next
+    void (async () => {
+      if (previousScope !== null && previousDraft !== undefined) {
+        await saveRequirementDraft(previousScope, previousDraft)
+      }
+      const next = previousScope !== null && shouldCarryDraft(previousScope, draftScope)
+        ? await moveRequirementDraft(previousScope, draftScope)
+        : await loadRequirementDraft(draftScope)
+      if (loadGeneration.current !== generation) return
+      activeScope.current = draftScope
+      drafts.current.set(draftScope, next)
+      setDraft(next)
+      setLoadingDraft(false)
+    })().catch((reason: unknown) => {
+      if (loadGeneration.current !== generation) return
+      activeScope.current = draftScope
+      setLoadingDraft(false)
+      setError(reason instanceof Error ? reason.message : String(reason))
     })
-    setReceipt(null)
-    setError(null)
+
+    return () => {
+      if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+      saveTimer.current = undefined
+    }
+  }, [draftScope, loadRequirementDraft, moveRequirementDraft, saveRequirementDraft])
+
+  function persistLater(scope: string, next: RequirementDraftSnapshot): void {
+    if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = undefined
+      void saveRequirementDraft(scope, next).catch((reason: unknown) => {
+        if (activeScope.current === scope) setError(reason instanceof Error ? reason.message : String(reason))
+      })
+    }, SAVE_DELAY_MS)
   }
 
-  async function addReferences(): Promise<void> {
-    if (!canReferenceFiles || sourceId === null) return
-    const selectionDraftKey = draftKey
-    setSelectingFiles(true)
+  function updateText(text: string): void {
+    const scope = activeScope.current
+    if (scope === null) return
+    const next = { ...draft, text }
+    drafts.current.set(scope, next)
+    setDraft(next)
+    setReceipt(null)
+    setError(null)
+    persistLater(scope, next)
+  }
+
+  async function persistNow(scope: string, value: RequirementDraftSnapshot): Promise<void> {
+    if (saveTimer.current !== undefined) clearTimeout(saveTimer.current)
+    saveTimer.current = undefined
+    await saveRequirementDraft(scope, value)
+  }
+
+  async function addAttachment(kind: DraftAttachment['kind']): Promise<void> {
+    const scope = activeScope.current
+    if (!canAddFiles || scope === null) return
+    setSelectingKind(kind)
     setError(null)
     try {
-      const selected = await selectProjectFiles(sourceId)
-      if (selected.length === 0) return
-      const current = drafts.current.get(selectionDraftKey) ?? draft
-      const byPath = new Map(current.references.map((reference) => [reference.path, reference]))
-      for (const reference of selected) byPath.set(reference.path, reference)
-      if (byPath.size > MAX_PROJECT_FILE_REFERENCES) {
-        throw new Error(`一项需求最多引用 ${MAX_PROJECT_FILE_REFERENCES} 个文件。`)
-      }
-      const next = { ...current, references: [...byPath.values()] }
-      drafts.current.set(selectionDraftKey, next)
-      if (activeDraftKey.current === selectionDraftKey) {
+      await persistNow(scope, draft)
+      const next = kind === 'file'
+        ? await selectDraftFiles(scope)
+        : await selectDraftFolders(scope)
+      drafts.current.set(scope, next)
+      if (activeScope.current === scope) {
         setDraft(next)
         setReceipt(null)
       }
     } catch (reason) {
-      if (activeDraftKey.current === selectionDraftKey) {
-        setError(reason instanceof Error ? reason.message : String(reason))
-      }
+      if (activeScope.current === scope) setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
-      setSelectingFiles(false)
+      setSelectingKind(null)
+    }
+  }
+
+  async function removeAttachment(attachment: DraftAttachment): Promise<void> {
+    const scope = activeScope.current
+    if (scope === null) return
+    setRemovingAttachment(attachment.id)
+    setError(null)
+    try {
+      await persistNow(scope, draft)
+      const next = await discardDraftAttachment(scope, attachment.id)
+      drafts.current.set(scope, next)
+      if (activeScope.current === scope) {
+        setDraft(next)
+        setReceipt(null)
+      }
+    } catch (reason) {
+      if (activeScope.current === scope) setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setRemovingAttachment(null)
     }
   }
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault()
-    const requirement = draft.value.trim()
-    if (!canSubmit || sourceId === null || requirement === '') return
-    const submittedDraftKey = draftKey
+    const scope = activeScope.current
+    const requirement = draft.text.trim()
+    if (!canSubmit || scope === null || requirement === '') return
     const submittedDraft = draft
     setSubmitting(true)
     setReceipt(null)
     setError(null)
     try {
+      await persistNow(scope, submittedDraft)
       const nextReceipt = await dispatch({
         action: 'submit_requirement',
         agentId: 'intake',
         payload: {
           requirement,
-          ...(draft.references.length === 0 ? {} : { references: draft.references })
+          draftScope: scope,
+          attachments: submittedDraft.attachments
         }
       })
-      if (activeDraftKey.current === submittedDraftKey) setReceipt(nextReceipt)
+      if (activeScope.current === scope) setReceipt(nextReceipt)
       if (nextReceipt.status === 'applied') {
-        const current = drafts.current.get(submittedDraftKey) ?? EMPTY_DRAFT
+        const current = drafts.current.get(scope) ?? EMPTY_DRAFT
         if (sameDraft(current, submittedDraft)) {
-          drafts.current.set(submittedDraftKey, EMPTY_DRAFT)
-          if (activeDraftKey.current === submittedDraftKey) setDraft(EMPTY_DRAFT)
+          await saveRequirementDraft(scope, EMPTY_DRAFT)
+          drafts.current.set(scope, EMPTY_DRAFT)
+          if (activeScope.current === scope) setDraft(EMPTY_DRAFT)
         }
       }
     } catch (reason) {
-      if (activeDraftKey.current === submittedDraftKey) {
-        setError(reason instanceof Error ? reason.message : String(reason))
-      }
+      if (activeScope.current === scope) setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setSubmitting(false)
     }
@@ -150,35 +231,51 @@ export function RequirementComposer({ canSubmit, canReferenceFiles, unavailableR
       </label>
       <textarea
         id="requirement-input"
-        value={draft.value}
-        onChange={(event) => updateDraft((current) => ({ ...current, value: event.target.value }))}
-        placeholder="描述要交付的软件、目标用户、关键流程和你认定的完成标准。"
+        value={draft.text}
+        maxLength={MAX_REQUIREMENT_DRAFT_CHARS}
+        disabled={loadingDraft}
+        onChange={(event) => updateText(event.target.value)}
+        onBlur={() => {
+          const scope = activeScope.current
+          if (scope !== null) void persistNow(scope, draft).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+        }}
+        placeholder={loadingDraft ? '正在读取本地草稿…' : '描述要交付的软件、目标用户、关键流程和你认定的完成标准。'}
         rows={6}
       />
       <div className="composer-reference-toolbar">
         <button
           className="secondary-button compact-button reference-button"
           type="button"
-          disabled={!canReferenceFiles || sourceId === null || selectingFiles}
-          onClick={() => void addReferences()}
-          title={canReferenceFiles ? '只引用当前项目内的文件，不上传副本' : '请先打开本地项目'}
+          disabled={!canAddFiles || loadingDraft || selectingKind !== null || draft.attachments.length >= MAX_DRAFT_ATTACHMENTS}
+          onClick={() => void addAttachment('file')}
+          title={canAddFiles ? '从电脑任意位置选择文件，并复制到当前需求草稿的本地附件区' : '草稿尚未就绪'}
         >
-          <Icon name="folder" size={17} />{selectingFiles ? '正在校验…' : '引用项目文件'}
+          <Icon name="file" size={17} />{selectingKind === 'file' ? '正在安全复制…' : '添加文件'}
         </button>
-        <span>仅记录项目内相对路径、大小与 SHA-256；不会复制或上传文件。</span>
+        <button
+          className="secondary-button compact-button reference-button"
+          type="button"
+          disabled={!canAddFiles || loadingDraft || selectingKind !== null || draft.attachments.length >= MAX_DRAFT_ATTACHMENTS}
+          onClick={() => void addAttachment('folder')}
+          title={canAddFiles ? '从电脑任意位置选择文件夹，并按原目录结构复制到本地附件区' : '草稿尚未就绪'}
+        >
+          <Icon name="folder" size={17} />{selectingKind === 'folder' ? '正在安全复制…' : '添加文件夹'}
+        </button>
+        <span>支持任意文件类型与文件夹；内容会安全复制并保存在本机，不会上传。</span>
       </div>
-      {draft.references.length === 0 ? null : (
-        <ul className="file-reference-list" aria-label="已引用的项目文件">
-          {draft.references.map((reference) => (
-            <li key={reference.path}>
-              <span className="file-reference-icon"><Icon name="folder" size={16} /></span>
-              <span><strong>{reference.path}</strong><small>{formatFileSize(reference.sizeBytes)} · SHA-256 {reference.sha256.slice(0, 12)}…</small></span>
+      {draft.attachments.length === 0 ? null : (
+        <ul className="file-reference-list" aria-label="已添加的文件和文件夹">
+          {draft.attachments.map((attachment) => (
+            <li key={attachment.id}>
+              <span className="file-reference-icon"><Icon name={attachment.kind === 'folder' ? 'folder' : 'file'} size={16} /></span>
+              <span><strong>{attachment.name}</strong><small>{attachment.kind === 'folder' ? `${attachment.fileCount} 个文件 · ` : ''}{formatFileSize(attachment.sizeBytes)} · SHA-256 {attachment.sha256.slice(0, 12)}…</small></span>
               <button
                 className="icon-button"
                 type="button"
-                aria-label={`移除 ${reference.path}`}
-                title="移除引用"
-                onClick={() => updateDraft((current) => ({ ...current, references: current.references.filter((item) => item.path !== reference.path) }))}
+                disabled={removingAttachment === attachment.id}
+                aria-label={`移除 ${attachment.name}`}
+                title="从草稿中移除文件"
+                onClick={() => void removeAttachment(attachment)}
               ><Icon name="close" size={17} /></button>
             </li>
           ))}
@@ -189,17 +286,17 @@ export function RequirementComposer({ canSubmit, canReferenceFiles, unavailableR
           {error !== null ? (
             <span className="inline-error">操作失败：{error}</span>
           ) : !canSubmit ? (
-            <span className="muted-message"><Icon name="warning" size={17} />草稿可以继续编辑；{unavailableReason ?? '当前引擎未开放需求接收能力'}，暂时不能派单。</span>
+            <span className="muted-message"><Icon name="warning" size={17} />草稿和附件已保存在本机；{unavailableReason ?? '当前引擎未开放需求接收能力'}，暂时不能派单。</span>
           ) : receipt !== null ? (
             <span className={`receipt-message receipt-${receipt.status}`}>{receiptText(receipt)}</span>
           ) : (
-            <span>{draft.references.length === 0 ? '正式派单会交给产品需求经理（Intake）；只在收到引擎回执后显示已受理。' : `正式派单时会把 ${draft.references.length} 个已验证文件引用交给 Intake。`}</span>
+            <span>{draft.attachments.length === 0 ? '正式派单会交给产品需求经理（Intake）；只在收到引擎回执后显示已受理。' : `正式派单时会把 ${draft.attachments.length} 个本地附件的可读副本交给 Intake。`}</span>
           )}
         </div>
         <button
           className="primary-button send-button"
           type="submit"
-          disabled={!canSubmit || submitting || draft.value.trim() === '' || (receipt !== null && receipt.status !== 'rejected')}
+          disabled={!canSubmit || loadingDraft || submitting || draft.text.trim() === '' || (receipt !== null && receipt.status !== 'rejected')}
           title={canSubmit ? undefined : unavailableReason}
         >
           {submitting ? '等待引擎回执…' : '交给产品需求经理'}<Icon name="send" size={18} />

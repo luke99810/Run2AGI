@@ -8,7 +8,7 @@
 - `codentum_delivery/sidecar.py`：protocol v1 UTF-8 JSONL 网关。
 - `engine_proxy.py`：用显式 argv（`shell=False`）拉起外部 A/B 引擎，持续消费 stderr，
   支持请求超时、关联响应和优雅退出。
-- `gateway.py`：严格能力握手、revision 检查、会话内 `commandId` 幂等及结构化拒绝回执。
+- `gateway.py`：严格能力握手、项目绑定、revision 检查、会话内 `commandId` 幂等及结构化拒绝回执。
 - `packaging/build-sidecar.ps1`：PyInstaller `onedir` 构建并执行打包后二进制自测。
 - `secret_scan/`：同时扫描工作区和所有可达 Git blob；历史不可读时门禁失败。
 - `provisioning/`：只解析非敏感表单元数据并在内存中校验提交；不保存凭证，也不伪造连通成功。
@@ -23,7 +23,8 @@ $env:CODENTUM_ENGINE_COMMAND_JSON='["C:\\Program Files\\Codentum\\engine\\codent
 ```
 
 禁止传 shell 命令字符串。外部引擎必须实现相同的请求/响应信封及 `handshake`、`command`、
-`shutdown`。未配置、无法启动、握手不兼容时，sidecar 仍可报告状态，但返回：
+`shutdown`。连接成功的握手必须包含绝对、canonical 的 `projectRoot`；每条命令的
+`payload.projectRoot` 必须与之匹配。未配置、无法启动、握手不兼容时，sidecar 仍可报告状态，但返回：
 
 ```json
 {

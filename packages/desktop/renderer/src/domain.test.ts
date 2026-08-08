@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { GraphFile, WorkPacket } from '@codentum/contracts'
 import type { CapabilityMap, WorkerProjection } from '../../shared/protocol'
-import { buildDependencyWaves, createOperatorCommand, hasCapability, projectWorkerModules, ROLE_ROSTER } from './domain'
+import { buildDependencyWaves, createOperatorCommand, hasCapability, projectWorkerModules, ROLE_ROSTER, sameProjectPath } from './domain'
 
 function packet(id: string, deps: readonly string[] = []): WorkPacket {
   return {
@@ -60,6 +60,13 @@ describe('buildDependencyWaves', () => {
 })
 
 describe('command guard and envelope', () => {
+  it('matches canonical project paths without crossing operating-system semantics', () => {
+    expect(sameProjectPath('C:\\Work\\Codentum\\', 'c:/work/codentum')).toBe(true)
+    expect(sameProjectPath('/work/Codentum/', '/work/Codentum')).toBe(true)
+    expect(sameProjectPath('/work/Codentum', '/work/codentum')).toBe(false)
+    expect(sameProjectPath(undefined, '/work/Codentum')).toBe(false)
+  })
+
   const capabilities = {
     requirements: true,
     planConfirmation: false,

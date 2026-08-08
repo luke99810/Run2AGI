@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -179,6 +180,8 @@ class SidecarGateway:
             receipt = self._rejected(command_id, "engine_unavailable")
         elif normalized["runId"] != handshake.get("runId"):
             receipt = self._rejected(command_id, "run_mismatch")
+        elif not self._project_matches(normalized, handshake):
+            receipt = self._rejected(command_id, "project_mismatch")
         elif not isinstance(capabilities, dict) or capabilities.get(capability) is not True:
             receipt = self._rejected(command_id, f"capability_unavailable:{capability}")
         elif expected_revision != self._state_revision:
@@ -187,6 +190,20 @@ class SidecarGateway:
             receipt = self._forward_command(normalized, command_id)
         self._remember(command_id, fingerprint, receipt)
         return receipt
+
+    @staticmethod
+    def _project_matches(
+        command: dict[str, JsonValue],
+        handshake: dict[str, JsonValue],
+    ) -> bool:
+        payload = command.get("payload")
+        expected = handshake.get("projectRoot")
+        if not isinstance(payload, dict) or not isinstance(expected, str):
+            return False
+        actual = payload.get("projectRoot")
+        if not isinstance(actual, str) or not os.path.isabs(actual):
+            return False
+        return os.path.normcase(os.path.realpath(actual)) == os.path.normcase(os.path.realpath(expected))
 
     def _forward_command(self, command: dict[str, JsonValue], command_id: str) -> dict[str, JsonValue]:
         assert self._engine is not None

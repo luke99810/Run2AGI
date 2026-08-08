@@ -12,6 +12,7 @@ export type IconName =
   | 'people'
   | 'package'
   | 'folder'
+  | 'file'
   | 'refresh'
   | 'chevron'
   | 'send'
@@ -36,6 +37,7 @@ const PATHS: Readonly<Record<IconName, ReactNode>> = {
   people: <><circle cx="9" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" /><path d="M3 20c.5-4 2.5-6 6-6s5.5 2 6 6M15 15c3 0 5 1.5 5.5 4.5" /></>,
   package: <><path d="m4 7 8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10" /></>,
   folder: <><path d="M3 6h7l2 2h9v11H3z" /></>,
+  file: <><path d="M6 3h8l4 4v14H6zM14 3v5h5" /></>,
   refresh: <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.2 8A7 7 0 0 1 19 12M5 12a7 7 0 0 0 12.8 4" /></>,
   chevron: <><path d="m9 6 6 6-6 6" /></>,
   send: <><path d="m3 11 18-8-7 18-3-7zM11 14l4-4" /></>,

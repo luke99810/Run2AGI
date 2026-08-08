@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   CommandReceipt,
+  DraftAttachment,
   EngineHandshake,
   OperatorCommand,
-  ProjectFileReference,
+  RequirementDraftSnapshot,
   SnapshotSourceDescriptor,
   StateSnapshot
 } from '../../shared/protocol'
@@ -28,7 +29,12 @@ export interface DesktopState {
   readonly error: string | null
   readonly selectSource: (sourceId: string) => void
   readonly selectProject: () => Promise<void>
-  readonly selectProjectFiles: (sourceId: string) => Promise<readonly ProjectFileReference[]>
+  readonly selectDraftFiles: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly selectDraftFolders: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly loadRequirementDraft: (scopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly saveRequirementDraft: (scopeId: string, draft: RequirementDraftSnapshot) => Promise<void>
+  readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
+  readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
   readonly refresh: () => Promise<void>
   readonly sendCommand: (command: OperatorCommand) => Promise<CommandReceipt>
 }
@@ -137,10 +143,55 @@ export function useDesktop(): DesktopState {
     setSelectedSourceId(sourceId)
   }, [selectedSourceId])
 
-  const selectProjectFiles = useCallback(async (sourceId: string) => {
+  const selectDraftFiles = useCallback(async (scopeId: string) => {
     if (bridge === undefined) throw new Error('桌面桥接未加载')
     try {
-      return await bridge.selectProjectFiles(sourceId)
+      return await bridge.selectDraftFiles(scopeId)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const selectDraftFolders = useCallback(async (scopeId: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.selectDraftFolders(scopeId)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const loadRequirementDraft = useCallback(async (scopeId: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.loadRequirementDraft(scopeId)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const saveRequirementDraft = useCallback(async (scopeId: string, draft: RequirementDraftSnapshot) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      await bridge.saveRequirementDraft(scopeId, draft)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const moveRequirementDraft = useCallback(async (sourceScopeId: string, targetScopeId: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.moveRequirementDraft(sourceScopeId, targetScopeId)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const discardDraftAttachment = useCallback(async (scopeId: string, attachmentId: DraftAttachment['id']) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.discardDraftAttachment(scopeId, attachmentId)
     } catch (reason) {
       throw new Error(errorMessage(reason))
     }
@@ -181,8 +232,13 @@ export function useDesktop(): DesktopState {
     error,
     selectSource,
     selectProject,
-    selectProjectFiles,
+    selectDraftFiles,
+    selectDraftFolders,
+    loadRequirementDraft,
+    saveRequirementDraft,
+    moveRequirementDraft,
+    discardDraftAttachment,
     refresh,
     sendCommand
-  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectProjectFiles, refresh, sendCommand])
+  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, refresh, sendCommand])
 }

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { App } from 'electron'
 import {
@@ -60,7 +60,9 @@ function isHandshake(value: unknown): value is EngineHandshake {
   if (Object.keys(capabilities).length !== capabilityNames.length) return false
   if (!capabilityNames.every((key) => typeof capabilities[key] === 'boolean')) return false
   if (value['connected'] && (typeof value['runId'] !== 'string' || value['runId'].length < 1 || value['runId'].length > 256)) return false
+  if (value['connected'] && (typeof value['projectRoot'] !== 'string' || !isAbsolute(value['projectRoot']) || value['projectRoot'].length > 4096)) return false
   if (!value['connected'] && value['runId'] !== undefined) return false
+  if (!value['connected'] && value['projectRoot'] !== undefined) return false
   if (!value['connected'] && capabilityNames.some((key) => capabilities[key] === true)) return false
   return value['unavailableReason'] === undefined || typeof value['unavailableReason'] === 'string'
 }

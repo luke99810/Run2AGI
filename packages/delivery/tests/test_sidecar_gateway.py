@@ -22,7 +22,7 @@ def command(command_id: str = "cmd-1", *, delay_ms: int = 0) -> dict[str, object
         "expectedRevision": 7,
         "target": {"agentId": "coder-1", "moduleId": "implementation"},
         "action": "stop",
-        "payload": {"testDelayMs": delay_ms},
+        "payload": {"testDelayMs": delay_ms, "projectRoot": os.path.realpath(os.getcwd())},
         "requestedAt": "2026-08-07T12:00:00.000Z",
     }
 
@@ -92,6 +92,19 @@ class SidecarGatewayTests(unittest.TestCase):
         self.assertEqual(receipt["reason"], "run_mismatch")
         gateway.close()
 
+    def test_rejects_a_command_for_another_project(self) -> None:
+        fake_engine = Path(__file__).with_name("_fake_engine.py")
+        gateway = SidecarGateway([sys.executable, "-u", str(fake_engine)], engine_timeout_seconds=3)
+        self.assertTrue(gateway.start()["connected"])
+        mismatched = command("cmd-wrong-project")
+        mismatched["payload"] = {"projectRoot": str(Path(os.getcwd()).parent)}
+        receipt = gateway.dispatch(
+            parse_request({"id": "wrong-project", "method": "command", "params": {"command": mismatched}})
+        )["result"]
+        self.assertEqual(receipt["status"], "rejected")
+        self.assertEqual(receipt["reason"], "project_mismatch")
+        gateway.close()
+
     def test_timeout_returns_a_cached_rejection_and_never_retries(self) -> None:
         fake_engine = Path(__file__).with_name("_fake_engine.py")
         gateway = SidecarGateway([sys.executable, "-u", str(fake_engine)], engine_timeout_seconds=0.5)
@@ -112,7 +125,10 @@ class SidecarGatewayTests(unittest.TestCase):
         gateway = SidecarGateway([sys.executable, "-u", str(fake_engine)], engine_timeout_seconds=3)
         self.assertEqual(gateway.start()["stateRevision"], 7)
         regressing = command("cmd-regress")
-        regressing["payload"] = {"testRegressRevision": True}
+        regressing["payload"] = {
+            "testRegressRevision": True,
+            "projectRoot": os.path.realpath(os.getcwd()),
+        }
         receipt = gateway.dispatch(
             parse_request({"id": "regress", "method": "command", "params": {"command": regressing}})
         )["result"]

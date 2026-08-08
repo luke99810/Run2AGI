@@ -107,6 +107,21 @@ export function hasCapability(capabilities: CapabilityMap, action: OperatorActio
   return capabilities[ACTION_CAPABILITIES[action]]
 }
 
+export function sameProjectPath(left: string | undefined, right: string | undefined): boolean {
+  if (left === undefined || right === undefined) return false
+  return normalizeProjectPath(left) === normalizeProjectPath(right)
+}
+
+function normalizeProjectPath(path: string): string {
+  let normalized = path.replace(/\\/gu, '/')
+  while (normalized.length > 1 && normalized.endsWith('/') && !/^[a-zA-Z]:\/$/u.test(normalized)) {
+    normalized = normalized.slice(0, -1)
+  }
+  return /^[a-zA-Z]:\//u.test(normalized) || normalized.startsWith('//')
+    ? normalized.toLocaleLowerCase('en-US')
+    : normalized
+}
+
 export interface CommandDraft {
   readonly commandId: string
   readonly runId: string

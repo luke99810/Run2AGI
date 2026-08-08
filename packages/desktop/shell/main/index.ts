@@ -12,10 +12,11 @@ import {
   type IpcMainInvokeEvent,
   type WebContents
 } from 'electron'
-import { inspectProjectFileReferences, StateHub } from '../../data'
+import { StateHub } from '../../data'
 import { IPC_CHANNELS } from '../../shared/ipc'
-import { MAX_PROJECT_FILE_REFERENCES, type OperatorAction, type OperatorCommand } from '../../shared/protocol'
+import { MAX_DRAFT_ATTACHMENTS, type OperatorAction, type OperatorCommand } from '../../shared/protocol'
 import { SidecarManager } from './python-engine/SidecarManager'
+import { RequirementDraftStore } from './requirement-draft-store'
 
 const ALLOWED_ACTIONS = new Set<OperatorAction>([
   'submit_requirement',
@@ -33,6 +34,7 @@ let mainWindow: BrowserWindow | undefined
 let tray: Tray | undefined
 let stateHub: StateHub | undefined
 let sidecar: SidecarManager | undefined
+let draftStore: RequirementDraftStore | undefined
 let shutdownStarted = false
 let shutdownComplete = false
 const watchers = new Map<number, () => void>()
@@ -90,18 +92,30 @@ async function chooseProject(): Promise<Awaited<ReturnType<StateHub['selectProje
   return stateHub.selectProject(selected)
 }
 
-async function chooseProjectFiles(sourceId: string): Promise<Awaited<ReturnType<typeof inspectProjectFileReferences>>> {
-  if (mainWindow === undefined || stateHub === undefined) return []
-  const projectRoot = stateHub.projectRoot(sourceId)
+async function chooseDraftFiles(scopeId: string): Promise<Awaited<ReturnType<RequirementDraftStore['load']>>> {
+  if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
+  if (mainWindow === undefined) return draftStore.load(scopeId)
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '引用当前项目中的文件',
-    buttonLabel: '引用文件',
-    defaultPath: projectRoot,
+    title: '添加文件到需求草稿',
+    buttonLabel: '添加文件',
     properties: ['openFile', 'multiSelections', 'dontAddToRecent'],
-    message: `最多选择 ${MAX_PROJECT_FILE_REFERENCES} 个当前项目内的文件`
+    message: `可从电脑任意位置选择任意文件类型；一项需求最多添加 ${MAX_DRAFT_ATTACHMENTS} 个文件或文件夹`
   })
-  if (result.canceled) return []
-  return inspectProjectFileReferences(projectRoot, result.filePaths)
+  if (result.canceled) return draftStore.load(scopeId)
+  return draftStore.addFiles(scopeId, result.filePaths)
+}
+
+async function chooseDraftFolders(scopeId: string): Promise<Awaited<ReturnType<RequirementDraftStore['load']>>> {
+  if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
+  if (mainWindow === undefined) return draftStore.load(scopeId)
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '添加文件夹到需求草稿',
+    buttonLabel: '添加文件夹',
+    properties: ['openDirectory', 'multiSelections', 'dontAddToRecent'],
+    message: `可从电脑任意位置选择文件夹；一项需求最多添加 ${MAX_DRAFT_ATTACHMENTS} 个文件或文件夹`
+  })
+  if (result.canceled) return draftStore.load(scopeId)
+  return draftStore.addFolders(scopeId, result.filePaths)
 }
 
 function cleanupWatcher(contents: WebContents): void {
@@ -124,10 +138,41 @@ function registerIpc(): void {
     assertTrustedSender(event)
     return chooseProject()
   })
-  ipcMain.handle(IPC_CHANNELS.selectProjectFiles, async (event, sourceId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.selectDraftFiles, async (event, scopeId: unknown) => {
     assertTrustedSender(event)
-    assertSourceId(sourceId)
-    return chooseProjectFiles(sourceId)
+    assertSourceId(scopeId)
+    return chooseDraftFiles(scopeId)
+  })
+  ipcMain.handle(IPC_CHANNELS.selectDraftFolders, async (event, scopeId: unknown) => {
+    assertTrustedSender(event)
+    assertSourceId(scopeId)
+    return chooseDraftFolders(scopeId)
+  })
+  ipcMain.handle(IPC_CHANNELS.loadRequirementDraft, async (event, scopeId: unknown) => {
+    assertTrustedSender(event)
+    assertSourceId(scopeId)
+    if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
+    return draftStore.load(scopeId)
+  })
+  ipcMain.handle(IPC_CHANNELS.saveRequirementDraft, async (event, scopeId: unknown, draft: unknown) => {
+    assertTrustedSender(event)
+    assertSourceId(scopeId)
+    if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
+    await draftStore.save(scopeId, draft)
+  })
+  ipcMain.handle(IPC_CHANNELS.moveRequirementDraft, async (event, sourceScopeId: unknown, targetScopeId: unknown) => {
+    assertTrustedSender(event)
+    assertSourceId(sourceScopeId)
+    assertSourceId(targetScopeId)
+    if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
+    return draftStore.move(sourceScopeId, targetScopeId)
+  })
+  ipcMain.handle(IPC_CHANNELS.discardDraftAttachment, async (event, scopeId: unknown, attachmentId: unknown) => {
+    assertTrustedSender(event)
+    assertSourceId(scopeId)
+    if (typeof attachmentId !== 'string') throw new TypeError('A valid attachment id is required')
+    if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
+    return draftStore.discard(scopeId, attachmentId)
   })
   ipcMain.handle(IPC_CHANNELS.watchSource, async (event, sourceId: unknown) => {
     assertTrustedSender(event)
@@ -149,7 +194,14 @@ function registerIpc(): void {
     assertTrustedSender(event)
     assertCommand(command)
     if (sidecar === undefined) throw new Error('Sidecar manager is unavailable')
-    return sidecar.command(command)
+    let prepared = command
+    if (command.action === 'submit_requirement') {
+      if (draftStore === undefined || stateHub === undefined) throw new Error('Requirement draft store is unavailable')
+      const draftScope = command.payload['draftScope']
+      if (typeof draftScope !== 'string') throw new TypeError('Requirement command is missing its draft scope')
+      prepared = await draftStore.prepareRequirementCommand(command, stateHub.projectRoot(draftScope))
+    }
+    return sidecar.command(prepared)
   })
 }
 
@@ -228,6 +280,8 @@ function createWindow(): BrowserWindow {
 
 void app.whenReady().then(async () => {
   stateHub = new StateHub({ fixtureRoot: fixtureRoot(), pollIntervalMs: 1_000, staleAfterMs: 30_000 })
+  draftStore = new RequirementDraftStore(resolve(app.getPath('userData'), 'requirement-drafts'))
+  await draftStore.initialize()
   sidecar = new SidecarManager(app)
   registerIpc()
   createApplicationMenu()

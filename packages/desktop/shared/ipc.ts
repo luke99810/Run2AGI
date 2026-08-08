@@ -3,6 +3,7 @@ export const IPC_CHANNELS = {
   readSnapshot: 'codentum:state:read-snapshot',
   selectProject: 'codentum:state:select-project',
   selectDraftFiles: 'codentum:draft:select-files',
+  selectDraftFolders: 'codentum:draft:select-folders',
   loadRequirementDraft: 'codentum:draft:load-requirement',
   saveRequirementDraft: 'codentum:draft:save-requirement',
   moveRequirementDraft: 'codentum:draft:move-requirement',
