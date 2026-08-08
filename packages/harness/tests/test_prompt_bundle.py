@@ -9,6 +9,7 @@ from codentum_harness.context_broker import ContextCandidate, assemble_context_b
 from codentum_harness.prompt_bundle import (
     PromptBundleError,
     assemble_worker_prompt_bundle,
+    load_worker_prompt_bundle,
     write_worker_prompt_bundle,
 )
 
@@ -73,6 +74,7 @@ def test_prompt_bundle_is_stable_and_writes_manifest(tmp_path: Path) -> None:
     assert manifest["context_refs"] == ["diff"]
     assert (tmp_path / "evidence-a" / "prompt" / "system.md").read_text() == first.system
     assert (tmp_path / "evidence-a" / "prompt" / "user.md").read_text() == first.user
+    assert load_worker_prompt_bundle(tmp_path / "evidence-a") == first
 
 
 def test_prompt_bundle_never_leaks_denied_context_text(tmp_path: Path) -> None:
@@ -115,3 +117,15 @@ def test_prompt_bundle_can_be_converted_to_model_request(tmp_path: Path) -> None
     assert model_request.system == bundle.system
     assert model_request.messages[0].content == bundle.user
     assert model_request.effort == "high"
+
+
+def test_prompt_bundle_loader_rejects_digest_mismatch(tmp_path: Path) -> None:
+    write_worker_prompt_bundle(
+        request=request(tmp_path / "worker"),
+        role_spec=role_spec(),
+        evidence_dir=tmp_path / "evidence",
+    )
+    (tmp_path / "evidence" / "prompt" / "user.md").write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(PromptBundleError, match="digest mismatch"):
+        load_worker_prompt_bundle(tmp_path / "evidence")

@@ -1,0 +1,230 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
+from shutil import which
+from typing import Any
+
+import pytest
+from codentum_contracts import (
+    BudgetGrantRuntime,
+    CostEstimate,
+    CostLedger,
+    ModelId,
+    ModelResponse,
+    ModelRouting,
+    PacketId,
+    RoleId,
+    RoleSpec,
+    SpawnRequest,
+    Usage,
+    WorkerCompleted,
+    WorkerFailed,
+)
+from codentum_contracts.interfaces import ModelMessage, ModelRequest
+from codentum_harness.prompt_bundle import write_worker_prompt_bundle
+from codentum_harness.runner import ModelGatewayRunner
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Iterator[Path]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_git(repo, "init")
+    run_git(repo, "config", "user.name", "tester")
+    run_git(repo, "config", "user.email", "tester@example.com")
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    run_git(repo, "add", "README.md")
+    run_git(repo, "commit", "-m", "initial")
+    yield repo
+
+
+def request(workspace: Path) -> SpawnRequest:
+    return SpawnRequest(
+        packet_id=PacketId("wp-abcdef"),
+        role="coder",
+        mounts=(),
+        tools=("read_file", "write_file"),
+        routing=ModelRouting(model="qwen-plus", effort="medium"),
+        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        workspace=str(workspace),
+        attempt=1,
+    )
+
+
+def role_spec() -> RoleSpec:
+    return RoleSpec(
+        id="coder",
+        summary="implement packet",
+        usesModel=True,
+        writes=("workspace/**",),
+        reads=("packages/contracts/**",),
+        tools=("read_file", "write_file"),
+        transitions=(),
+    )
+
+
+def test_model_gateway_runner_invokes_gateway_from_prompt_bundle(git_repo: Path) -> None:
+    req = request(git_repo)
+    evidence_root = git_repo / ".codentum" / "evidence" / "wp-abcdef-attempt-1"
+    prompt = write_worker_prompt_bundle(
+        request=req,
+        role_spec=role_spec(),
+        evidence_dir=evidence_root,
+    )
+    gateway = FakeGateway(
+        ModelResponse(
+            text="done",
+            tool_calls=(),
+            stop_reason="end",
+            usage=Usage(
+                cost_usd=0.2,
+                input_tokens=10,
+                output_tokens=3,
+                cached_input_tokens=0,
+            ),
+        )
+    )
+
+    outcome = ModelGatewayRunner(gateway)(req)
+
+    assert isinstance(outcome, WorkerCompleted)
+    assert outcome.evidence == ("file:model/result.json",)
+    assert outcome.spent_usd == 0.2
+    assert gateway.opened == [("coder", "qwen-plus", 1.0)]
+    assert gateway.session.requests[0].system == prompt.system
+    assert gateway.session.requests[0].messages == (ModelMessage(role="user", content=prompt.user),)
+    result = json.loads((evidence_root / "model" / "result.json").read_text(encoding="utf-8"))
+    assert result["prompt_digest"] == prompt.digest
+    assert result["stop_reason"] == "end"
+    assert (evidence_root / "model" / "response.txt").read_text(encoding="utf-8") == "done"
+
+
+def test_model_gateway_runner_fails_when_prompt_bundle_is_missing(git_repo: Path) -> None:
+    outcome = ModelGatewayRunner(FakeGateway(success_response()))(request(git_repo))
+
+    assert isinstance(outcome, WorkerFailed)
+    assert outcome.reason_code == "runtime_error"
+    result = json.loads(
+        (
+            git_repo / ".codentum" / "evidence" / "wp-abcdef-attempt-1" / "model" / "result.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert result["error"] == "prompt_bundle_error"
+
+
+def test_model_gateway_runner_records_non_end_stop_reason_as_failure(git_repo: Path) -> None:
+    req = request(git_repo)
+    evidence_root = git_repo / ".codentum" / "evidence" / "wp-abcdef-attempt-1"
+    write_worker_prompt_bundle(
+        request=req,
+        role_spec=role_spec(),
+        evidence_dir=evidence_root,
+    )
+    response = ModelResponse(
+        text="I cannot comply",
+        tool_calls=(),
+        stop_reason="refusal",
+        usage=Usage(
+            cost_usd=0.05,
+            input_tokens=9,
+            output_tokens=4,
+            cached_input_tokens=0,
+        ),
+    )
+
+    outcome = ModelGatewayRunner(FakeGateway(response))(req)
+
+    assert isinstance(outcome, WorkerFailed)
+    assert outcome.reason_code == "model_error"
+    assert outcome.spent_usd == 0.05
+    result = json.loads((evidence_root / "model" / "result.json").read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
+    assert result["stop_reason"] == "refusal"
+
+
+def success_response() -> ModelResponse:
+    return ModelResponse(
+        text="done",
+        tool_calls=(),
+        stop_reason="end",
+        usage=Usage(
+            cost_usd=0.01,
+            input_tokens=1,
+            output_tokens=1,
+            cached_input_tokens=0,
+        ),
+    )
+
+
+class FakeGateway:
+    def __init__(self, response: ModelResponse) -> None:
+        self.session = FakeSession(response)
+        self.opened: list[tuple[RoleId, ModelId, float]] = []
+
+    async def open(self, role: RoleId, routing: ModelRouting, grant_usd: float) -> FakeSession:
+        self.opened.append((role, routing.model, grant_usd))
+        return self.session
+
+    async def estimate(self, routing: ModelRouting, req: ModelRequest) -> CostEstimate:
+        return CostEstimate(estimated_usd=0.01, upper_bound_usd=0.02)
+
+    async def ledger(self) -> CostLedger:
+        return CostLedger(total_usd=0.0, by_role={}, by_model={}, since="2026-08-09T00:00:00Z")
+
+
+class FakeSession:
+    def __init__(self, response: ModelResponse) -> None:
+        self.response = response
+        self.requests: list[ModelRequest] = []
+        self.closed = False
+
+    @property
+    def session_id(self) -> str:
+        return "session-1"
+
+    @property
+    def model(self) -> ModelId:
+        return "qwen-plus"
+
+    @property
+    def role(self) -> RoleId:
+        return "coder"
+
+    async def invoke(self, req: ModelRequest) -> ModelResponse:
+        self.requests.append(req)
+        return self.response
+
+    def stream(self, req: ModelRequest) -> AsyncIterator[Any]:
+        return _empty_stream(req)
+
+    def spent_usd(self) -> float:
+        return self.response.usage.cost_usd
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def _empty_stream(req: ModelRequest) -> AsyncIterator[Any]:
+    items: tuple[Any, ...] = ()
+    for item in items:
+        yield (req, item)
+
+
+def run_git(cwd: Path, *args: str) -> str:
+    return subprocess.run(  # noqa: S603 - fixed executable and argument list, no shell.
+        [_git(), "-C", str(cwd), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout
+
+
+def _git() -> str:
+    exe = which("git")
+    if exe is None:
+        raise RuntimeError("git executable not found")
+    return exe

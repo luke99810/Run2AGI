@@ -34,7 +34,7 @@
 | `context-broker/` | 可见性矩阵 + 配方 + 预算降级链 + 检索确定性梯度 |
 | `tool-surface/` | 从 RoleSpec 派生工具面。**角色看不见的工具不出现在列表里** |
 | `worker/` | 执行体封装：Git worktree 隔离、卷挂载、生命周期 |
-| `runner/` | Worker 的真实执行适配器；P0 先提供本地命令 Runner，后续接百炼 / Hermes / Claude Code |
+| `runner/` | Worker 的真实执行适配器；P0 先提供本地命令 Runner 与 ModelGatewayRunner，后续接百炼 / Hermes / Claude Code |
 | `prompt_bundle/` | 把已强制过的 RoleSpec / SpawnRequest / ContextBundle 稳定渲染成模型输入包 |
 | `checkpoint/` | 执行中断点与恢复 |
 | `replay/` | 回放：同样的输入能重建同样的执行上下文 |
@@ -49,6 +49,9 @@
 
 本地命令 Runner 支持 `{prompt_dir}`、`{system_prompt}`、`{user_prompt}`、`{prompt_manifest}`
 等占位符，外部编码 Agent 命令可直接读取已落盘的 Prompt Bundle。
+
+`ModelGatewayRunner` 则读取同一份 Prompt Bundle，经冻结的 `ModelGateway` 发起一次模型调用，
+并把模型响应、usage、tool_calls 与 prompt digest 写入 `model/` 证据目录。
 
 ---
 

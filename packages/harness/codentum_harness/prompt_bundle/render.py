@@ -18,6 +18,7 @@ __all__ = [
     "PromptBundleError",
     "WorkerPromptBundle",
     "assemble_worker_prompt_bundle",
+    "load_worker_prompt_bundle",
     "write_worker_prompt_bundle",
 ]
 
@@ -91,6 +92,27 @@ def write_worker_prompt_bundle(
         encoding="utf-8",
     )
     return bundle
+
+
+def load_worker_prompt_bundle(evidence_dir: Path | str) -> WorkerPromptBundle:
+    """Load and verify a previously written worker prompt bundle."""
+
+    prompt_dir = Path(evidence_dir) / "prompt"
+    manifest = _read_manifest(prompt_dir)
+    digest = _string_field(manifest, "digest")
+    system_path = _string_field(manifest, "system_path")
+    user_path = _string_field(manifest, "user_path")
+
+    try:
+        system = (prompt_dir / system_path).read_text(encoding="utf-8")
+        user = (prompt_dir / user_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PromptBundleError(f"cannot read prompt bundle files under {prompt_dir}") from exc
+
+    expected = _digest({"schema_version": 1, "system": system, "user": user})
+    if digest != expected:
+        raise PromptBundleError("prompt bundle digest mismatch")
+    return WorkerPromptBundle(system=system, user=user, digest=digest)
 
 
 def _render_system(role_spec: RoleSpec) -> str:
@@ -213,3 +235,22 @@ def _digest(value: dict[str, object]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _read_manifest(prompt_dir: Path) -> dict[str, object]:
+    try:
+        raw = json.loads((prompt_dir / "manifest.json").read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise PromptBundleError(f"prompt bundle manifest is missing under {prompt_dir}") from exc
+    except json.JSONDecodeError as exc:
+        raise PromptBundleError(f"prompt bundle manifest is not valid JSON under {prompt_dir}") from exc
+    if not isinstance(raw, dict):
+        raise PromptBundleError("prompt bundle manifest must be a JSON object")
+    return raw
+
+
+def _string_field(mapping: dict[str, object], key: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value:
+        raise PromptBundleError(f"prompt bundle manifest field {key!r} must be a non-empty string")
+    return value
