@@ -225,24 +225,47 @@ def _to_chat_completion_kwargs(model: ModelId, req: ModelRequest) -> dict[str, o
 
 
 def _parse_chat_completion_response(response: object, *, price: TokenPricing | None) -> ModelResponse:
-    choices = _sequence_field(response, "choices")
-    if not choices:
-        raise ValueError("chat completion response has no choices")
+    raw_choices = _field(response, "choices")
+    if raw_choices is not None:
+        choices = _object_sequence(raw_choices, "choices")
+        if choices:
+            choice = choices[0]
+            message = _required_field(choice, "message")
+            content = _optional_string(_field(message, "content")) or ""
+            usage = _parse_openai_usage(_field(response, "usage"), price=price)
+            finish_reason = _optional_string(_field(choice, "finish_reason")) or "stop"
+            return ModelResponse(
+                text=content,
+                tool_calls=tuple(_parse_openai_tool_calls(_field(message, "tool_calls"))),
+                stop_reason=_map_openai_stop_reason(finish_reason),
+                usage=usage,
+            )
 
-    choice = choices[0]
-    message = _required_field(choice, "message")
-    content = _optional_string(_field(message, "content")) or ""
-    usage = _parse_openai_usage(_required_field(response, "usage"), price=price)
-    finish_reason = _optional_string(_field(choice, "finish_reason")) or "stop"
+    text = _optional_string(_field(response, "text"))
+    if text is None:
+        raise ValueError("chat completion response has neither choices nor text")
+
+    usage = _parse_openai_usage(_field(response, "usage"), price=price)
+    finish_reason = _optional_string(_field(response, "finish_reason")) or "stop"
     return ModelResponse(
-        text=content,
-        tool_calls=tuple(_parse_openai_tool_calls(_field(message, "tool_calls"))),
+        text=text,
+        tool_calls=(),
         stop_reason=_map_openai_stop_reason(finish_reason),
         usage=usage,
     )
 
 
-def _parse_openai_usage(raw_usage: object, *, price: TokenPricing | None) -> Usage:
+def _parse_openai_usage(raw_usage: object | None, *, price: TokenPricing | None) -> Usage:
+    if raw_usage is None:
+        if price is not None:
+            raise ValueError("missing response field 'usage'")
+        return Usage(
+            cost_usd=0.0,
+            input_tokens=0,
+            output_tokens=0,
+            cached_input_tokens=0,
+        )
+
     input_tokens = _int_field_any(raw_usage, ("prompt_tokens", "input_tokens"))
     output_tokens = _int_field_any(raw_usage, ("completion_tokens", "output_tokens"))
     cached_input_tokens = _cached_openai_tokens(raw_usage)

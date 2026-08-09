@@ -74,7 +74,7 @@ class ModelGatewayPolicy:
 def _model_family(model: ModelId) -> str:
     raw = str(model).strip().lower()
     if "/" in raw:
-        raw = raw.split("/", 1)[0]
+        raw = raw.split("/", 1)[1]
     if "-" in raw:
         raw = raw.split("-", 1)[0]
     if "." in raw:

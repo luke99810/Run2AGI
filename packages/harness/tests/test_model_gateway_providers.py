@@ -15,6 +15,7 @@ from codentum_harness.model_gateway import (
     OpenAICompatibleGateway,
     TokenPricing,
 )
+from codentum_roles import load_builtin_role_specs
 
 
 def model_request() -> ModelRequest:
@@ -106,6 +107,50 @@ def test_openai_compatible_gateway_parses_tool_calls() -> None:
     assert response.tool_calls[0].input == {"path": "README.md", "content": "ok"}
 
 
+def test_openai_compatible_gateway_accepts_bailian_text_response_without_pricing() -> None:
+    gateway = OpenAICompatibleGateway(
+        client=FakeOpenAIClient(
+            response=SimpleNamespace(
+                choices=None,
+                text="done",
+                finish_reason="stop",
+                usage=None,
+            )
+        ),
+        pricing={},
+        require_pricing=False,
+    )
+
+    response = asyncio.run(_invoke_once(gateway, "reviewer", "qwen-max", model_request()))
+
+    assert response.text == "done"
+    assert response.stop_reason == "end"
+    assert response.tool_calls == ()
+    assert response.usage == Usage(
+        cost_usd=0.0,
+        input_tokens=0,
+        output_tokens=0,
+        cached_input_tokens=0,
+    )
+
+
+def test_openai_compatible_gateway_requires_usage_when_response_is_priced() -> None:
+    gateway = OpenAICompatibleGateway(
+        client=FakeOpenAIClient(
+            response=SimpleNamespace(
+                choices=None,
+                text="done",
+                finish_reason="stop",
+                usage=None,
+            )
+        ),
+        pricing={"qwen-max": TokenPricing(1.0, 2.0)},
+    )
+
+    with pytest.raises(ValueError, match="usage"):
+        asyncio.run(_invoke_once(gateway, "reviewer", "qwen-max", model_request()))
+
+
 def test_gateway_requires_pricing_by_default() -> None:
     gateway = OpenAICompatibleGateway(
         client=FakeOpenAIClient(success_openai_response()),
@@ -145,6 +190,38 @@ def test_gateway_policy_can_compare_model_families() -> None:
 
     with pytest.raises(ModelIsolationError, match="family"):
         asyncio.run(gateway.open("reviewer", ModelRouting(model="qwen-max", effort="high"), 1.0))
+
+
+def test_gateway_policy_compares_namespaced_model_families() -> None:
+    policy = ModelGatewayPolicy(
+        role_models={"coder": "siliconflow/deepseek-v3.2"},
+        must_differ_from={"reviewer": ("coder",)},
+        compare_families=True,
+    )
+
+    with pytest.raises(ModelIsolationError, match="family"):
+        policy.validate_open("reviewer", ModelRouting(model="deepseek-v4-pro", effort="high"))
+
+
+def test_builtin_role_specs_keep_reviewer_and_qa_off_coder_model() -> None:
+    specs = load_builtin_role_specs()
+    by_role = {spec.id: spec for spec in specs}
+    policy = ModelGatewayPolicy.from_role_specs(specs)
+    coder_policy = by_role["coder"].modelPolicy
+    assert coder_policy is not None
+    coder_model = coder_policy.defaultModel
+    assert coder_model is not None
+    assert coder_model == "qwen-coder-plus-1106"
+
+    for role in ("reviewer", "qa"):
+        role_policy = by_role[role].modelPolicy
+        assert role_policy is not None
+        role_model = role_policy.defaultModel
+        assert role_model is not None
+        assert role_model != coder_model
+        policy.validate_open(role, ModelRouting(model=role_model, effort="high"))
+        with pytest.raises(ModelIsolationError, match=role):
+            policy.validate_open(role, ModelRouting(model=coder_model, effort="high"))
 
 
 def test_anthropic_gateway_invokes_messages_api_and_prices_usage() -> None:

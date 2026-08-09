@@ -11,7 +11,7 @@
     { "from": "review", "to": "rejected", "requiresGate": "review" }
   ],
   "modelPolicy": {
-    "defaultModel": "qwen-max",
+    "defaultModel": "qwen-plus-2025-11-05",
     "defaultEffort": "high",
     "mustDifferFrom": ["coder"]
   }
