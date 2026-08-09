@@ -34,6 +34,78 @@
 
 **约束的实现优先级：不可见 > 无权限 > 被拦截 > 提示词劝阻。**
 
+> I6 的完整口径是「**执行完成但证据没落盘 = 没做过**」。
+> 注意区分**证据**和**簿记**：控制平面自己写的流水（拿到了锁、worker 失败了）
+> 带 `sys:` 前缀，验收时一律排除 —— 拿它当验收依据，等于系统自己给自己签字。
+
+---
+
+## 它是怎么跑起来的
+
+### 两个平面
+
+```
+┌─────────────────────────────────────────────────┐
+│  控制平面  control-plane        零 LLM · 确定性  │
+│  状态机 · 路径锁 · 准入校验 · 门禁 · 预算 · Guardian │
+└───────────────┬─────────────────────────────────┘
+                │ WorkerRuntime（唯一入口）
+┌───────────────▼─────────────────────────────────┐
+│  执行平面  harness              模型在这里跑      │
+│  git worktree 隔离 · 上下文装配 · prompt · 证据    │
+└─────────────────────────────────────────────────┘
+```
+
+**边界判据**：把执行平面整个换掉（换框架、换模型、换 Agent 实现），
+控制平面应当**一行都不用改**。
+
+### WorkPacket 的一生
+
+一个 WorkPacket 是一份"谁、在哪些路径上、做什么、怎么算做完"的声明。
+调和循环（`reconcile`，对标 K8s controller manager）反复地看每个 packet
+当前是什么状态、能不能推进、然后落盘：
+
+```
+pending ──► ready ──► running ──► review ──► accepted
+   │                     │           │
+   │                     │           └──► rejected
+   └──► blocked ◄────────┘                （可打回重来）
+```
+
+| 转换 | 判据 |
+|---|---|
+| `pending → ready` | 依赖的 packet 全部 accepted |
+| `ready → running` | **拿到 `ownsPaths` 的全部路径锁**（I1 的强制点） |
+| `running → review` | worker 结束（成功或失败都进 review） |
+| `review → accepted` | 门禁通过；无门禁时兜底要求**至少一条真实证据**且 worker 未失败 |
+
+调和是**幂等**的：同一状态跑 N 次 tick 结果一样，副作用只发生一次。
+所以进程崩了重启、从 `.codentum/` 重新 `load_state()` 就能接着跑。
+
+### 状态目录 `.codentum/`
+
+**这是控制平面与桌面端之间唯一的接口** —— 一边写，一边读，没有 RPC：
+
+```
+.codentum/
+├── graph.json          必需  依赖图 + 所有权图（锁表）。dependency 是 packets/ 的投影
+├── packets/            必需  每个 WorkPacket 一个 JSON，磁盘是唯一真源
+├── budget.json         必需  预算账本（花了多少、按角色/模型分摊）
+├── decisions.jsonl     必需  决策流水（空文件合法）
+├── evidence/           必需  证据产出物（空目录合法）
+├── knowledge/          可选  知识条目
+└── roles/              可选  RoleSpec 覆盖
+```
+
+前五个**缺一不可**：桌面端加载时逐项校验，缺任何一个都会把整份快照判为
+不连贯（`coherent = false`）并在界面上提示，而不是默默显示半份数据。
+空的 `decisions.jsonl` 与空的 `evidence/` 目录本身是合法状态 ——
+"没有决策"和"没有这个文件"是两回事，前者是信息，后者是残缺。
+
+两侧的读写各有一套校验（写侧 Pydantic，读侧手写守卫），
+它们没有共同的生成源，所以 `tests/e2e` 里有一条**跨语言**用例盯着这条接缝：
+让控制平面真的跑一轮落盘，再用桌面端自己的加载器读回来。
+
 ---
 
 ## 目录地图
@@ -49,7 +121,7 @@ codentum/
 │   ├── delivery/      C    Python。Provisioning · 凭证扫描 · 打包 · 冷启动测试
 │   └── desktop/       C    ★ TypeScript。Electron 壳 · 视图 · 管理模块 · 交互界面
 ├── fixtures/          A    ★ golden-state 快照 —— C 的解耦点
-├── tests/                  contract（自动生成）· e2e
+├── tests/                  contract（自动生成）· e2e（跨包接缝）
 ├── docker/            C    冷启动容器 · Team 模式 · 交付运行时
 ├── scripts/           A    开发与验证脚本
 └── boundaries.yaml         ★ 团队路径独占表（与系统内部机制同构）
@@ -59,30 +131,48 @@ codentum/
 
 ---
 
-## 第 0 周：契约冻结 ✅ 已完成（2026-08-02）
+## 快速上手
 
-> **这一周产出的是契约，不是代码。**
-> 跳过它直接分头写，三周后集成会撞上合并地狱——而这套系统存在的理由就是消灭那个地狱。
-
-```
-✅ 目录骨架
-✅ 语言与运行时选型       ★ Python 核心引擎 + TS 桌面端，ADR-0003（取代 0002）
-✅ 编排框架              LangGraph 用在执行平面，不用在控制平面，ADR-0004
-✅ 工程底座              pyproject（mypy strict + ruff）· 5 个 Python 包 + 1 个 TS 包
-✅ 8 份 JSON Schema      identifiers 为共享真源，其余一律 $ref，无重复 enum
-✅ 四个接口签名           packages/contracts/python/codentum_contracts/interfaces.py
-✅ 状态类型（★ 生成物）    ★ Python(Pydantic) + TS 两套，同源于 schema
-✅ 3 个 golden-state 快照  empty · mid-flight · blocked，各带 NOTE.md
-✅ 五个工程脚本           全部 Python，零依赖：gen_types · gen_contract_tests ·
-                        validate_fixtures · check_boundaries · secret_scan
-✅ 105 个契约测试         正例来自真实固件，反例由固件变异而来
-✅ 路径独占表冻结          boundaries.yaml: frozen_at = 2026-08-02
+```bash
+pip install -e ".[dev]"          # Python 核心引擎
+cd packages/desktop && npm i     # 桌面端
 ```
 
-> ⚠️ **`frozen_at` 等于「宣布冻结」。** 若 B / C 还没过目全部 8 份 schema 与 4 个接口签名，
-> 把它改回 `null`，走完确认再填——**冻结的意义在于三个人都认它。**
+最小可运行链路 —— 让控制平面驱动一个真实 worker：
 
-**此后只允许加实现，不允许改接口签名。** 要改需三人同意 + 新 ADR + 走变更窗口。
+```python
+from codentum_control_plane.budget import BudgetTracker
+from codentum_control_plane.reconcile import ReconcileLoop
+from codentum_harness.runtime import (
+    LocalWorkerRuntimeConfig, RunnerConfig, build_local_worker_runtime,
+)
+
+loop = ReconcileLoop(
+    state_dir=str(project / ".codentum"),
+    budget_tracker=BudgetTracker(limit_cny=20.0),
+)
+loop.load_state()                       # 磁盘是唯一真源
+loop.worker_runtime = build_local_worker_runtime(
+    LocalWorkerRuntimeConfig(
+        repo_root=project,
+        runner=RunnerConfig.command_runner([...], timeout_seconds=900),
+    )
+)
+loop.run_until_stable(max_ticks=30)
+loop.save_state()
+```
+
+### 装配须知（这几条不写在任何接口签名上）
+
+| 要点 | 不满足会怎样 |
+|---|---|
+| **`runner` 必须显式配置** | 默认 `None` = 没有执行器。worker 会建好 worktree、写好 prompt bundle，然后以 `runtime_error: no worker runner configured` 收场 —— **任何 packet 都不可能被真实执行** |
+| **`repo_root` 必须是被开发的项目仓库，且是 git 仓库** | worktree 隔离要跑 `git rev-parse`；worker 工作区是 repo_root 的**兄弟目录**（`<父目录>/codentum-workers/<pid>/attempt-N`），填错会一直失败 |
+| **`budget_tracker` 建议配上** | 不配则不写 `budget.json`，状态目录不完整，桌面端判为不连贯（会打 warning，不会静默） |
+| **门禁组件默认关闭** | `gate_runner` / `guardian` / `transition_table` 默认 `None`，此时走的是兜底验收。**生产用法应当显式配齐** |
+
+可运行的完整例子见 [`tests/e2e/test_abc_integration.py`](tests/e2e/test_abc_integration.py)，
+其中 `TestRealExecution` 演示了从 `pending` 到 `accepted` 的真实一轮。
 
 ---
 
@@ -98,7 +188,7 @@ make verify-offline  # ★ 不需要 pip install -e ".[dev]" 就能跑的那部�
 | `make gen-check` | 生成物与 schema 一致（手改 → 红） | ✅ |
 | `python scripts/validate_fixtures.py` | 固件过 schema + **八项交叉检查** | ✅ |
 | `python scripts/check_boundaries.py` | 路径独占 · packages 全覆盖 · 契约冻结 | ✅ |
-| `pytest tests/contract` | 105 个契约用例 | ✅ |
+| `pytest tests/contract` | 契约用例（由 schema 生成） | ✅ |
 | `python scripts/secret_scan.py` | 凭证扫描（工作区 + git 历史） | ✅ |
 | `make typecheck` | mypy --strict 五个 Python 包 | 需 `pip install -e ".[dev]"` |
 | `make desktop-typecheck` | 桌面端 `tsc --noEmit` | 需 `npm i` |
@@ -120,6 +210,20 @@ I6 审计链首尾相接    断链即篡改，这条不能只写在文档里
 证据引用有效         packet.evidence 指向的证据必须存在
 无凭证              固件里不许有真密钥
 ```
+
+### 写测试时的一条硬规矩
+
+> **写完一条测试，先问：如果这个功能坏了，它会不会红？**
+
+这条不是客套话，是踩出来的。本项目已经吃过两次亏：
+
+- 并发用例第一版是**空转**的 —— 把互斥锁整个换成空操作，跑 400 轮五线程抢重叠
+  路径，依然每轮恰好一个赢家（临界区太短，GIL 没机会切走）
+- 全链路用例断言"状态到达 accepted"，而 worker 其实全部失败了 ——
+  这类断言**在放行逻辑越松时越容易通过**，系统坏掉时反而绿得最稳
+
+所以：**涉及不变量的测试，必须配一次「把约束摘掉看它会不会红」的对照实验。**
+新写的测试第一次就绿，先怀疑它没跑。
 
 ---
 
@@ -149,17 +253,8 @@ tests/contract/test_*.py                              ← gen_contract_tests
 
 完整分工与协作规范见 [`docs/03-团队分工与协作规范.md`](docs/03-团队分工与协作规范.md)，日常规则见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
-### 契约冻结后，各人的第一件事
-
-| | 第一件事 | 完成定义（机器可判定） |
-|---|---|---|
-| **A** | `git init` + 首次提交；路径锁的前缀树 | 并发申请重叠路径，有且只有一个成功 |
-| **B** | Harness 三段式骨架 + 工具面从 RoleSpec 派生 | 角色无权限的工具**不出现在工具列表里**（不是被拒，是看不见） |
-| **C** | 拿三个 golden-state 快照渲染看板 | 三个快照渲染结果与预期截图一致，且 **empty 快照不崩** |
-
-> ⚠️ **`git init` 是现在唯一必须人工做的一步。**
-> 在此之前：`check-boundaries` 的 I3 契约冻结检查、`secret-scan` 的历史扫描
-> 这两项**都处于「无法执行」状态**——不是通过，是没跑。
+**契约冻结后只允许加实现，不允许改接口签名。** 要改需三人同意 + 新 ADR + 走变更窗口
+（`boundaries.yaml` 的 `frozen_at` 是这条规矩的锚点）。
 
 ---
 
@@ -169,8 +264,9 @@ tests/contract/test_*.py                              ← gen_contract_tests
 |---|---|
 | [`docs/00-总体设计方案.md`](docs/00-总体设计方案.md) | **权威依据**。26 章完整设计 |
 | [`docs/01-角色详细设计与Skill清单.md`](docs/01-角色详细设计与Skill清单.md) | 每个角色的 Harness/Loop/Graph 精密设计 + Skill 清单 |
-| [`docs/02-实施路线与交付计划.md`](docs/02-实施路线与交付计划.md) | P0–P7 分期、MVP 边界、Demo 剧本 |
-| [`docs/03-团队分工与协作规范.md`](docs/03-团队分工与协作规范.md) | 三人分工、协作规范、14 天冲刺 |
+| [`docs/02-实施路线与交付计划.md`](docs/02-实施路线与交付计划.md) | 分期路线、MVP 边界、Demo 剧本 |
+| [`docs/03-团队分工与协作规范.md`](docs/03-团队分工与协作规范.md) | 三人分工与协作规范 |
+| [`docs/04-模型路由表.md`](docs/04-模型路由表.md) | 按「错了有多贵」分档，不按「活有多难」 |
 | [`docs/adr/`](docs/adr/) | 架构决策记录（含已否决的方案与理由） |
 
 ---
@@ -179,23 +275,16 @@ tests/contract/test_*.py                              ← gen_contract_tests
 
 **日常开发不需要 Docker。** Solo 模式的设计就是本地单进程 + 本地 Git + SQLite，零外部依赖。
 
-```bash
-pip install -e ".[dev]"    # Python 核心引擎
-cd packages/desktop && npm i   # 桌面端
-```
-
-⚠️ **Electron 拉起 Python 引擎 + PyInstaller 打包是 ADR-0003 引入的最大执行风险。**
-P1 阶段就要打通一次最小链路，不要等到最后一周。
-
 Docker 只在三个场景出现：
 
 | 用途 | 谁需要 |
 |---|---|
 | 冷启动复现测试的干净容器 | C |
 | Team 模式验证（AgentTeams 全栈） | A 或 B，各一次 |
-| 给评委的一键复现 | C |
+| 一键复现包 | C |
 
-详见桌面上的《Codentum 基础设施与部署路线》。
+⚠️ **Electron 拉起 Python 引擎 + PyInstaller 打包是 ADR-0003 引入的最大执行风险**
+（换 Python 换来了团队熟悉度，代价落在打包这一环），需要尽早打通一次最小链路。
 
 ---
 
