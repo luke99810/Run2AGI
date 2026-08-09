@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from codentum_contracts.state import PacketId, WorkPacket, dump_state
+from codentum_contracts.state import EvidenceRef, PacketId, WorkPacket, dump_state
 from codentum_contracts.interfaces import (
     AbortReason,
     SpawnRequest,
@@ -313,10 +313,36 @@ class _MockWorkerRuntime:
 
 
 def _completed_outcome() -> WorkerCompleted:
+    """一个**真的干完了活**的 worker：带着自己产出的证据回来。
+
+    ★ 别把 evidence 写成 ()。在 I6 下「完成但没有证据」等于没做过
+      （Evidence 的定义原文：执行完成但证据没落盘 = 没做过），
+      验收环节本就应该拒绝它。那个行为由
+      test_completed_without_evidence_not_accepted 单独断言，
+      不该混进全链路用例、让全链路绿灯建立在兜底漏洞上。
+    """
+    return WorkerCompleted(
+        evidence=(EvidenceRef("diff:src/test/@sha256:abc123"),),
+        spent_cny=0.5,
+        touched_paths=("src/test/",),
+    )
+
+
+def _completed_outcome_no_evidence() -> WorkerCompleted:
+    """自称完成、但一条证据都没落盘的 worker。"""
     return WorkerCompleted(
         evidence=(),
         spent_cny=0.5,
         touched_paths=("src/test/",),
+    )
+
+
+def _failed_outcome() -> WorkerFailed:
+    return WorkerFailed(
+        reason_code=FailureCode.RUNTIME_ERROR,
+        detail="子进程非零退出",
+        evidence=(),
+        spent_cny=0.3,
     )
 
 
@@ -396,6 +422,58 @@ class TestReviewToAccepted:
 
         report = empty_loop.tick()
         assert empty_loop.packet(PacketId("wp-000010")).state == "review"
+
+    def test_sys_evidence_alone_not_accepted(self, empty_loop: ReconcileLoop) -> None:
+        """★ 只有控制面自产的 sys: 簿记证据 → 不能验收。
+
+        `sys:lock:` 是 _try_ready_to_running 自己写的「我拿到锁了」，
+        拿它当验收依据等于系统自己给自己签字（I6：声明不算）。
+        """
+        pkt = _make_packet("wp-sys001", state="review")
+        pkt = pkt.model_copy(update={"evidence": ("sys:lock:wp-sys001:1",)})
+        _inject(empty_loop, pkt)
+
+        empty_loop.tick()
+        assert empty_loop.packet(PacketId("wp-sys001")).state == "review"
+
+    def test_worker_failed_not_accepted(self, empty_loop: ReconcileLoop) -> None:
+        """★ worker 失败的 packet 绝不能被兜底分支验收掉。
+
+        回归防线：曾经失败只写在 transition 的 detail 字符串里，
+        验收环节读不到，于是跑挂的活被静默地当成干完了。
+        """
+        mock = _MockWorkerRuntime(outcome=_failed_outcome())
+        empty_loop.worker_runtime = mock
+
+        pkt = _make_packet("wp-fail01", state="pending", owns=("src/fail/",))
+        _inject(empty_loop, pkt)
+
+        report = empty_loop.run_until_stable(max_ticks=20)
+        final = empty_loop.packet(PacketId("wp-fail01"))
+
+        assert final.state == "review", (
+            f"worker 失败却走到了 {final.state}。"
+            f"转换轨迹：{[(t.from_state, t.to_state, t.detail) for t in report.transitions]}"
+        )
+        assert any(
+            ref.startswith("sys:worker-failed:") for ref in final.evidence
+        ), f"失败没有落成机器可读的证据：{final.evidence}"
+
+    def test_completed_without_evidence_not_accepted(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ worker 自称完成但没落任何证据 → 停在 review。
+
+        I6 原文：执行完成但证据没落盘 = 没做过。
+        """
+        mock = _MockWorkerRuntime(outcome=_completed_outcome_no_evidence())
+        empty_loop.worker_runtime = mock
+
+        pkt = _make_packet("wp-noev01", state="pending", owns=("src/noev/",))
+        _inject(empty_loop, pkt)
+
+        empty_loop.run_until_stable(max_ticks=20)
+        assert empty_loop.packet(PacketId("wp-noev01")).state == "review"
 
 
 # ════════════════════════════════════════════════════════════════

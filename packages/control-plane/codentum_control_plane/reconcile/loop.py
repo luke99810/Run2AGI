@@ -20,8 +20,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from codentum_contracts.interfaces import (
     AbortReason,
     BudgetGrantRuntime,
@@ -50,8 +48,32 @@ from codentum_control_plane.state_machine import TransitionTable
 from .actions import PacketTransition, ReconcileContext, TickReport
 
 
+logger = logging.getLogger(__name__)
+
+
 TERMINAL_STATES: frozenset[PacketState] = frozenset({"accepted", "abandoned"})
 """终态包不再被 reconcile 处理。"""
+
+
+# ════════════════════════════════════════════════════════════
+#  证据前缀约定
+# ════════════════════════════════════════════════════════════
+#
+# ★ I6：「状态推进必须附证据引用，声明不算。执行完成但证据没落盘 = 没做过。」
+#
+# reconcile 自己在推进过程中会写入一些**簿记性**证据（拿到了锁、worker 失败了）。
+# 这些是控制面的内部流水，不是「活干完了」的证明 —— 拿它们当验收依据，
+# 等于系统自己给自己签字。所以统一加 `sys:` 前缀，验收时一律排除。
+SYS_EVIDENCE_PREFIX = "sys:"
+
+#: worker 以 failed 收场时打在 packet 上的标记，让失败对后续判定可见。
+#: 没有它的话，失败只存在于 transition 的 detail 字符串里，验收环节读不到。
+WORKER_FAILED_EVIDENCE_PREFIX = "sys:worker-failed:"
+
+
+def _is_acceptance_evidence(ref: str) -> bool:
+    """这条证据能不能作为验收依据。控制面自产的簿记流水不算。"""
+    return not ref.startswith(SYS_EVIDENCE_PREFIX)
 
 
 def _now_iso() -> str:
@@ -218,15 +240,29 @@ class ReconcileLoop:
             )
 
         # 写 graph.json（依赖图 + 所有权图）
+        #
+        # ★ dependency 由 self._packets 推导，而不是回写 self._dep_graph。
+        #   _dep_graph 只在 load_state 时从磁盘读入，之后从不参与任何判定
+        #   （真正的依赖真相是 packet.deps，见 _try_pending_to_ready），
+        #   所以照抄它等于把上一次的磁盘内容原样吐回去：新建的 packet 永远
+        #   不会出现在 nodes 里。下游 desktop 的 checkGraphPacketCoherence
+        #   会因此报 [partial-write] 并把整个状态目录判为 incoherent。
+        #   packets 是唯一权威，graph.dependency 是它的投影。
+        nodes = sorted(str(pid) for pid in self._packets)
+        edges = sorted(
+            (
+                {"from": str(dep), "to": str(pid)}
+                for pid, packet in self._packets.items()
+                for dep in packet.deps
+            ),
+            key=lambda e: (e["to"], e["from"]),
+        )
         ownership = self._lock_table.to_ownership()
         graph_raw: dict[str, Any] = {
             "schemaVersion": 1,
             "dependency": {
-                "nodes": list(self._dep_graph.nodes) if self._dep_graph else [],
-                "edges": [
-                    {"from": e.from_, "to": e.to}
-                    for e in (self._dep_graph.edges if self._dep_graph else ())
-                ],
+                "nodes": nodes,
+                "edges": edges,
             },
             "ownership": {
                 "locks": [
@@ -245,7 +281,62 @@ class ReconcileLoop:
             "utf-8",
         )
 
+        self._write_budget(root)
+        self._ensure_state_dir_shape(root)
+
         self._dirty = False
+
+    # ── .codentum/ 目录形状 ──────────────────────────────────
+
+    def _write_budget(self, root: Path) -> None:
+        """把预算落盘到 budget.json。
+
+        ★ 没有这一步的话，spend() 记的账只活在内存里：进程一停就没了，
+          桌面端也永远显示不出花了多少。追踪器有 to_file()，
+          之前只是没人调用它。
+
+        ★ budget_tracker 为 None 时**不写**。A 此时确实不知道全局预算是多少，
+          凭空造一个数字比缺文件更糟 —— 缺文件只是缺，造出来的数字会被当真。
+        """
+        if self.budget_tracker is None:
+            if not (root / "budget.json").exists():
+                # 不造数字，但也不能不吭声：这样写出去的 .codentum/ 是不完整的，
+                # C 会把整份快照判为 incoherent。让它响，别让它默默发生。
+                logger.warning(
+                    "未配置 budget_tracker，不写 budget.json —— %s 将缺少该文件，"
+                    "桌面端会把这份状态判为不连贯。请在构造 ReconcileLoop 时传入 "
+                    "BudgetTracker。",
+                    root,
+                )
+            return
+        budget_file = self.budget_tracker.to_file()
+        payload = {
+            k: v for k, v in dump_state(budget_file).items() if v is not None
+        }
+        (root / "budget.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            "utf-8",
+        )
+
+    @staticmethod
+    def _ensure_state_dir_shape(root: Path) -> None:
+        """保证 `.codentum/` 的结构成员都存在。
+
+        ★ `.codentum/` 是 A 与 C 之间唯一的接口，它的完整形状由
+          fixtures/golden-state/ 定义：graph.json · packets/ · budget.json ·
+          decisions.jsonl · evidence/ · knowledge/。
+          A 原来只写前两个，剩下的缺席会让 C 的 parseJsonFile/
+          parseJsonCollection 报 [missing] 并把整个快照置为 incoherent。
+
+        ★ 空的 decisions.jsonl 和空的 evidence/ 目录本身就是合法状态
+          （golden-state/empty 就是这样），所以这里只是「确保存在」，
+          不是造数据。已存在的一律不动。
+        """
+        for directory in ("evidence", "knowledge", "packets"):
+            (root / directory).mkdir(parents=True, exist_ok=True)
+        decisions = root / "decisions.jsonl"
+        if not decisions.exists():
+            decisions.write_text("", encoding="utf-8")
 
     # ════════════════════════════════════════════════════════════
     #  调和主循环
@@ -507,11 +598,22 @@ class ReconcileLoop:
                         model=packet.routing.model if packet.routing else "",
                     )
 
+            # ★ 把失败落成一条证据。原来失败只写在 detail 字符串里，
+            #   _try_review_to_accepted 读不到，于是一个跑挂了的 packet
+            #   照样能被兜底分支验收掉 —— 静默地把失败当成功。
+            failed_marker = EvidenceRef(
+                f"{WORKER_FAILED_EVIDENCE_PREFIX}{packet.id}:{outcome.reason_code}"
+            )
+            worker_evidence = tuple(getattr(outcome, "evidence", ()) or ())
+            logger.warning(
+                "packet %s 的 worker 失败（%s），进入 review 但不会被自动验收",
+                packet.id, outcome.reason_code,
+            )
             return self._apply_transition(
                 packet,
                 target="review",
                 detail=f"Worker 失败 ({outcome.reason_code})，进入评审",
-                evidence_refs=tuple(outcome.evidence) if hasattr(outcome, 'evidence') else (),
+                evidence_refs=worker_evidence + (failed_marker,),
                 extra_updates={"attempts": packet.attempts + 1},
             )
         else:
@@ -583,15 +685,39 @@ class ReconcileLoop:
                 evidence_refs=gate_result.evidence_refs,
             )
 
-        # 退回到简单证据检查
-        if not packet.evidence:
+        # ── 兜底：没有配 gate_runner 时的简单证据检查 ──
+        #
+        # ★ 兜底仍然能验收，但判据必须是**别人给的证据**，不能是控制面
+        #   自己的簿记。原来这里只判 `packet.evidence` 非空，而 packet 手上
+        #   那条 `sys:lock:<pid>:<tick>` 是 _try_ready_to_running 自己写的 ——
+        #   于是「拿到过锁」被当成了「活干完了」，worker 失败也照样 accepted。
+
+        # 1) worker 明确失败过 → 任何情况下都不自动验收，留在 review 等人处理
+        failed = [
+            ref for ref in packet.evidence
+            if ref.startswith(WORKER_FAILED_EVIDENCE_PREFIX)
+        ]
+        if failed:
+            logger.info(
+                "packet %s 有 worker 失败标记，兜底分支拒绝自动验收：%s",
+                packet.id, ", ".join(failed),
+            )
+            return None
+
+        # 2) 必须存在至少一条非 sys: 的真实证据
+        real = tuple(ref for ref in packet.evidence if _is_acceptance_evidence(ref))
+        if not real:
+            logger.info(
+                "packet %s 没有可验收的证据（%d 条均为控制面簿记），保持 review",
+                packet.id, len(packet.evidence),
+            )
             return None
 
         return self._apply_transition(
             packet,
             target="accepted",
-            detail=f"验收门禁通过（{len(packet.evidence)} 条证据）",
-            evidence_refs=packet.evidence,
+            detail=f"验收门禁通过（{len(real)} 条证据）",
+            evidence_refs=real,
         )
 
     # ════════════════════════════════════════════════════════════

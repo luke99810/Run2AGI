@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import locale
 import os
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -66,8 +67,9 @@ class CommandRunner:
                 argv,
                 cwd=workspace,
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
+                # ★ 故意不用 text=True/encoding= —— 解码交给 _coerce_output。
+                #   理由见那里：外部工具的输出编码不受我们控制，
+                #   而 subprocess 的解码失败会静默杀死读取线程。
                 timeout=self.timeout_seconds,
                 env=env,
                 check=False,
@@ -110,8 +112,8 @@ class CommandRunner:
         evidence = _write_outputs_and_result(
             evidence_dir,
             argv=argv,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
+            stdout=_coerce_output(proc.stdout),
+            stderr=_coerce_output(proc.stderr),
             result={
                 "status": "completed" if proc.returncode == 0 else "failed",
                 "exit_code": proc.returncode,
@@ -185,11 +187,44 @@ def _write_result(evidence_dir: Path, result: dict[str, object]) -> EvidenceRef:
 
 
 def _coerce_output(value: bytes | str | None) -> str:
+    """把子进程的原始输出变成一个**一定拿得到**的字符串。
+
+    ★ 为什么不直接让 subprocess 用 text=True/encoding="utf-8" 解码：
+      被调起来的是任意外部工具，没人保证它按 UTF-8 输出。Windows 上它多半
+      用控制台码页（cp936 等）。而 subprocess 的解码发生在**读取线程**里，
+      一个 UnicodeDecodeError 就会让那个线程死掉、stdout 变成 None，
+      最后在写证据时炸出 "data must be str, not NoneType" —— 报错位置
+      和真因隔着十万八千里。所以这里改成拿字节、自己按顺序试。
+
+    ★ 顺带把换行统一成 \\n。丢掉 text=True 就等于丢掉 universal newlines，
+      而证据是内容寻址的：同一次执行在 Windows 和 Linux 上算出不同摘要，
+      等于摘要失去意义。
+    """
     if value is None:
         return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
+    if isinstance(value, str):
+        return value.replace("\r\n", "\n").replace("\r", "\n")
+
+    text: str | None = None
+    for encoding in _output_encodings():
+        try:
+            text = value.decode(encoding)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if text is None:
+        # 全都不认：兜底成不会失败的解码，宁可有替换符也不能丢掉整段输出
+        text = value.decode("utf-8", errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _output_encodings() -> tuple[str, ...]:
+    """解码顺序：UTF-8 优先，其次本机首选编码。"""
+    encodings = ["utf-8"]
+    preferred = locale.getpreferredencoding(False)
+    if preferred and preferred.lower().replace("-", "") not in ("utf8",):
+        encodings.append(preferred)
+    return tuple(encodings)
 
 
 def _git_changed_paths(workspace: Path) -> tuple[str, ...]:
@@ -198,15 +233,15 @@ def _git_changed_paths(workspace: Path) -> tuple[str, ...]:
         return ()
 
     try:
-        out = subprocess.run(  # noqa: S603 - fixed git invocation, shell=False.
+        raw = subprocess.run(  # noqa: S603 - fixed git invocation, shell=False.
             [git, "-C", str(workspace), "status", "--porcelain", "--untracked-files=all"],
             check=True,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
+            # ★ 同上：git 会原样吐出文件名的字节，别让它杀死读取线程
         ).stdout
     except (FileNotFoundError, subprocess.CalledProcessError):
         return ()
+    out = _coerce_output(raw)
 
     paths: list[str] = []
     for line in out.splitlines():

@@ -68,11 +68,16 @@ def test_prompt_bundle_is_stable_and_writes_manifest(tmp_path: Path) -> None:
     )
 
     assert first == second
-    manifest = json.loads((tmp_path / "evidence-a" / "prompt" / "manifest.json").read_text())
+    # ★ 必须显式 encoding="utf-8"。render.py 是按 UTF-8 写的，
+    #   而 read_text() 不带参数走的是平台首选编码 —— 在中文 Windows 上
+    #   是 cp936，于是路径里的非 ASCII 字符读回来是乱码。
+    #   这不是测试挑剔：证据文件要能跨机器复算，两端就必须锁死同一个编码。
+    prompt_dir = tmp_path / "evidence-a" / "prompt"
+    manifest = json.loads((prompt_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["digest"] == first.digest
     assert manifest["context_refs"] == ["diff"]
-    assert (tmp_path / "evidence-a" / "prompt" / "system.md").read_text() == first.system
-    assert (tmp_path / "evidence-a" / "prompt" / "user.md").read_text() == first.user
+    assert (prompt_dir / "system.md").read_text(encoding="utf-8") == first.system
+    assert (prompt_dir / "user.md").read_text(encoding="utf-8") == first.user
 
 
 def test_prompt_bundle_never_leaks_denied_context_text(tmp_path: Path) -> None:

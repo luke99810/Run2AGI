@@ -131,34 +131,59 @@ class TestABWithRealRuntime:
         assert rt is not None
         assert hasattr(rt, "spawn"), "WorkerRuntime 契约要求 spawn 是唯一入口"
 
-    def test_full_chain_reaches_terminal_state(self, project: Path) -> None:
-        """pending → ready → running → review → accepted，用 B 的真 runtime。
+    def test_full_chain_runs_and_settles_honestly(self, project: Path) -> None:
+        """pending → ready → running → review，用 B 的真 runtime，且终态与 worker 结果一致。
 
-        ★ 这是 08-08 那次手工验证的可重复版本。
+        ★ 不要断言「一定到 accepted」。真 runtime 在没装 AgentTeams 的机器上会以
+          runtime_error 收场，那时正确的终态就是 review —— 硬写 accepted 的话，
+          这条测试只会在验收门禁漏放行的时候变绿，坏掉的时候反而绿得最稳。
+          该断言的是：链路确实跑完了，且终态**如实反映**了 worker 的结果。
         """
         state_dir = project / ".codentum"
         _write_packet(state_dir, _make_packet("wp-abc001", owns=("src/abc001/",)))
 
         loop = _make_loop(project)
         report = loop.run_until_stable(max_ticks=30)
-        final = loop.packet(PacketId("wp-abc001")).state
+        final = loop.packet(PacketId("wp-abc001"))
+        trace = [(t.from_state, t.to_state, t.detail) for t in report.transitions]
 
-        assert final == "accepted", (
-            f"真 runtime 下未到 accepted，实际 {final}。\n"
-            f"轨迹: {[(t.from_state, t.to_state, t.detail) for t in report.transitions]}"
-        )
+        # 链路必须真的走过调度与执行，而不是一动没动
+        seen = {t.to_state for t in report.transitions}
+        assert {"ready", "running"} <= seen, f"链路没跑起来。轨迹: {trace}"
+        assert final.state in ("accepted", "review"), f"落在意外状态 {final.state}。轨迹: {trace}"
+
+        worker_failed = any("Worker 失败" in (t.detail or "") for t in report.transitions)
+        if worker_failed:
+            assert final.state == "review", f"worker 失败却走到 {final.state}。轨迹: {trace}"
+        else:
+            assert final.state == "accepted", f"worker 成功却停在 {final.state}。轨迹: {trace}"
 
     def test_parallel_packets_no_lock_conflict(self, project: Path) -> None:
-        """三个互不重叠路径的 packet 应能并行推进到终态（I1 不被误伤）。"""
+        """三个互不重叠路径的 packet 应能并行推进，且各自拿到锁（I1 不被误伤）。
+
+        ★ 这条测的是**锁不互相误伤**，不是验收结果。所以断言落在
+          「每个 packet 都真的被调度进 running」，而不是「都 accepted」——
+          后者取决于 worker 跑没跑成，与 I1 无关。
+        """
         state_dir = project / ".codentum"
         for i in range(1, 4):
             _write_packet(state_dir, _make_packet(f"wp-abc10{i}", owns=(f"src/abc10{i}/",)))
 
         loop = _make_loop(project)
-        loop.run_until_stable(max_ticks=60)
+        report = loop.run_until_stable(max_ticks=60)
 
         states = {str(k): v.state for k, v in loop.packets.items()}
-        assert all(s == "accepted" for s in states.values()), f"未全部到终态: {states}"
+        ran = {
+            str(t.packet_id) for t in report.transitions if t.to_state == "running"
+        }
+        assert ran == set(states), (
+            f"路径互不重叠却没能全部拿到锁：进入过 running 的只有 {sorted(ran)}，"
+            f"全部 packet 为 {sorted(states)}"
+        )
+        # 谁也不该被卡在 blocked —— 那才是锁误伤的症状
+        assert not [k for k, s in states.items() if s == "blocked"], (
+            f"有 packet 被阻塞，疑似锁误伤: {states}"
+        )
 
 
 # ════════════════════════════════════════════════════════════════
@@ -233,19 +258,15 @@ class TestACViaDisk:
 
 
 # ════════════════════════════════════════════════════════════════
-#  已知缺陷（xfail strict：修好了会变红，提醒删掉标记）
+#  A/B/C 接缝的回归防线
+#
+#  这两条曾经是 xfail(strict) 记录的真实缺陷，现已修复。
+#  它们的共同点是**静默**：坏掉的时候没有异常、没有红灯，
+#  只是桌面端安静地显示不一致、失败的活安静地变成验收通过。
+#  所以这两条必须一直留着。
 # ════════════════════════════════════════════════════════════════
 
-class TestKnownDefects:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "KNOWN-2：save_state() 写的 dependency.nodes 恒为空 —— _dep_graph 只从磁盘读"
-            "（loop.py:108 起），从不由 packets 推导。C 的 checkGraphPacketCoherence"
-            "（directory-state-source.ts:873）会因此把每一次全新流程都判成 "
-            "[partial-write] 并置 coherent=false。桌面端不会崩，只会安静地显示不一致。"
-        ),
-    )
+class TestIntegrationInvariants:
     def test_graph_nodes_match_packets(self, project: Path) -> None:
         """graph.dependency.nodes 应与 packets/ 一致，否则 C 判定数据不连贯。"""
         state_dir = project / ".codentum"
@@ -263,19 +284,13 @@ class TestKnownDefects:
             f"graph.dependency.nodes={sorted(nodes)} 与 packets/={sorted(packet_ids)} 不一致"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "KNOWN-3：worker 失败仍被 accepted。_try_review_to_accepted 在 "
-            "gate_runner=None 时走兜底分支（loop.py:569），条件只是『evidence 非空』；"
-            "而 packet 手里那条证据是 _try_ready_to_running 自己生成的 sys:lock:<pid>。"
-            "于是『系统记了一笔自己获取锁』被当成了验收依据 —— I6 要求的是证据，"
-            "拿到的却是记账。ReconcileLoop 的 gate_runner/guardian/budget_tracker/"
-            "transition_table 四个安全组件全部默认 None，默认配置下护栏是全关的。"
-        ),
-    )
     def test_failed_worker_must_not_be_accepted(self, project: Path) -> None:
-        """worker 失败的 packet 不该进 accepted。"""
+        """worker 失败的 packet 不该进 accepted。
+
+        ★ 这里跑的是**真的 B**（LocalWorkerRuntime），不是 mock。
+          在没装 AgentTeams 的机器上 worker 会以 runtime_error 收场，
+          正好构成这条不变量的天然用例。
+        """
         state_dir = project / ".codentum"
         _write_packet(state_dir, _make_packet("wp-abc401", owns=("src/abc401/",)))
 
@@ -285,10 +300,13 @@ class TestKnownDefects:
         worker_failed = any(
             "Worker 失败" in (t.detail or "") for t in report.transitions
         )
-        final = loop.packet(PacketId("wp-abc401")).state
+        final = loop.packet(PacketId("wp-abc401"))
         if worker_failed:
-            assert final != "accepted", (
+            assert final.state != "accepted", (
                 "worker 失败却被 accepted。轨迹：\n  "
                 + "\n  ".join(f"{t.from_state} -> {t.to_state} {t.detail}"
                               for t in report.transitions)
             )
+            assert any(
+                ref.startswith("sys:worker-failed:") for ref in final.evidence
+            ), f"失败没有落成机器可读的证据：{final.evidence}"
