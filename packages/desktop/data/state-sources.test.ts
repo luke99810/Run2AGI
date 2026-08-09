@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { cp, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -253,7 +253,7 @@ describe('ProjectStateSource', () => {
     const source = await ProjectStateSource.create(directory)
     const snapshot = await source.read()
 
-    expect(snapshot.source.rootPath).toBe(directory)
+    await expect(realpath(directory)).resolves.toBe(snapshot.source.rootPath)
     expect(snapshot.packets).toEqual([])
     expect(snapshot.workers).toEqual([])
     expect(snapshot.warnings.join('\n')).toContain('[missing] State directory is unavailable')

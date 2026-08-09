@@ -11,7 +11,7 @@
     { "from": "running", "to": "blocked" }
   ],
   "modelPolicy": {
-    "defaultModel": "qwen-plus",
+    "defaultModel": "qwen-coder-plus-1106",
     "defaultEffort": "medium"
   }
 }

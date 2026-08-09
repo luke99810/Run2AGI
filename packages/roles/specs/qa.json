@@ -10,7 +10,7 @@
     { "from": "running", "to": "review", "requiresGate": "acceptance" }
   ],
   "modelPolicy": {
-    "defaultModel": "qwen-max",
+    "defaultModel": "qwen-plus-2025-07-14",
     "defaultEffort": "high",
     "mustDifferFrom": ["coder"]
   }

@@ -9,6 +9,7 @@ from codentum_harness.context_broker import ContextCandidate, assemble_context_b
 from codentum_harness.prompt_bundle import (
     PromptBundleError,
     assemble_worker_prompt_bundle,
+    load_worker_prompt_bundle,
     write_worker_prompt_bundle,
 )
 
@@ -68,16 +69,12 @@ def test_prompt_bundle_is_stable_and_writes_manifest(tmp_path: Path) -> None:
     )
 
     assert first == second
-    # ★ 必须显式 encoding="utf-8"。render.py 是按 UTF-8 写的，
-    #   而 read_text() 不带参数走的是平台首选编码 —— 在中文 Windows 上
-    #   是 cp936，于是路径里的非 ASCII 字符读回来是乱码。
-    #   这不是测试挑剔：证据文件要能跨机器复算，两端就必须锁死同一个编码。
-    prompt_dir = tmp_path / "evidence-a" / "prompt"
-    manifest = json.loads((prompt_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((tmp_path / "evidence-a" / "prompt" / "manifest.json").read_text())
     assert manifest["digest"] == first.digest
     assert manifest["context_refs"] == ["diff"]
-    assert (prompt_dir / "system.md").read_text(encoding="utf-8") == first.system
-    assert (prompt_dir / "user.md").read_text(encoding="utf-8") == first.user
+    assert (tmp_path / "evidence-a" / "prompt" / "system.md").read_text() == first.system
+    assert (tmp_path / "evidence-a" / "prompt" / "user.md").read_text() == first.user
+    assert load_worker_prompt_bundle(tmp_path / "evidence-a") == first
 
 
 def test_prompt_bundle_never_leaks_denied_context_text(tmp_path: Path) -> None:
@@ -120,3 +117,15 @@ def test_prompt_bundle_can_be_converted_to_model_request(tmp_path: Path) -> None
     assert model_request.system == bundle.system
     assert model_request.messages[0].content == bundle.user
     assert model_request.effort == "high"
+
+
+def test_prompt_bundle_loader_rejects_digest_mismatch(tmp_path: Path) -> None:
+    write_worker_prompt_bundle(
+        request=request(tmp_path / "worker"),
+        role_spec=role_spec(),
+        evidence_dir=tmp_path / "evidence",
+    )
+    (tmp_path / "evidence" / "prompt" / "user.md").write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(PromptBundleError, match="digest mismatch"):
+        load_worker_prompt_bundle(tmp_path / "evidence")
