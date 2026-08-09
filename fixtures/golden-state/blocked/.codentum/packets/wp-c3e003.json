@@ -3,19 +3,29 @@
   "kind": "review",
   "state": "running",
   "role": "reviewer",
-  "ownsPaths": ["src/api/"],
-  "readsPaths": ["packages/contracts/", "tests/"],
-  "deps": ["wp-a1c001"],
+  "ownsPaths": [
+    "src/api/"
+  ],
+  "readsPaths": [
+    "packages/contracts/",
+    "tests/"
+  ],
+  "deps": [
+    "wp-a1c001"
+  ],
   "acceptance": {
     "kind": "test",
     "predicate": "pnpm vitest run tests/api --reporter=json",
     "authoredBy": "qa"
   },
   "budget": {
-    "currency": "USD",
-    "limitUsd": 3,
-    "spentUsd": 2.05,
-    "degradationChain": ["drop_semantic_memory", "shrink_review_context"]
+    "currency": "CNY",
+    "limitCny": 3,
+    "spentCny": 2.05,
+    "degradationChain": [
+      "drop_semantic_memory",
+      "shrink_review_context"
+    ]
   },
   "routing": {
     "model": "claude-sonnet-5",

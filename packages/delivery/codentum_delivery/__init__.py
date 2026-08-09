@@ -1,29 +1,9 @@
-"""codentum_delivery —— 交付链路
+"""Role-C delivery boundary for sidecar transport, packaging, and release gates.
 
-从「代码写完了」到「用户手里能跑起来」。
-这是【产品与玩具的分界线】。
-
-★★ secret_scan 是不可豁免的门禁。
-  没有 --force，没有 --skip，没有"这次先过一下"。
-  一旦可豁免，它在最需要它的那天一定会被豁免。
-
-★ 凭证本地加密存储，永不上传。
-  不进日志、不进上下文、不进证据文件、不进错误堆栈。
-
-★ 这个包里不调用模型 —— 凭证经过的路径上不能有模型。
-★ 不依赖桌面端 —— 交付链路必须能在无 GUI 的 CI 里跑通。
-
-⚠️ ADR-0003 之后新增的最大执行风险：Electron 拉起 Python 引擎 + PyInstaller 打包。
-   建议 P1 阶段就打通一次最小链路，不要等到最后一周。冷启动测试必须覆盖它。
-
-owner: C ｜ 评审: A ｜ ⚠️ secret_scan 的验收测试由 A 先写，C 再实现
-  （实现简单但后果严重 —— 这是 QA-first 制衡用在人身上）
-
-── 待实现 ──────────────────────────────────────────────
-  provisioning/  一次性凭证收集 —— 本地加密，磁盘上抓不到明文
-  secret_scan/   凭证泄漏扫描 —— ★ 工作区 + git 历史
-  packaging/     打包产物（Electron + Python sidecar）
-  cold_start/    冷启动复现 —— 干净容器从零跑通，★ 零手工步骤
-
-注：仓库自身的 secret-scan 已实现于 scripts/secret_scan.py，可作参考实现。
+The package is model-free and does not write control-plane state.  Secret scanning is
+non-bypassable; its final QA-first acceptance remains owned by role A.
 """
+
+from .gateway import SidecarGateway
+
+__all__ = ["SidecarGateway"]

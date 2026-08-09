@@ -62,7 +62,7 @@ class BudgetGrantRuntime:
     且失真方向随路由变化，事后查不出来。
     """
 
-    limit_usd: float
+    limit_cny: float
     degradation_chain: Sequence[str]
 
 
@@ -152,7 +152,7 @@ class WorkerCompleted:
     evidence: Sequence[EvidenceRef]
     """★ 必填。没有证据的成功不算成功（I6）。"""
 
-    spent_usd: float
+    spent_cny: float
     touched_paths: Sequence[str]
     status: Literal["completed"] = "completed"
 
@@ -162,14 +162,14 @@ class WorkerFailed:
     reason_code: FailureCode
     detail: str
     evidence: Sequence[EvidenceRef]
-    spent_usd: float
+    spent_cny: float
     status: Literal["failed"] = "failed"
 
 
 @dataclass(frozen=True, slots=True)
 class WorkerAborted:
     reason: AbortReason
-    spent_usd: float
+    spent_cny: float
     status: Literal["aborted"] = "aborted"
 
 
@@ -468,10 +468,10 @@ class ToolCall:
 class Usage:
     """★ token 数在这里只作【可观测指标】存在，不作预算依据。
 
-    预算判断一律看 cost_usd。
+    预算判断一律看 cost_cny。
     """
 
-    cost_usd: float
+    cost_cny: float
     input_tokens: int
     output_tokens: int
     cached_input_tokens: int
@@ -487,14 +487,14 @@ class ModelResponse:
 
 @dataclass(frozen=True, slots=True)
 class CostEstimate:
-    estimated_usd: float
-    upper_bound_usd: float
+    estimated_cny: float
+    upper_bound_cny: float
     """估算的不确定度。预算判定应按上界来，宁可高估。"""
 
 
 @dataclass(frozen=True, slots=True)
 class CostLedger:
-    total_usd: float
+    total_cny: float
     by_role: Mapping[str, float]
     by_model: Mapping[str, float]
     since: str
@@ -523,7 +523,7 @@ class ModelSession(Protocol):
 
     def stream(self, req: ModelRequest) -> AsyncIterator[Any]: ...
 
-    def spent_usd(self) -> float:
+    def spent_cny(self) -> float:
         """本会话至今花了多少钱。★ 货币。"""
         ...
 
@@ -532,7 +532,7 @@ class ModelSession(Protocol):
 
 @runtime_checkable
 class ModelGateway(Protocol):
-    async def open(self, role: RoleId, routing: ModelRouting, grant_usd: float) -> ModelSession:
+    async def open(self, role: RoleId, routing: ModelRouting, grant_cny: float) -> ModelSession:
         """开一个会话。
 
         ★ 模型隔离在这里校验 —— 若 role 的 RoleSpec 声明了 must_differ_from，

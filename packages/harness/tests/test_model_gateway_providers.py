@@ -50,7 +50,7 @@ def test_openai_compatible_gateway_invokes_chat_completion_and_prices_usage() ->
     )
     gateway = OpenAICompatibleGateway(
         client=client,
-        pricing={"qwen-plus": TokenPricing(1.0, 2.0, cached_input_per_million_usd=0.1)},
+        pricing={"qwen-plus": TokenPricing(1.0, 2.0, cached_input_per_million_cny=0.1)},
     )
 
     response = asyncio.run(_invoke_once(gateway, "coder", "qwen-plus", model_request()))
@@ -58,7 +58,7 @@ def test_openai_compatible_gateway_invokes_chat_completion_and_prices_usage() ->
     assert response.text == "done"
     assert response.stop_reason == "end"
     assert response.usage == Usage(
-        cost_usd=0.00491,
+        cost_cny=0.00491,
         input_tokens=1000,
         output_tokens=2000,
         cached_input_tokens=100,
@@ -67,7 +67,7 @@ def test_openai_compatible_gateway_invokes_chat_completion_and_prices_usage() ->
     assert client.requests[0]["messages"][0] == {"role": "system", "content": "You are Codentum."}
     assert client.requests[0]["tools"][0]["function"]["name"] == "write_file"
     ledger = asyncio.run(gateway.ledger())
-    assert ledger.total_usd == pytest.approx(0.00491)
+    assert ledger.total_cny == pytest.approx(0.00491)
     assert ledger.by_role == {"coder": pytest.approx(0.00491)}
 
 
@@ -127,7 +127,7 @@ def test_openai_compatible_gateway_accepts_bailian_text_response_without_pricing
     assert response.stop_reason == "end"
     assert response.tool_calls == ()
     assert response.usage == Usage(
-        cost_usd=0.0,
+        cost_cny=0.0,
         input_tokens=0,
         output_tokens=0,
         cached_input_tokens=0,
@@ -243,7 +243,7 @@ def test_anthropic_gateway_invokes_messages_api_and_prices_usage() -> None:
     assert response.text == "done"
     assert response.stop_reason == "end"
     assert response.usage == Usage(
-        cost_usd=0.003,
+        cost_cny=0.003,
         input_tokens=500,
         output_tokens=100,
         cached_input_tokens=0,

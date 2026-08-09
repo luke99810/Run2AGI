@@ -48,7 +48,7 @@ def request(workspace: Path) -> SpawnRequest:
         mounts=(),
         tools=("read_file", "write_file"),
         routing=ModelRouting(model="qwen-plus", effort="medium"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
         workspace=str(workspace),
         attempt=1,
     )
@@ -80,7 +80,7 @@ def test_model_gateway_runner_invokes_gateway_from_prompt_bundle(git_repo: Path)
             tool_calls=(),
             stop_reason="end",
             usage=Usage(
-                cost_usd=0.2,
+                cost_cny=0.2,
                 input_tokens=10,
                 output_tokens=3,
                 cached_input_tokens=0,
@@ -92,7 +92,7 @@ def test_model_gateway_runner_invokes_gateway_from_prompt_bundle(git_repo: Path)
 
     assert isinstance(outcome, WorkerCompleted)
     assert outcome.evidence == ("file:model/result.json",)
-    assert outcome.spent_usd == 0.2
+    assert outcome.spent_cny == 0.2
     assert gateway.opened == [("coder", "qwen-plus", 1.0)]
     assert gateway.session.requests[0].system == prompt.system
     assert gateway.session.requests[0].messages == (ModelMessage(role="user", content=prompt.user),)
@@ -128,7 +128,7 @@ def test_model_gateway_runner_records_non_end_stop_reason_as_failure(git_repo: P
         tool_calls=(),
         stop_reason="refusal",
         usage=Usage(
-            cost_usd=0.05,
+            cost_cny=0.05,
             input_tokens=9,
             output_tokens=4,
             cached_input_tokens=0,
@@ -139,7 +139,7 @@ def test_model_gateway_runner_records_non_end_stop_reason_as_failure(git_repo: P
 
     assert isinstance(outcome, WorkerFailed)
     assert outcome.reason_code == "model_error"
-    assert outcome.spent_usd == 0.05
+    assert outcome.spent_cny == 0.05
     result = json.loads((evidence_root / "model" / "result.json").read_text(encoding="utf-8"))
     assert result["status"] == "failed"
     assert result["stop_reason"] == "refusal"
@@ -151,7 +151,7 @@ def success_response() -> ModelResponse:
         tool_calls=(),
         stop_reason="end",
         usage=Usage(
-            cost_usd=0.01,
+            cost_cny=0.01,
             input_tokens=1,
             output_tokens=1,
             cached_input_tokens=0,
@@ -164,15 +164,15 @@ class FakeGateway:
         self.session = FakeSession(response)
         self.opened: list[tuple[RoleId, ModelId, float]] = []
 
-    async def open(self, role: RoleId, routing: ModelRouting, grant_usd: float) -> FakeSession:
-        self.opened.append((role, routing.model, grant_usd))
+    async def open(self, role: RoleId, routing: ModelRouting, grant_cny: float) -> FakeSession:
+        self.opened.append((role, routing.model, grant_cny))
         return self.session
 
     async def estimate(self, routing: ModelRouting, req: ModelRequest) -> CostEstimate:
-        return CostEstimate(estimated_usd=0.01, upper_bound_usd=0.02)
+        return CostEstimate(estimated_cny=0.01, upper_bound_cny=0.02)
 
     async def ledger(self) -> CostLedger:
-        return CostLedger(total_usd=0.0, by_role={}, by_model={}, since="2026-08-09T00:00:00Z")
+        return CostLedger(total_cny=0.0, by_role={}, by_model={}, since="2026-08-09T00:00:00Z")
 
 
 class FakeSession:
@@ -200,8 +200,8 @@ class FakeSession:
     def stream(self, req: ModelRequest) -> AsyncIterator[Any]:
         return _empty_stream(req)
 
-    def spent_usd(self) -> float:
-        return self.response.usage.cost_usd
+    def spent_cny(self) -> float:
+        return self.response.usage.cost_cny
 
     async def close(self) -> None:
         self.closed = True

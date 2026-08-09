@@ -33,17 +33,17 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class TokenPricingConfig:
-    """Serializable price table normalized to USD per one million tokens."""
+    """Serializable price table normalized to CNY per one million tokens."""
 
-    input_per_million_usd: float
-    output_per_million_usd: float
-    cached_input_per_million_usd: float | None = None
+    input_per_million_cny: float
+    output_per_million_cny: float
+    cached_input_per_million_cny: float | None = None
 
     def to_pricing(self) -> TokenPricing:
         return TokenPricing(
-            input_per_million_usd=self.input_per_million_usd,
-            output_per_million_usd=self.output_per_million_usd,
-            cached_input_per_million_usd=self.cached_input_per_million_usd,
+            input_per_million_cny=self.input_per_million_cny,
+            output_per_million_cny=self.output_per_million_cny,
+            cached_input_per_million_cny=self.cached_input_per_million_cny,
         )
 
 

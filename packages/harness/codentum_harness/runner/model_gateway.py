@@ -56,7 +56,7 @@ class ModelGatewayRunner:
                 reason_code=FailureCode.TIMEOUT,
                 detail=f"model runner timed out after {self.timeout_seconds:g}s",
                 evidence=(evidence,),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
         except Exception as exc:
             evidence = _write_result(
@@ -71,7 +71,7 @@ class ModelGatewayRunner:
                 reason_code=FailureCode.RUNTIME_ERROR,
                 detail=str(exc),
                 evidence=(evidence,),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
 
     async def _run(self, req: SpawnRequest, paths: _RunnerPaths) -> WorkerOutcome:
@@ -90,12 +90,12 @@ class ModelGatewayRunner:
                 reason_code=FailureCode.RUNTIME_ERROR,
                 detail=str(exc),
                 evidence=(evidence,),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
 
         session: ModelSession | None = None
         try:
-            session = await self.gateway.open(req.role, req.routing, req.budget.limit_usd)
+            session = await self.gateway.open(req.role, req.routing, req.budget.limit_cny)
             response = await session.invoke(prompt.to_model_request(effort=req.routing.effort))
         except Exception as exc:
             evidence = _write_result(
@@ -112,7 +112,7 @@ class ModelGatewayRunner:
                 reason_code=FailureCode.MODEL_ERROR,
                 detail=str(exc),
                 evidence=(evidence,),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
         finally:
             if session is not None:
@@ -158,7 +158,7 @@ def _record_response(
         encoding="utf-8",
     )
 
-    spent_usd = max(response.usage.cost_usd, _session_spent_usd(session))
+    spent_cny = max(response.usage.cost_cny, _session_spent_cny(session))
     status = "completed" if response.stop_reason == "end" and not response.tool_calls else "failed"
     result: dict[str, object] = {
         "status": status,
@@ -166,7 +166,7 @@ def _record_response(
         "session_id": session.session_id,
         "role": session.role,
         "stop_reason": response.stop_reason,
-        "spent_usd": spent_usd,
+        "spent_cny": spent_cny,
         "prompt_digest": prompt.digest,
         "prompt_manifest_path": "prompt/manifest.json",
         "response_path": "response.txt",
@@ -185,12 +185,12 @@ def _record_response(
             reason_code=FailureCode.MODEL_ERROR,
             detail=detail,
             evidence=(evidence,),
-            spent_usd=spent_usd,
+            spent_cny=spent_cny,
         )
 
     return WorkerCompleted(
         evidence=(evidence,),
-        spent_usd=spent_usd,
+        spent_cny=spent_cny,
         touched_paths=_git_changed_paths(paths.workspace),
     )
 
@@ -209,9 +209,9 @@ def _write_result(model_dir: Path, result: dict[str, object]) -> EvidenceRef:
     return EvidenceRef(f"file:{(model_dir / 'result.json').relative_to(worker_evidence)}")
 
 
-def _session_spent_usd(session: ModelSession) -> float:
+def _session_spent_cny(session: ModelSession) -> float:
     try:
-        return session.spent_usd()
+        return session.spent_cny()
     except Exception:
         return 0.0
 

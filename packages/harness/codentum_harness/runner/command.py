@@ -38,7 +38,7 @@ class CommandRunner:
                 reason_code=FailureCode.RUNTIME_ERROR,
                 detail="runner command must not be empty",
                 evidence=(),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
 
         workspace = Path(req.workspace)
@@ -85,7 +85,7 @@ class CommandRunner:
                 reason_code=FailureCode.RUNTIME_ERROR,
                 detail=f"runner command not found: {argv[0]}",
                 evidence=(evidence,),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
         except subprocess.TimeoutExpired as exc:
             stdout = _coerce_output(exc.stdout)
@@ -104,7 +104,7 @@ class CommandRunner:
                 reason_code=FailureCode.TIMEOUT,
                 detail=f"runner command timed out after {self.timeout_seconds:g}s",
                 evidence=(evidence,),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
 
         evidence = _write_outputs_and_result(
@@ -122,12 +122,12 @@ class CommandRunner:
                 reason_code=FailureCode.MODEL_ERROR,
                 detail=f"runner command exited with code {proc.returncode}",
                 evidence=(evidence,),
-                spent_usd=0.0,
+                spent_cny=0.0,
             )
 
         return WorkerCompleted(
             evidence=(evidence,),
-            spent_usd=0.0,
+            spent_cny=0.0,
             touched_paths=_git_changed_paths(workspace),
         )
 
@@ -181,7 +181,7 @@ def _write_result(evidence_dir: Path, result: dict[str, object]) -> EvidenceRef:
         encoding="utf-8",
     )
     worker_evidence = evidence_dir.parent
-    return EvidenceRef(f"file:{(evidence_dir / 'result.json').relative_to(worker_evidence)}")
+    return EvidenceRef(f"file:{(evidence_dir / 'result.json').relative_to(worker_evidence).as_posix()}")
 
 
 def _coerce_output(value: bytes | str | None) -> str:

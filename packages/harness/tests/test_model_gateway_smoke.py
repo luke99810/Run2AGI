@@ -28,7 +28,7 @@ def test_run_model_gateway_smoke_returns_safe_summary() -> None:
             provider="fake",
             role="coder",
             routing=ModelRouting(model="qwen-plus", effort="low"),
-            grant_usd=0.05,
+            grant_cny=0.05,
         )
     )
 
@@ -38,12 +38,12 @@ def test_run_model_gateway_smoke_returns_safe_summary() -> None:
     assert result.role == "coder"
     assert result.stop_reason == "end"
     assert result.usage == {
-        "cost_usd": 0.000003,
+        "cost_cny": 0.000003,
         "input_tokens": 1,
         "output_tokens": 1,
         "cached_input_tokens": 0,
     }
-    assert result.ledger_total_usd == 0.000003
+    assert result.ledger_total_cny == 0.000003
     assert result.text_preview == "codentum-smoke-ok"
     assert gateway.session.closed is True
     assert gateway.opened == [("coder", "qwen-plus", 0.05)]
@@ -63,9 +63,9 @@ def test_smoke_main_outputs_json_summary(
             "https://example.invalid/v1",
             "--model",
             "qwen-plus",
-            "--input-price-usd-per-million",
+            "--input-price-cny-per-million",
             "1",
-            "--output-price-usd-per-million",
+            "--output-price-cny-per-million",
             "2",
         )
     )
@@ -95,9 +95,9 @@ def test_smoke_main_reports_missing_api_key(capsys: pytest.CaptureFixture[str]) 
             "bailian",
             "--model",
             "qwen-plus",
-            "--input-price-usd-per-million",
+            "--input-price-cny-per-million",
             "1",
-            "--output-price-usd-per-million",
+            "--output-price-cny-per-million",
             "2",
             "--api-key-env",
             "CODENTUM_TEST_MISSING_KEY",
@@ -115,15 +115,15 @@ class FakeGateway:
         self.session = FakeSession()
         self.opened: list[tuple[RoleId, ModelId, float]] = []
 
-    async def open(self, role: RoleId, routing: ModelRouting, grant_usd: float) -> FakeSession:
-        self.opened.append((role, routing.model, grant_usd))
+    async def open(self, role: RoleId, routing: ModelRouting, grant_cny: float) -> FakeSession:
+        self.opened.append((role, routing.model, grant_cny))
         return self.session
 
     async def estimate(self, routing: ModelRouting, req: ModelRequest) -> CostEstimate:
-        return CostEstimate(estimated_usd=0.000003, upper_bound_usd=0.000006)
+        return CostEstimate(estimated_cny=0.000003, upper_bound_cny=0.000006)
 
     async def ledger(self) -> CostLedger:
-        return CostLedger(total_usd=0.000003, by_role={"coder": 0.000003}, by_model={}, since="now")
+        return CostLedger(total_cny=0.000003, by_role={"coder": 0.000003}, by_model={}, since="now")
 
 
 class FakeSession:
@@ -150,7 +150,7 @@ class FakeSession:
             tool_calls=(),
             stop_reason="end",
             usage=Usage(
-                cost_usd=0.000003,
+                cost_cny=0.000003,
                 input_tokens=1,
                 output_tokens=1,
                 cached_input_tokens=0,
@@ -160,7 +160,7 @@ class FakeSession:
     def stream(self, req: ModelRequest) -> AsyncIterator[Any]:
         return _empty_stream(req)
 
-    def spent_usd(self) -> float:
+    def spent_cny(self) -> float:
         return 0.000003
 
     async def close(self) -> None:

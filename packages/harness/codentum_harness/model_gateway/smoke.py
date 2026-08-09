@@ -53,7 +53,7 @@ class SmokeResult:
     role: str
     stop_reason: str
     usage: dict[str, object]
-    ledger_total_usd: float
+    ledger_total_cny: float
     text_preview: str
 
     def to_json_dict(self) -> dict[str, object]:
@@ -66,12 +66,12 @@ async def run_model_gateway_smoke(
     provider: str,
     role: RoleId,
     routing: ModelRouting,
-    grant_usd: float,
+    grant_cny: float,
     prompt: str = DEFAULT_SMOKE_PROMPT,
 ) -> SmokeResult:
     """Open a session, invoke one tiny prompt, and return a non-secret summary."""
 
-    session = await gateway.open(role, routing, grant_usd)
+    session = await gateway.open(role, routing, grant_cny)
     try:
         response = await session.invoke(
             ModelRequest(
@@ -97,7 +97,7 @@ async def run_model_gateway_smoke(
         role=session_role,
         stop_reason=response.stop_reason,
         usage=asdict(response.usage),
-        ledger_total_usd=ledger.total_usd,
+        ledger_total_cny=ledger.total_cny,
         text_preview=response.text[:200],
     )
 
@@ -116,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 provider=provider,
                 role=cast(RoleId, args.role),
                 routing=routing,
-                grant_usd=args.grant_usd,
+                grant_cny=args.grant_cny,
                 prompt=args.prompt,
             )
         )
@@ -140,17 +140,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", required=True)
     parser.add_argument("--role", choices=ROLE_CHOICES, default="coder")
     parser.add_argument("--effort", choices=EFFORT_CHOICES, default="low")
-    parser.add_argument("--grant-usd", type=float, default=0.05)
+    parser.add_argument("--grant-cny", type=float, default=0.05)
     parser.add_argument("--base-url")
     parser.add_argument("--api-key-env")
     parser.add_argument("--provider-timeout-seconds", type=float, default=60.0)
-    parser.add_argument("--input-price-usd-per-million", type=float)
-    parser.add_argument("--output-price-usd-per-million", type=float)
-    parser.add_argument("--cached-input-price-usd-per-million", type=float)
+    parser.add_argument("--input-price-cny-per-million", type=float)
+    parser.add_argument("--output-price-cny-per-million", type=float)
+    parser.add_argument("--cached-input-price-cny-per-million", type=float)
     parser.add_argument(
         "--allow-unknown-pricing",
         action="store_true",
-        help="Permit smoke calls without pricing; usage.cost_usd will be 0.",
+        help="Permit smoke calls without pricing; usage.cost_cny will be 0.",
     )
     parser.add_argument("--prompt", default=DEFAULT_SMOKE_PROMPT)
     return parser
@@ -181,17 +181,17 @@ def _config_from_args(args: argparse.Namespace) -> ModelGatewayConfig:
 def _pricing_from_args(args: argparse.Namespace) -> tuple[dict[str, TokenPricingConfig], bool]:
     if args.allow_unknown_pricing:
         return {}, False
-    if args.input_price_usd_per_million is None or args.output_price_usd_per_million is None:
+    if args.input_price_cny_per_million is None or args.output_price_cny_per_million is None:
         raise ValueError(
             "pricing is required unless --allow-unknown-pricing is set "
-            "(pass --input-price-usd-per-million and --output-price-usd-per-million)"
+            "(pass --input-price-cny-per-million and --output-price-cny-per-million)"
         )
     return (
         {
             args.model: TokenPricingConfig(
-                input_per_million_usd=args.input_price_usd_per_million,
-                output_per_million_usd=args.output_price_usd_per_million,
-                cached_input_per_million_usd=args.cached_input_price_usd_per_million,
+                input_per_million_cny=args.input_price_cny_per_million,
+                output_per_million_cny=args.output_price_cny_per_million,
+                cached_input_per_million_cny=args.cached_input_price_cny_per_million,
             )
         },
         True,

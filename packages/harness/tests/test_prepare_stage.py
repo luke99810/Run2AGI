@@ -33,7 +33,7 @@ def test_prepare_spawn_request_derives_tools_mounts_and_workspace(tmp_path: Path
         project_root=tmp_path / "repo",
         workspace=workspace,
         routing=ModelRouting(model="qwen-plus", effort="medium"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
         attempt=1,
     )
 
@@ -59,7 +59,7 @@ def test_prepare_spawn_request_can_attach_context_bundle(tmp_path: Path) -> None
         project_root=tmp_path / "repo",
         workspace=workspace,
         routing=ModelRouting(model="qwen-plus", effort="medium"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
         attempt=1,
         context_candidates=(
             ContextCandidate(
@@ -90,7 +90,7 @@ def test_prepare_rejects_zero_attempt(tmp_path: Path) -> None:
             project_root=tmp_path / "repo",
             workspace=tmp_path / "workers" / "wp-abcdef",
             routing=ModelRouting(model="qwen-plus", effort="medium"),
-            budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+            budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
             attempt=0,
         )
 
@@ -107,7 +107,7 @@ def test_prepare_requires_context_budget_with_candidates(tmp_path: Path) -> None
             project_root=tmp_path / "repo",
             workspace=tmp_path / "workers" / "wp-abcdef",
             routing=ModelRouting(model="qwen-plus", effort="medium"),
-            budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+            budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
             attempt=1,
             context_candidates=(
                 ContextCandidate(ref="packet", artifact_path=".codentum/packet.yaml", text="packet"),

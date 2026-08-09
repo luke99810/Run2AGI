@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "currency": "USD",
-  "limitUsd": 20,
-  "spentUsd": 18.4,
+  "currency": "CNY",
+  "limitCny": 20,
+  "spentCny": 18.4,
   "byRole": {
     "architect": 0.91,
     "planner": 0.34,
@@ -15,7 +15,11 @@
     "claude-opus-5": 14.23,
     "claude-sonnet-5": 4.17
   },
-  "degradationChain": ["drop_semantic_memory", "shrink_review_context", "summarize_history"],
+  "degradationChain": [
+    "drop_semantic_memory",
+    "shrink_review_context",
+    "summarize_history"
+  ],
   "alerts": [
     {
       "level": "warn",

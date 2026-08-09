@@ -21,7 +21,7 @@ def request(workspace: Path, *, role: RoleId = "reviewer") -> SpawnRequest:
         mounts=(),
         tools=("read_file", "write_review"),
         routing=ModelRouting(model="qwen-max", effort="high"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=("summary", "reference")),
+        budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=("summary", "reference")),
         workspace=str(workspace),
         attempt=1,
     )

@@ -52,7 +52,7 @@ def request(workspace: Path) -> SpawnRequest:
         mounts=(),
         tools=("read_file", "write_file"),
         routing=ModelRouting(model="qwen-plus", effort="medium"),
-        budget=BudgetGrantRuntime(limit_usd=1.0, degradation_chain=()),
+        budget=BudgetGrantRuntime(limit_cny=1.0, degradation_chain=()),
         workspace=str(workspace),
         attempt=1,
     )
@@ -104,7 +104,7 @@ def test_build_model_gateway_builds_bailian_from_environment(monkeypatch: pytest
     response = asyncio.run(_invoke_model_gateway(gateway))
 
     assert response.usage == Usage(
-        cost_usd=0.000003,
+        cost_cny=0.000003,
         input_tokens=1,
         output_tokens=1,
         cached_input_tokens=0,

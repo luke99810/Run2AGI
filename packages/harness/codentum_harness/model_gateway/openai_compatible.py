@@ -51,7 +51,7 @@ class OpenAICompatibleGateway:
         self._require_pricing = require_pricing
         self._default_estimated_output_tokens = default_estimated_output_tokens
         self._since = _now_iso()
-        self._total_usd = 0.0
+        self._total_cny = 0.0
         self._by_role: dict[str, float] = {}
         self._by_model: dict[str, float] = {}
 
@@ -85,9 +85,9 @@ class OpenAICompatibleGateway:
             require_pricing=require_pricing,
         )
 
-    async def open(self, role: RoleId, routing: ModelRouting, grant_usd: float) -> ModelSession:
-        if grant_usd <= 0:
-            raise ValueError("grant_usd must be positive")
+    async def open(self, role: RoleId, routing: ModelRouting, grant_cny: float) -> ModelSession:
+        if grant_cny <= 0:
+            raise ValueError("grant_cny must be positive")
         self._policy.validate_open(role, routing)
         price = self._price_for_model(routing.model)
         return _OpenAICompatibleSession(
@@ -95,7 +95,7 @@ class OpenAICompatibleGateway:
             client=self._client,
             role=role,
             model=routing.model,
-            grant_usd=grant_usd,
+            grant_cny=grant_cny,
             price=price,
         )
 
@@ -110,22 +110,22 @@ class OpenAICompatibleGateway:
             cached_input_tokens=0,
         )
         return CostEstimate(
-            estimated_usd=estimated,
-            upper_bound_usd=estimated * 2,
+            estimated_cny=estimated,
+            upper_bound_cny=estimated * 2,
         )
 
     async def ledger(self) -> CostLedger:
         return CostLedger(
-            total_usd=self._total_usd,
+            total_cny=self._total_cny,
             by_role=dict(sorted(self._by_role.items())),
             by_model=dict(sorted(self._by_model.items())),
             since=self._since,
         )
 
-    def _record_spend(self, *, role: RoleId, model: ModelId, cost_usd: float) -> None:
-        self._total_usd += cost_usd
-        self._by_role[str(role)] = self._by_role.get(str(role), 0.0) + cost_usd
-        self._by_model[str(model)] = self._by_model.get(str(model), 0.0) + cost_usd
+    def _record_spend(self, *, role: RoleId, model: ModelId, cost_cny: float) -> None:
+        self._total_cny += cost_cny
+        self._by_role[str(role)] = self._by_role.get(str(role), 0.0) + cost_cny
+        self._by_model[str(model)] = self._by_model.get(str(model), 0.0) + cost_cny
 
     def _price_for_model(self, model: ModelId) -> TokenPricing | None:
         price = self._pricing.get(model)
@@ -170,10 +170,10 @@ class _OpenAICompatibleSession:
     client: Any
     role: RoleId
     model: ModelId
-    grant_usd: float
+    grant_cny: float
     price: TokenPricing | None
     session_id: str = ""
-    _spent_usd: float = 0.0
+    _spent_cny: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.session_id:
@@ -182,19 +182,19 @@ class _OpenAICompatibleSession:
     async def invoke(self, req: ModelRequest) -> ModelResponse:
         response = await self.client.chat.completions.create(**_to_chat_completion_kwargs(self.model, req))
         model_response = _parse_chat_completion_response(response, price=self.price)
-        self._spent_usd += model_response.usage.cost_usd
+        self._spent_cny += model_response.usage.cost_cny
         self.gateway._record_spend(
             role=self.role,
             model=self.model,
-            cost_usd=model_response.usage.cost_usd,
+            cost_cny=model_response.usage.cost_cny,
         )
         return model_response
 
     def stream(self, req: ModelRequest) -> AsyncIterator[Any]:
         return _stream_not_supported(req)
 
-    def spent_usd(self) -> float:
-        return self._spent_usd
+    def spent_cny(self) -> float:
+        return self._spent_cny
 
     async def close(self) -> None:
         return None
@@ -260,7 +260,7 @@ def _parse_openai_usage(raw_usage: object | None, *, price: TokenPricing | None)
         if price is not None:
             raise ValueError("missing response field 'usage'")
         return Usage(
-            cost_usd=0.0,
+            cost_cny=0.0,
             input_tokens=0,
             output_tokens=0,
             cached_input_tokens=0,
@@ -270,7 +270,7 @@ def _parse_openai_usage(raw_usage: object | None, *, price: TokenPricing | None)
     output_tokens = _int_field_any(raw_usage, ("completion_tokens", "output_tokens"))
     cached_input_tokens = _cached_openai_tokens(raw_usage)
     return Usage(
-        cost_usd=_cost_or_zero(
+        cost_cny=_cost_or_zero(
             price,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -340,7 +340,7 @@ def _cost_or_zero(
 ) -> float:
     if price is None:
         return 0.0
-    return price.cost_usd(
+    return price.cost_cny(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cached_input_tokens=cached_input_tokens,
