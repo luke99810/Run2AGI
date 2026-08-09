@@ -124,7 +124,12 @@ def _render_user(request: SpawnRequest, *, context: ContextBundle | None) -> str
         f"- workspace: {request.workspace}",
         f"- model: {request.routing.model}",
         f"- effort: {request.routing.effort}",
-        f"- budget_usd: {request.budget.limit_cny:g}",
+        # ★ 单位标签必须跟着字段走。这里曾写成 budget_usd 而取的是 limit_cny，
+        #   于是 ¥5 的预算被告知模型是「budget_usd: 5」—— 按汇率差了约 7 倍。
+        #   契约里的成本字段早已是 CNY，只有这个标签没跟上。
+        #   这正是设计里「预算用货币不用 token」要消灭的那类静默失真：
+        #   数字对、单位错，不报错，模型据此放开花。
+        f"- budget_cny: {request.budget.limit_cny:g}",
         "",
         "## Visible Tools",
         "",

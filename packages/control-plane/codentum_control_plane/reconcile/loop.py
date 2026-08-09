@@ -583,7 +583,7 @@ class ReconcileLoop:
             return self._apply_transition(
                 packet,
                 target="review",
-                detail=f"Worker 完成，spent=${outcome.spent_cny:.4f}",
+                detail=f"Worker 完成，spent=¥{outcome.spent_cny:.4f}",
                 evidence_refs=tuple(outcome.evidence) if outcome.evidence else (),
                 extra_updates={"attempts": packet.attempts + 1},
             )
@@ -605,14 +605,24 @@ class ReconcileLoop:
                 f"{WORKER_FAILED_EVIDENCE_PREFIX}{packet.id}:{outcome.reason_code}"
             )
             worker_evidence = tuple(getattr(outcome, "evidence", ()) or ())
+            # ★ outcome.detail 必须带上。原来只留 reason_code，而 reason_code
+            #   只有 8 个取值 —— runtime_error 这一个就能对应无数种真实原因。
+            #   实测吃过亏：真因是 "no worker runner configured"（一行配置没写），
+            #   但控制面只显示 runtime_error，看上去像执行环境挂了，
+            #   排查方向被带偏了整整一轮。
+            reason_detail = getattr(outcome, "detail", "") or ""
             logger.warning(
-                "packet %s 的 worker 失败（%s），进入 review 但不会被自动验收",
-                packet.id, outcome.reason_code,
+                "packet %s 的 worker 失败（%s: %s），进入 review 但不会被自动验收",
+                packet.id, outcome.reason_code, reason_detail,
             )
             return self._apply_transition(
                 packet,
                 target="review",
-                detail=f"Worker 失败 ({outcome.reason_code})，进入评审",
+                detail=(
+                    f"Worker 失败 ({outcome.reason_code}"
+                    + (f": {reason_detail}" if reason_detail else "")
+                    + ")，进入评审"
+                ),
                 evidence_refs=worker_evidence + (failed_marker,),
                 extra_updates={"attempts": packet.attempts + 1},
             )

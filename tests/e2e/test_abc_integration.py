@@ -22,19 +22,28 @@
   `<项目父目录>/codentum-workers/<pid>/attempt-N`，而 B 要求 workspace
   **在 repo_root 之外**。所以 `repo_root` 只能是项目目录本身，
   填成 `codentum-workers` 会永远失败 —— 且失败被吞掉（见 KNOWN-1）。
+- ★ **`LocalWorkerRuntimeConfig.runner` 默认是 `None`**，而 `None` 意味着
+  「没有执行器」：worker 会建好 worktree、写好 manifest 和 prompt bundle，
+  然后以 `runtime_error: no worker runner configured` 收场。
+  不配 runner，**任何 packet 都不可能被真实执行**。
+  这一条曾被误判成「AgentTeams 没装」—— 其实与 AgentTeams 无关，
+  是一行配置。见 `TestRealExecution`。
 """
 from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from codentum_contracts.state import PacketId, WorkPacket, dump_state
+from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.reconcile import ReconcileLoop
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
+    RunnerConfig,
     build_local_worker_runtime,
 )
 
@@ -310,3 +319,101 @@ class TestIntegrationInvariants:
             assert any(
                 ref.startswith("sys:worker-failed:") for ref in final.evidence
             ), f"失败没有落成机器可读的证据：{final.evidence}"
+
+
+# ════════════════════════════════════════════════════════════════
+#  P0 的真判据：worker 真的改了代码，并因此被验收
+# ════════════════════════════════════════════════════════════════
+
+#: 冒充 coder 的最小 worker —— 在 workspace 里真的写一个源文件。
+#: 用真实文件改动当判据，是因为「状态变成 accepted」本身证明不了任何事：
+#: 那正是之前假绿灯骗过所有人的地方。
+#: 用 chr(10) 拼换行，不写 "\\n" —— 这段字符串要经过
+#: 「本文件的 Python 字面量 → 命令行参数 → 子进程的 Python 字面量」三层，
+#: 反斜杠在哪一层被吃掉都只表现为「退出码 1」，排查成本远高于写得笨一点。
+_NL = "' + chr(10) + '"
+_FAKE_CODER = (
+    "import pathlib;"
+    "p = pathlib.Path('src/app/feature.py');"
+    "p.parent.mkdir(parents=True, exist_ok=True);"
+    f"p.write_text('def feature():{_NL}    return 42{_NL}', encoding='utf-8');"
+    "print('wrote', p)"
+)
+
+
+class TestRealExecution:
+    """P0 判据：一个 packet 被认领 → 真实执行 → 验收，且改动在 Git 可见。
+
+    ★ 与 TestABWithRealRuntime 的区别是**配了 runner**。
+      `LocalWorkerRuntimeConfig.runner` 默认 None，那时 worker 一定失败。
+      不配 runner 就永远走不到这里 —— 这一条曾被误判成环境问题。
+    """
+
+    def test_worker_really_changes_code_and_gets_accepted(self, project: Path) -> None:
+        (project / "src" / "app").mkdir(parents=True, exist_ok=True)
+        (project / "src" / "app" / "main.py").write_text(
+            "def main():\n    pass\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base app"], cwd=project,
+                       check=True, capture_output=True)
+
+        state_dir = project / ".codentum"
+        _write_packet(state_dir, _make_packet("wp-p00001", owns=("src/app/",)))
+
+        loop = ReconcileLoop(
+            state_dir=str(state_dir),
+            budget_tracker=BudgetTracker(limit_cny=20.0),
+        )
+        loop.load_state()
+        loop.worker_runtime = build_local_worker_runtime(
+            LocalWorkerRuntimeConfig(
+                repo_root=project,
+                runner=RunnerConfig.command_runner(
+                    [sys.executable, "-c", _FAKE_CODER], timeout_seconds=60.0
+                ),
+            )
+        )
+
+        report = loop.run_until_stable(max_ticks=30)
+        loop.save_state()
+        trace = "\n  ".join(
+            f"{t.from_state} -> {t.to_state} | {t.detail}" for t in report.transitions
+        )
+        final = loop.packet(PacketId("wp-p00001"))
+
+        # 1) worker 真的改了文件 —— 这是 P0 的实质，不是状态字段
+        workspace = project.parent / "codentum-workers" / "wp-p00001" / "attempt-1"
+        feature = workspace / "src" / "app" / "feature.py"
+        assert feature.exists(), f"worker 没有产生任何代码改动。轨迹：\n  {trace}"
+        assert "return 42" in feature.read_text(encoding="utf-8")
+
+        # 2) 改动在 Git 里看得见（赛题判据原文：状态变更 Git 可见）
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=workspace, capture_output=True
+        ).stdout.decode("utf-8", "replace")
+        assert "src/app/feature.py" in status, f"改动不在 git 视野里：{status!r}"
+
+        # 3) 验收依据必须是真实证据，不能是控制面自己的簿记
+        assert final.state == "accepted", f"未被验收。轨迹：\n  {trace}"
+        real = [e for e in final.evidence if not e.startswith("sys:")]
+        assert real, f"验收了，但没有一条真实证据：{list(final.evidence)}"
+
+    def test_missing_runner_fails_loudly(self, project: Path) -> None:
+        """不配 runner 时，失败原因必须说得出是「没配 runner」。
+
+        ★ 回归防线：控制面原来只保留 reason_code（runtime_error），
+          把 outcome.detail 丢了。而 runtime_error 只有 8 个取值之一，
+          真因「no worker runner configured」完全看不出来 ——
+          排查方向会被带向环境问题。
+        """
+        state_dir = project / ".codentum"
+        _write_packet(state_dir, _make_packet("wp-norun1", owns=("src/norun/",)))
+
+        loop = _make_loop(project)  # 这个 helper 不配 runner
+        report = loop.run_until_stable(max_ticks=30)
+
+        details = " | ".join(t.detail or "" for t in report.transitions)
+        assert "runner" in details, (
+            f"失败原因没有指向 runner 配置，排查会被带偏：{details}"
+        )
