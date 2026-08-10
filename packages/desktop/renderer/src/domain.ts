@@ -327,3 +327,14 @@ export function sourceModeLabel(snapshot: StateSnapshot | null): string {
   if (snapshot === null) return '尚未读取'
   return snapshot.source.kind === 'fixture' ? '演示快照' : '本地项目'
 }
+
+const MISSING_STATE_DIRECTORY_PREFIX = '[missing] State directory is unavailable:'
+
+export function warningsForDisplay(warnings: readonly string[]): readonly string[] {
+  const missingStateDirectory = warnings.find((warning) => warning.startsWith(MISSING_STATE_DIRECTORY_PREFIX))
+  if (missingStateDirectory === undefined) return warnings
+  return [
+    missingStateDirectory,
+    ...warnings.filter((warning) => !warning.startsWith('[missing]') && warning !== missingStateDirectory)
+  ]
+}

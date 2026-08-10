@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { OperatorAction } from '../../shared/protocol'
 import type { CommandDispatcher, CommandRequest } from './command-types'
-import { createOperatorCommand, hasCapability, sameProjectPath, type NavigationKey } from './domain'
+import { createOperatorCommand, hasCapability, sameProjectPath, warningsForDisplay, type NavigationKey } from './domain'
 import { useDesktop } from './useDesktop'
 import { Sidebar } from '../../panels/Sidebar'
 import { Topbar } from '../../panels/Topbar'
@@ -77,6 +77,7 @@ export function App(): ReactNode {
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   const activeTask = sourceTasks.find((task) => task.id === activeTaskId)
   const validationEnabled = activeTask !== undefined && taskRequestsValidation(activeTask)
+  const visibleWarnings = warningsForDisplay(desktop.snapshot?.warnings ?? [])
 
   useEffect(() => {
     saveTaskSessions(tasks)
@@ -356,7 +357,7 @@ export function App(): ReactNode {
         />
         <div className="content-scroll">
           {desktop.error === null ? null : <div className="global-error"><ErrorNotice message={desktop.error} /></div>}
-          {desktop.snapshot?.warnings.map((warning, index) => <div className="global-warning" key={`${warning}-${index}`}><WarningNotice message={warningCopy(warning)} /></div>)}
+          {visibleWarnings.map((warning, index) => <div className="global-warning" key={`${warning}-${index}`}><WarningNotice message={warningCopy(warning)} /></div>)}
           {desktop.loading ? <div className="loading-line" aria-label="正在读取状态"><span /></div> : null}
           {view}
           <footer className="content-footer">
