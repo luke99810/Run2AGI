@@ -77,9 +77,20 @@ submitting/accepted → timed_out（最终仍以权威状态重新同步）
 - 只接受普通文件与目录，递归拒绝符号链接、junction 和特殊文件；单文件上限 512 MiB，单草稿合计上限 1 GiB，最多 20 个顶层附件。单文件夹最多 10,000 个文件、10,000 个目录、128 层。选择时记录原始绝对路径并计算文件或目录树 SHA-256，不复制源内容；源内容在校验期间变化则整项回滚。
 - 附件 manifest 保存在 Electron `userData/requirement-drafts`，使用随机引用 ID 与仅当前用户可读的创建权限并原子替换。切换项目或重启应用后仍可恢复引用；用户移动、删除或修改源文件后，提交前的重新校验会拒绝失效引用。
 - Renderer 只接收 `{ id, name, kind, fileCount, sizeBytes, sha256 }`，不接收源路径、附件绝对路径、文件内容或 base64。
-- `submit_requirement` 的 `payload.attachments` 在 Renderer 侧仍只有上述元数据。Electron 主进程在发送前重新校验所有权、大小和 SHA-256，随后才给 sidecar 增加 `{ localPath }`；这一路径指向私有副本，不指向用户原文件。
+- `submit_requirement` 的 `payload.attachments` 在 Renderer 侧仍只有上述元数据。Electron 主进程在发送前重新校验所有权、大小和 SHA-256，随后才给 sidecar 增加 `{ localPath }`；这一路径指向用户选择的原始文件或目录，不创建私有副本。
 - 引擎只有在握手 `projectRoot` 与当前项目 canonical identity 一致时才能接收命令。A/B 在读取路径、形成上下文和返回回执前必须保持 `requirements=false`。
 - 切换项目时草稿按状态源隔离；从未绑定状态携带到首次真实项目的草稿通过原子 manifest 更新迁移。未派单草稿不会写入 `.codentum`，也不会伪造对话消息。
+
+## 工作区绑定与首次初始化
+
+- **警告是什么**：`[missing] State directory is unavailable` 表示所选工作区里没有 `.codentum` 运行状态目录；它不是“文件夹无法打开”或“路径不可读取”。
+- **为什么会有**：桌面端已经绑定并读取了工作区，但 A 的控制平面尚未对这个普通文件夹执行首次项目初始化，因此 `graph.json`、`budget.json`、任务与证据目录都还不存在。
+- **怎么解决**：A 提供并执行真实的首次初始化入口，原子创建完整 `.codentum`；随后 B 的 WorkerRuntime/Claw 在 C 已绑定的工作区运行，C 监听状态并自动刷新。只隐藏警告或由 C 手工伪造 JSON 都不算解决。
+- 打开任意文件或文件夹后，C 规范化真实项目根路径，关闭旧 Sidecar 会话，并以该路径作为新 Sidecar 进程的 `cwd`；同时通过 `CODENTUM_PROJECT_ROOT` 显式传递路径。
+- 真实引擎连接后，握手返回的 canonical `projectRoot` 必须与所选工作区一致，否则 C 立即关闭会话并保持所有执行能力禁用。
+- 工作区不需要预先包含 `.codentum`。目录缺失表示运行状态尚未初始化，不表示文件夹打开失败；此时仍允许编辑需求、添加附件和保存本地任务草稿。
+- `.codentum` 必须由 A 的首次项目初始化流程原子创建，最小完整形状为 `graph.json`、`budget.json`、`decisions.jsonl`、`packets/` 和 `evidence/`。C 不创建或伪造控制平面状态。
+- A 尚未提供真实 `submit_requirement` 和首次初始化入口、B 尚未提供 WorkerRuntime/Claw 工作区执行适配器时，C 只能证明路径已绑定，不能宣称 Agent 已读取或修改普通文件。
 
 ## B 侧能力请求
 

@@ -15,7 +15,7 @@ import {
 } from 'electron'
 import { StateHub } from '../../data'
 import { IPC_CHANNELS } from '../../shared/ipc'
-import { MAX_DRAFT_ATTACHMENTS, type EngineHandshake, type OperatorAction, type OperatorCommand, type ProjectSelectionKind } from '../../shared/protocol'
+import { MAX_DRAFT_ATTACHMENTS, type OperatorAction, type OperatorCommand, type ProjectSelectionKind } from '../../shared/protocol'
 import { SidecarManager } from './python-engine/SidecarManager'
 import { RequirementDraftStore } from './requirement-draft-store'
 
@@ -97,10 +97,7 @@ async function chooseProject(kind: ProjectSelectionKind): Promise<Awaited<Return
   if (result.canceled || selected === undefined) return null
   const descriptor = await stateHub.selectProject(selectingFile ? dirname(selected) : selected)
   if (descriptor.rootPath === undefined) throw new Error('Selected project did not provide a canonical root path')
-  const projectBindableSidecar = sidecar as (SidecarManager & {
-    bindProject?: (projectRoot: string) => Promise<EngineHandshake>
-  }) | undefined
-  await projectBindableSidecar?.bindProject?.(descriptor.rootPath)
+  await sidecar?.bindProject(descriptor.rootPath)
   return descriptor
 }
 

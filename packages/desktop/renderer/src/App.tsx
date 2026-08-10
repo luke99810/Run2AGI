@@ -50,7 +50,7 @@ function loadSidebarWidth(): number {
 
 function warningCopy(warning: string): string {
   if (warning.startsWith('[missing] State directory is unavailable:')) {
-    return '此项目尚未包含 .codentum 状态目录，当前以只读空项目打开。'
+    return '工作区已正确打开；尚未生成 .codentum 运行状态。当前可编辑需求和添加附件，正式执行需引擎完成首次项目初始化。'
   }
   return warning
 }
