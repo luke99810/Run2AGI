@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DraftAttachment, EngineHandshake, RequirementDraftSnapshot, StateSnapshot } from '../shared/protocol'
 import type { CommandDispatcher } from '../renderer/src/command-types'
 import { formatCny, hasCapability, packetCounts, roleLabel, sameProjectPath } from '../renderer/src/domain'
+import type { TaskContextSelection, TaskHistoryEntry, TaskSession } from '../renderer/src/task-library'
 import { RequirementComposer } from '../inputs/RequirementComposer'
 import { EmptyState, Icon } from '../panels/Common'
 
@@ -15,8 +16,17 @@ export function HomeView({
   saveRequirementDraft,
   moveRequirementDraft,
   discardDraftAttachment,
+  task,
+  draftScope,
+  taskHistory,
+  onTaskDraftChange,
+  onTaskAttachmentNamesChange,
+  onTaskContextChange,
+  onTaskSubmitted,
   onOpenExecution,
-  onOpenBoard
+  onOpenBoard,
+  onSearchChat,
+  onExportChat
 }: {
   readonly snapshot: StateSnapshot | null
   readonly handshake: EngineHandshake
@@ -27,10 +37,25 @@ export function HomeView({
   readonly saveRequirementDraft: (scopeId: string, draft: RequirementDraftSnapshot) => Promise<void>
   readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
   readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
+  readonly task: TaskSession
+  readonly draftScope: string
+  readonly taskHistory: readonly TaskHistoryEntry[]
+  readonly onTaskDraftChange: (text: string) => void
+  readonly onTaskAttachmentNamesChange: (names: readonly string[]) => void
+  readonly onTaskContextChange: (context: TaskContextSelection) => void
+  readonly onTaskSubmitted: () => void
   readonly onOpenExecution: () => void
   readonly onOpenBoard: () => void
+  readonly onSearchChat: () => void
+  readonly onExportChat: () => Promise<boolean>
 }): ReactNode {
+  const chatMenuRef = useRef<HTMLDetailsElement>(null)
+  const [planSubmitting, setPlanSubmitting] = useState(false)
+  const [planFeedback, setPlanFeedback] = useState<string | null>(null)
+  const [chatActionStatus, setChatActionStatus] = useState<string | null>(null)
   const packets = snapshot?.packets ?? []
+  const executablePackets = packets.filter((packet) => packet.state !== 'accepted' && packet.state !== 'abandoned')
+  const suspendedPackets = packets.filter((packet) => packet.state === 'blocked' || packet.state === 'pending')
   const counts = packetCounts(packets)
   const currentWorkers = snapshot?.workers.filter((worker) => worker.state === 'running' || worker.state === 'starting' || worker.state === 'waiting') ?? []
   const budget = snapshot?.budget
@@ -38,6 +63,7 @@ export function HomeView({
   const isProject = snapshot?.source.kind === 'project'
   const projectBound = isProject && sameProjectPath(handshake.projectRoot, snapshot?.source.rootPath)
   const requirementAvailable = projectBound && handshake.connected && handshake.runId !== undefined && hasCapability(handshake.capabilities, 'submit_requirement')
+  const planAvailable = projectBound && handshake.connected && handshake.runId !== undefined && hasCapability(handshake.capabilities, 'confirm_plan') && executablePackets.length > 0
   const requirementUnavailableReason = !isProject
     ? '请先打开真实项目；演示快照不能发起任务'
     : !handshake.connected
@@ -48,21 +74,83 @@ export function HomeView({
           ? 'A/B 执行引擎未绑定当前项目'
         : '当前引擎未开放需求接收能力'
 
+  useEffect(() => {
+    setPlanSubmitting(false)
+    setPlanFeedback(null)
+  }, [snapshot?.source.id])
+
+  async function startExistingPlan(): Promise<void> {
+    setPlanSubmitting(true)
+    setPlanFeedback(null)
+    try {
+      const receipt = await dispatch({
+        action: 'confirm_plan',
+        agentId: 'control-plane',
+        payload: { packetIds: executablePackets.map((packet) => packet.id).sort() }
+      })
+      setPlanFeedback(receipt.status === 'rejected'
+        ? `引擎拒绝执行：${receipt.reason ?? '未提供原因'}`
+        : '执行请求已被 A/B 引擎接收，状态将从本地权威文件自动刷新。')
+    } catch (error) {
+      setPlanFeedback(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPlanSubmitting(false)
+    }
+  }
+
   return (
     <div className="home-view">
       <section className="home-hero" aria-labelledby="new-task-title">
-        <div className="eyebrow">老板工作台</div>
-        <h1 id="new-task-title">交代研发任务</h1>
+        <div className="task-titlebar">
+          <strong>{task.title}</strong>
+          <details className="chat-actions" ref={chatMenuRef}>
+            <summary aria-label="聊天操作" title="聊天操作">•••</summary>
+            <div role="menu">
+              <button type="button" role="menuitem" onClick={() => {
+                chatMenuRef.current?.removeAttribute('open')
+                onSearchChat()
+              }}><Icon name="search" size={17} /><span><strong>搜索聊天记录</strong><small>关键词、需求内容和文件名</small></span></button>
+              <button type="button" role="menuitem" onClick={() => {
+                chatMenuRef.current?.removeAttribute('open')
+                void onExportChat().then((exported) => setChatActionStatus(exported ? '聊天记录已导出' : null)).catch((error: unknown) => setChatActionStatus(error instanceof Error ? error.message : String(error)))
+              }}><Icon name="file" size={17} /><span><strong>导出聊天记录</strong><small>保存为 Markdown 文件</small></span></button>
+            </div>
+          </details>
+        </div>
+        {chatActionStatus === null ? null : <p className="chat-action-status" role="status">{chatActionStatus}</p>}
+        <div className="eyebrow">新对话</div>
+        <h1 id="new-task-title">要做什么软件？</h1>
         <p>
           {snapshot === null
             ? '尚未选择工作区'
             : `${snapshot.source.label} · ${snapshot.source.kind === 'fixture' ? '演示快照，只读' : handshake.connected ? '引擎已连接' : '状态可读，引擎未连接'}`}
         </p>
+        {suspendedPackets.length === 0 ? null : (
+          <section className="suspended-task-shelf" aria-label="挂起任务">
+            <header><Icon name="pause" size={16} /><strong>挂起任务</strong><span>{suspendedPackets.length}</span></header>
+            <div>
+              {suspendedPackets.slice(0, 4).map((packet) => (
+                <button type="button" key={packet.id} onClick={onOpenBoard}>
+                  <span>{packet.state === 'blocked' ? '受阻' : '等待依赖'}</span>
+                  <strong>{packet.ownsPaths[0] ?? packet.id}</strong>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
         <RequirementComposer
           canSubmit={requirementAvailable}
           canAddFiles={snapshot !== null}
           {...(requirementUnavailableReason === undefined ? {} : { unavailableReason: requirementUnavailableReason })}
-          sourceId={snapshot?.source.id ?? null}
+          taskId={task.id}
+          draftScope={draftScope}
+          legacyScope={snapshot?.source.id ?? 'unassigned'}
+          taskContext={task.context}
+          taskHistory={taskHistory}
+          onDraftChange={onTaskDraftChange}
+          onAttachmentNamesChange={onTaskAttachmentNamesChange}
+          onContextChange={onTaskContextChange}
+          onSubmitted={onTaskSubmitted}
           dispatch={dispatch}
           selectDraftFiles={selectDraftFiles}
           selectDraftFolders={selectDraftFolders}
@@ -72,6 +160,28 @@ export function HomeView({
           discardDraftAttachment={discardDraftAttachment}
         />
       </section>
+
+      {isProject && executablePackets.length > 0 ? (
+        <section className="plan-launch-band" aria-label="执行已有计划">
+          <div>
+            <span>已落盘计划</span>
+            <strong>{executablePackets.length} 个非终态 WorkPacket</strong>
+            <small>{planAvailable
+              ? '由 A 控制平面调度，B WorkerRuntime 在隔离 worktree 中执行。'
+              : (handshake.unavailableReason ?? '当前引擎未开放已有计划执行能力。')}</small>
+          </div>
+          <button
+            type="button"
+            className="primary-button plan-launch-button"
+            disabled={!planAvailable || planSubmitting}
+            onClick={() => { void startExistingPlan() }}
+          >
+            <Icon name="pulse" size={18} />
+            {planSubmitting ? '正在提交' : '开始执行已有计划'}
+          </button>
+          {planFeedback === null ? null : <p className="plan-launch-feedback" role="status">{planFeedback}</p>}
+        </section>
+      ) : null}
 
       <section className="home-overview" aria-label="项目概览">
         <div className="section-title-row">

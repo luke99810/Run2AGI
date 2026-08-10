@@ -1,9 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createReadStream, createWriteStream, type Stats } from 'node:fs'
+import { createReadStream, type Stats } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, resolve } from 'node:path'
-import { Transform } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   MAX_DRAFT_ATTACHMENTS,
   MAX_REQUIREMENT_DRAFT_CHARS,
@@ -18,7 +16,8 @@ export const MAX_DRAFT_FOLDER_FILES = 10_000
 export const MAX_DRAFT_FOLDER_DIRECTORIES = 10_000
 export const MAX_DRAFT_FOLDER_DEPTH = 128
 
-const MANIFEST_SCHEMA_VERSION = 2
+const MANIFEST_SCHEMA_VERSION = 3
+const COPIED_MANIFEST_SCHEMA_VERSION = 2
 const LEGACY_MANIFEST_SCHEMA_VERSION = 1
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 const EMPTY_DRAFT: RequirementDraftSnapshot = { text: '', attachments: [] }
@@ -32,12 +31,18 @@ interface StoredDraft extends RequirementDraftSnapshot {
 interface AttachmentEntry {
   readonly metadata: DraftAttachment
   readonly path: string
-  readonly storagePath: string
+  readonly cleanupPath: string | null
+}
+
+interface StoredReference {
+  readonly path: string
+  readonly cleanupPath: string | null
 }
 
 interface StoredManifest {
   readonly schemaVersion: number
   readonly drafts: Readonly<Record<string, StoredDraft>>
+  readonly references: Readonly<Record<string, StoredReference>>
 }
 
 interface FolderDigest {
@@ -77,13 +82,21 @@ export class RequirementDraftStore {
     for (const [scopeId, draft] of Object.entries(manifest.drafts)) {
       const attachments: DraftAttachment[] = []
       for (const metadata of draft.attachments) {
-        let paths = this.#attachmentPaths(metadata)
-        let node = await safeLstat(paths.path)
-        if (node === undefined && metadata.kind === 'file') {
+        const reference = manifest.references[metadata.id]
+        if (manifest.schemaVersion === MANIFEST_SCHEMA_VERSION && reference === undefined) {
+          changed = true
+          continue
+        }
+        const copiedPaths = this.#attachmentPaths(metadata)
+        let path = reference?.path ?? copiedPaths.path
+        let cleanupPath = reference?.cleanupPath ?? copiedPaths.storagePath
+        let node = await safeLstat(path)
+        if (reference === undefined && node === undefined && metadata.kind === 'file') {
           const legacyPath = this.#legacyAttachmentPath(metadata.id)
           const legacyNode = await safeLstat(legacyPath)
           if (legacyNode !== undefined) {
-            paths = { path: legacyPath, storagePath: legacyPath }
+            path = legacyPath
+            cleanupPath = legacyPath
             node = legacyNode
           }
         }
@@ -97,7 +110,7 @@ export class RequirementDraftStore {
           continue
         }
         attachments.push(metadata)
-        this.#attachments.set(metadata.id, { metadata, ...paths })
+        this.#attachments.set(metadata.id, { metadata, path, cleanupPath })
       }
       this.#drafts.set(scopeId, { ...draft, attachments })
     }
@@ -144,38 +157,30 @@ export class RequirementDraftStore {
 
       const added: AttachmentEntry[] = []
       let totalBytes = current.attachments.reduce((total, attachment) => total + attachment.sizeBytes, 0)
-      try {
-        for (const source of selected) {
-          let entry: AttachmentEntry
-          if (kind === 'file') {
-            const before = await stat(source)
-            if (!before.isFile()) throw new RequirementDraftStoreError('FILE_NOT_REGULAR', '只能添加普通文件。')
-            if (before.size > MAX_DRAFT_ATTACHMENT_BYTES) {
-              throw new RequirementDraftStoreError('FILE_TOO_LARGE', `单个文件不能超过 ${formatMiB(MAX_DRAFT_ATTACHMENT_BYTES)}。`)
-            }
-            if (totalBytes + before.size > MAX_DRAFT_ATTACHMENT_TOTAL_BYTES) {
-              throw new RequirementDraftStoreError('FILES_TOO_LARGE', `当前草稿的附件合计不能超过 ${formatMiB(MAX_DRAFT_ATTACHMENT_TOTAL_BYTES)}。`)
-            }
-            entry = await this.#copyFile(source, before)
-          } else {
-            entry = await this.#copyFolder(source, MAX_DRAFT_ATTACHMENT_TOTAL_BYTES - totalBytes)
+      for (const source of selected) {
+        let entry: AttachmentEntry
+        if (kind === 'file') {
+          const before = await stat(source)
+          if (!before.isFile()) throw new RequirementDraftStoreError('FILE_NOT_REGULAR', '只能添加普通文件。')
+          if (before.size > MAX_DRAFT_ATTACHMENT_BYTES) {
+            throw new RequirementDraftStoreError('FILE_TOO_LARGE', `单个文件不能超过 ${formatMiB(MAX_DRAFT_ATTACHMENT_BYTES)}。`)
           }
-
-          const duplicate = [...current.attachments, ...added.map((item) => item.metadata)].find((attachment) =>
-            attachment.kind === entry.metadata.kind &&
-            attachment.name === entry.metadata.name &&
-            attachment.sha256 === entry.metadata.sha256
-          )
-          if (duplicate !== undefined) {
-            await removeStoredAttachment(entry)
-            continue
+          if (totalBytes + before.size > MAX_DRAFT_ATTACHMENT_TOTAL_BYTES) {
+            throw new RequirementDraftStoreError('FILES_TOO_LARGE', `当前草稿的附件合计不能超过 ${formatMiB(MAX_DRAFT_ATTACHMENT_TOTAL_BYTES)}。`)
           }
-          totalBytes += entry.metadata.sizeBytes
-          added.push(entry)
+          entry = await this.#referenceFile(source, before)
+        } else {
+          entry = await this.#referenceFolder(source, MAX_DRAFT_ATTACHMENT_TOTAL_BYTES - totalBytes)
         }
-      } catch (error) {
-        await Promise.all(added.map(removeStoredAttachment))
-        throw error
+
+        const duplicate = [...current.attachments, ...added.map((item) => item.metadata)].find((attachment) =>
+          attachment.kind === entry.metadata.kind &&
+          attachment.name === entry.metadata.name &&
+          attachment.sha256 === entry.metadata.sha256
+        )
+        if (duplicate !== undefined) continue
+        totalBytes += entry.metadata.sizeBytes
+        added.push(entry)
       }
 
       for (const entry of added) this.#attachments.set(entry.metadata.id, entry)
@@ -281,56 +286,33 @@ export class RequirementDraftStore {
     return { text: value['text'], attachments }
   }
 
-  async #copyFile(source: string, before: Stats): Promise<AttachmentEntry> {
-    const uuid = randomUUID()
-    const id = `attachment:${uuid}`
-    const metadataBase = { id, name: attachmentDisplayName(source), kind: 'file' as const, fileCount: 1, sizeBytes: before.size }
-    const temporaryStoragePath = join(this.#attachmentDirectory, `${uuid}.tmp`)
-    const { path: finalPath, storagePath: finalStoragePath } = this.#attachmentPaths({
-      ...metadataBase,
-      sha256: '0'.repeat(64)
-    })
-    const temporaryPath = join(temporaryStoragePath, metadataBase.name)
-    try {
-      await mkdir(temporaryStoragePath, { mode: 0o700 })
-      const sha256 = await copyStableFile(source, temporaryPath, before)
-      await rename(temporaryStoragePath, finalStoragePath)
-      return {
-        metadata: { ...metadataBase, sha256 },
-        path: finalPath,
-        storagePath: finalStoragePath
-      }
-    } catch (error) {
-      await rm(temporaryStoragePath, { force: true, recursive: true })
-      await rm(finalStoragePath, { force: true, recursive: true })
-      throw error
+  async #referenceFile(source: string, before: Stats): Promise<AttachmentEntry> {
+    const id = `attachment:${randomUUID()}`
+    return {
+      metadata: {
+        id,
+        name: attachmentDisplayName(source),
+        kind: 'file',
+        fileCount: 1,
+        sizeBytes: before.size,
+        sha256: await hashStableFile(source, before)
+      },
+      path: source,
+      cleanupPath: null
     }
   }
 
-  async #copyFolder(source: string, remainingBytes: number): Promise<AttachmentEntry> {
-    const uuid = randomUUID()
-    const id = `attachment:${uuid}`
-    const temporaryPath = join(this.#attachmentDirectory, `${uuid}.tmp`)
-    const metadataBase = { id, name: attachmentDisplayName(source), kind: 'folder' as const }
-    const { path: finalPath, storagePath: finalStoragePath } = this.#attachmentPaths({
-      ...metadataBase,
-      fileCount: 0,
-      sizeBytes: 0,
-      sha256: '0'.repeat(64)
-    })
-    try {
-      await mkdir(temporaryPath, { mode: 0o700 })
-      const digest = await digestFolder(source, temporaryPath, remainingBytes)
-      await rename(temporaryPath, finalStoragePath)
-      return {
-        metadata: { ...metadataBase, ...digest },
-        path: finalPath,
-        storagePath: finalStoragePath
-      }
-    } catch (error) {
-      await rm(temporaryPath, { force: true, recursive: true })
-      await rm(finalStoragePath, { force: true, recursive: true })
-      throw error
+  async #referenceFolder(source: string, remainingBytes: number): Promise<AttachmentEntry> {
+    const id = `attachment:${randomUUID()}`
+    return {
+      metadata: {
+        id,
+        name: attachmentDisplayName(source),
+        kind: 'folder',
+        ...await digestFolder(source, remainingBytes)
+      },
+      path: source,
+      cleanupPath: null
     }
   }
 
@@ -350,7 +332,7 @@ export class RequirementDraftStore {
 
   async #readManifest(): Promise<StoredManifest> {
     const manifest = await safeLstat(this.#manifestPath)
-    if (manifest === undefined) return { schemaVersion: MANIFEST_SCHEMA_VERSION, drafts: {} }
+    if (manifest === undefined) return { schemaVersion: MANIFEST_SCHEMA_VERSION, drafts: {}, references: {} }
     if (manifest.isSymbolicLink() || !manifest.isFile() || manifest.size > MAX_MANIFEST_BYTES) {
       throw new RequirementDraftStoreError('MANIFEST_INVALID', '本地需求草稿索引不可读取。')
     }
@@ -364,7 +346,7 @@ export class RequirementDraftStore {
       throw new RequirementDraftStoreError('MANIFEST_INVALID', '本地需求草稿索引版本不兼容。')
     }
     const schemaVersion = value['schemaVersion']
-    if (schemaVersion !== MANIFEST_SCHEMA_VERSION && schemaVersion !== LEGACY_MANIFEST_SCHEMA_VERSION) {
+    if (schemaVersion !== MANIFEST_SCHEMA_VERSION && schemaVersion !== COPIED_MANIFEST_SCHEMA_VERSION && schemaVersion !== LEGACY_MANIFEST_SCHEMA_VERSION) {
       throw new RequirementDraftStoreError('MANIFEST_INVALID', '本地需求草稿索引版本不兼容。')
     }
     const drafts: Record<string, StoredDraft> = {}
@@ -384,13 +366,40 @@ export class RequirementDraftStore {
         updatedAt: rawDraft['updatedAt']
       }
     }
-    return { schemaVersion, drafts }
+    const references: Record<string, StoredReference> = {}
+    if (schemaVersion === MANIFEST_SCHEMA_VERSION) {
+      const rawReferences = value['references']
+      if (!isRecord(rawReferences)) {
+        throw new RequirementDraftStoreError('MANIFEST_INVALID', '本地需求草稿附件引用无效。')
+      }
+      for (const [attachmentId, rawReference] of Object.entries(rawReferences)) {
+        assertAttachmentId(attachmentId)
+        if (!isRecord(rawReference) || typeof rawReference['path'] !== 'string' || !isAbsolute(rawReference['path'])) {
+          throw new RequirementDraftStoreError('MANIFEST_INVALID', '本地需求草稿附件路径无效。')
+        }
+        const cleanupPath = rawReference['cleanupPath']
+        if (cleanupPath !== null && (typeof cleanupPath !== 'string' || !isAbsolute(cleanupPath))) {
+          throw new RequirementDraftStoreError('MANIFEST_INVALID', '本地需求草稿附件清理路径无效。')
+        }
+        const resolvedCleanupPath = cleanupPath === null ? null : resolve(cleanupPath)
+        if (resolvedCleanupPath !== null && !isPathInside(this.#attachmentDirectory, resolvedCleanupPath)) {
+          throw new RequirementDraftStoreError('MANIFEST_INVALID', '本地需求草稿附件清理路径越界。')
+        }
+        references[attachmentId] = { path: resolve(rawReference['path']), cleanupPath: resolvedCleanupPath }
+      }
+    }
+    return { schemaVersion, drafts, references }
   }
 
   async #persist(): Promise<void> {
     const temporaryPath = join(this.#root, `manifest-${randomUUID()}.tmp`)
     const drafts = Object.fromEntries([...this.#drafts].sort(([left], [right]) => left.localeCompare(right)))
-    const serialized = `${JSON.stringify({ schemaVersion: MANIFEST_SCHEMA_VERSION, drafts }, null, 2)}\n`
+    const referenced = new Set([...this.#drafts.values()].flatMap((draft) => draft.attachments.map((attachment) => attachment.id)))
+    const references = Object.fromEntries([...this.#attachments]
+      .filter(([id]) => referenced.has(id))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([id, entry]) => [id, { path: entry.path, cleanupPath: entry.cleanupPath }]))
+    const serialized = `${JSON.stringify({ schemaVersion: MANIFEST_SCHEMA_VERSION, drafts, references }, null, 2)}\n`
     if (Buffer.byteLength(serialized, 'utf8') > MAX_MANIFEST_BYTES) {
       throw new RequirementDraftStoreError('MANIFEST_TOO_LARGE', '本地需求草稿索引超过安全上限。')
     }
@@ -455,7 +464,10 @@ async function uniqueCanonicalSelections(
 }
 
 async function verifyStoredAttachment(entry: AttachmentEntry): Promise<void> {
-  const node = await lstat(entry.path)
+  const node = await safeLstat(entry.path)
+  if (node === undefined) {
+    throw new RequirementDraftStoreError('ATTACHMENT_CHANGED', `本地附件已移动或删除：${entry.metadata.name}`)
+  }
   if (node.isSymbolicLink()) {
     throw new RequirementDraftStoreError('ATTACHMENT_CHANGED', `本地附件已变化：${entry.metadata.name}`)
   }
@@ -472,7 +484,7 @@ async function verifyStoredAttachment(entry: AttachmentEntry): Promise<void> {
   if (!node.isDirectory()) {
     throw new RequirementDraftStoreError('ATTACHMENT_CHANGED', `本地附件已变化：${entry.metadata.name}`)
   }
-  const actual = await digestFolder(entry.path, undefined, MAX_DRAFT_ATTACHMENT_TOTAL_BYTES)
+  const actual = await digestFolder(entry.path, MAX_DRAFT_ATTACHMENT_TOTAL_BYTES)
   if (
     actual.sha256 !== entry.metadata.sha256 ||
     actual.sizeBytes !== entry.metadata.sizeBytes ||
@@ -484,7 +496,6 @@ async function verifyStoredAttachment(entry: AttachmentEntry): Promise<void> {
 
 async function digestFolder(
   sourceRoot: string,
-  destinationRoot: string | undefined,
   maxBytes: number
 ): Promise<FolderDigest> {
   const treeHash = createHash('sha256')
@@ -496,7 +507,6 @@ async function digestFolder(
 
   async function visit(
     sourceDirectory: string,
-    destinationDirectory: string | undefined,
     prefix: string,
     depth: number
   ): Promise<void> {
@@ -532,9 +542,7 @@ async function digestFolder(
       }
       if (node.isDirectory()) {
         treeHash.update(`D\0${relativePath}\0`)
-        const destinationPath = destinationDirectory === undefined ? undefined : join(destinationDirectory, entry.name)
-        if (destinationPath !== undefined) await mkdir(destinationPath, { mode: 0o700 })
-        await visit(sourcePath, destinationPath, relativePath, depth + 1)
+        await visit(sourcePath, relativePath, depth + 1)
         continue
       }
       if (!node.isFile()) {
@@ -551,10 +559,7 @@ async function digestFolder(
       if (sizeBytes > maxBytes) {
         throw new RequirementDraftStoreError('FILES_TOO_LARGE', `当前草稿的附件合计不能超过 ${formatMiB(MAX_DRAFT_ATTACHMENT_TOTAL_BYTES)}。`)
       }
-      const destinationPath = destinationDirectory === undefined ? undefined : join(destinationDirectory, entry.name)
-      const sha256 = destinationPath === undefined
-        ? await hashStableFile(sourcePath, node)
-        : await copyStableFile(sourcePath, destinationPath, node)
+      const sha256 = await hashStableFile(sourcePath, node)
       treeHash.update(`F\0${relativePath}\0${node.size}\0${sha256}\0`)
     }
 
@@ -568,29 +573,12 @@ async function digestFolder(
       entryNames.length !== afterEntries.length ||
       entryNames.some((name, index) => name !== afterEntries[index])
     ) {
-      throw new RequirementDraftStoreError('FOLDER_CHANGED', `复制期间文件夹发生变化：${basename(sourceDirectory)}`)
+      throw new RequirementDraftStoreError('FOLDER_CHANGED', `校验期间文件夹发生变化：${basename(sourceDirectory)}`)
     }
   }
 
-  await visit(sourceRoot, destinationRoot, '', 0)
+  await visit(sourceRoot, '', 0)
   return { sha256: treeHash.digest('hex'), sizeBytes, fileCount }
-}
-
-async function copyStableFile(source: string, destination: string, before: Stats): Promise<string> {
-  const hash = createHash('sha256')
-  const hasher = new Transform({
-    transform(chunk, _encoding, callback) {
-      hash.update(chunk)
-      callback(null, chunk)
-    }
-  })
-  await pipeline(
-    createReadStream(source),
-    hasher,
-    createWriteStream(destination, { flags: 'wx', mode: 0o600 })
-  )
-  await assertStableFile(source, before)
-  return hash.digest('hex')
 }
 
 async function hashStableFile(path: string, before: Stats): Promise<string> {
@@ -611,16 +599,16 @@ async function assertStableFile(path: string, before: Stats): Promise<void> {
     before.size !== after.size || before.mtimeMs !== after.mtimeMs ||
     before.dev !== after.dev || before.ino !== after.ino
   ) {
-    throw new RequirementDraftStoreError('FILE_CHANGED', `复制或校验期间文件发生变化：${basename(path)}`)
+    throw new RequirementDraftStoreError('FILE_CHANGED', `校验期间文件发生变化：${basename(path)}`)
   }
 }
 
 async function removeStoredAttachment(entry: AttachmentEntry): Promise<void> {
-  await rm(entry.storagePath, { force: true, recursive: true })
+  if (entry.cleanupPath !== null) await rm(entry.cleanupPath, { force: true, recursive: true })
 }
 
 function assertScopeId(value: string): string {
-  if (value.length < 1 || value.length > 256 || !/^(?:unassigned|fixture:[a-z0-9._-]+|project:[a-f0-9]{24})$/u.test(value)) {
+  if (value.length < 1 || value.length > 256 || !/^(?:unassigned|fixture:[a-z0-9._-]+|project:[a-f0-9]{24})(?::task:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?$/u.test(value)) {
     throw new RequirementDraftStoreError('DRAFT_SCOPE_INVALID', '需求草稿作用域无效。')
   }
   return value
@@ -670,9 +658,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function safeLstat(path: string): Promise<Awaited<ReturnType<typeof lstat>> | undefined> {
+function isPathInside(parent: string, candidate: string): boolean {
+  const pathFromParent = relative(resolve(parent), resolve(candidate))
+  return pathFromParent !== '' && pathFromParent !== '..' && !pathFromParent.startsWith(`..\\`) && !pathFromParent.startsWith('../') && !isAbsolute(pathFromParent)
+}
+
+async function safeLstat(path: string): Promise<Stats | undefined> {
   try {
-    return await lstat(path)
+    return await lstat(path) as Stats
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw error

@@ -34,10 +34,23 @@ function requirementCommand(scopeId: string, attachments: readonly unknown[]): O
 }
 
 describe('RequirementDraftStore', () => {
-  it('copies arbitrary files outside the project and persists the draft', async () => {
+  it('keeps drafts isolated by project task id', async () => {
+    const storeRoot = await temporaryDirectory('codentum-task-drafts-')
+    const store = new RequirementDraftStore(storeRoot)
+    await store.initialize()
+    const first = 'project:0123456789abcdef01234567:task:11111111-1111-4111-8111-111111111111'
+    const second = 'project:0123456789abcdef01234567:task:22222222-2222-4222-8222-222222222222'
+    await store.save(first, { text: 'first isolated task', attachments: [] })
+    await store.save(second, { text: 'second isolated task', attachments: [] })
+
+    expect((await store.load(first)).text).toBe('first isolated task')
+    expect((await store.load(second)).text).toBe('second isolated task')
+  })
+
+  it('references arbitrary files outside the project and persists the original path', async () => {
     const sourceRoot = await temporaryDirectory('codentum-source-')
     const storeRoot = await temporaryDirectory('codentum-drafts-')
-    const sourcePath = join(sourceRoot, 'opaque.payload')
+    const sourcePath = join(sourceRoot, 'fixture-agent-tool.exe')
     const content = Buffer.from([0, 255, 17, 42, 99, 0, 8])
     await writeFile(sourcePath, content)
 
@@ -49,11 +62,9 @@ describe('RequirementDraftStore', () => {
 
     expect(added.text).toBe('A persisted requirement')
     expect(added.attachments).toHaveLength(1)
-    expect(added.attachments[0]?.name).toBe('opaque.payload')
+    expect(added.attachments[0]?.name).toBe('fixture-agent-tool.exe')
     expect(added.attachments[0]?.kind).toBe('file')
     expect(added.attachments[0]?.fileCount).toBe(1)
-    await rm(sourcePath)
-
     const reopened = new RequirementDraftStore(storeRoot)
     await reopened.initialize()
     expect(await reopened.load(scopeId)).toEqual(added)
@@ -71,12 +82,11 @@ describe('RequirementDraftStore', () => {
       ? (engineAttachment as Record<string, unknown>)['localPath']
       : undefined
     expect(typeof localPath).toBe('string')
-    expect(localPath).not.toBe(sourcePath)
-    expect(String(localPath)).toMatch(/opaque\.payload$/u)
+    expect(localPath).toBe(sourcePath)
     expect(await readFile(String(localPath))).toEqual(content)
   })
 
-  it('removes the private copy after the last draft reference is discarded', async () => {
+  it('never deletes the original file after the last draft reference is discarded', async () => {
     const sourceRoot = await temporaryDirectory('codentum-source-')
     const storeRoot = await temporaryDirectory('codentum-drafts-')
     const sourcePath = join(sourceRoot, 'notes.any-extension')
@@ -97,10 +107,10 @@ describe('RequirementDraftStore', () => {
     const attachment = added.attachments[0]
     expect(attachment).toBeDefined()
     await store.discard(scopeId, attachment?.id ?? '')
-    await expect(stat(String(localPath))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(String(localPath), 'utf8')).toBe('agent-readable attachment')
   })
 
-  it('copies a folder recursively and gives the engine a readable private directory', async () => {
+  it('references a folder recursively and gives the engine its original directory', async () => {
     const sourceRoot = await temporaryDirectory('codentum-folder-source-')
     const storeRoot = await temporaryDirectory('codentum-drafts-')
     const selectedFolder = join(sourceRoot, 'design-materials')
@@ -121,7 +131,6 @@ describe('RequirementDraftStore', () => {
       sizeBytes: Buffer.byteLength('# Product brief\n') + 5
     })
 
-    await rm(selectedFolder, { recursive: true })
     const reopened = new RequirementDraftStore(storeRoot)
     await reopened.initialize()
     const prepared = await reopened.prepareRequirementCommand(requirementCommand(scopeId, added.attachments), sourceRoot)
@@ -131,9 +140,26 @@ describe('RequirementDraftStore', () => {
       ? (first as Record<string, unknown>)['localPath']
       : undefined
     expect(typeof localPath).toBe('string')
+    expect(localPath).toBe(selectedFolder)
     expect(await readFile(join(String(localPath), 'brief.md'), 'utf8')).toBe('# Product brief\n')
     expect(await readFile(join(String(localPath), 'nested', 'wireframe.binary'))).toEqual(Buffer.from([5, 4, 3, 2, 1]))
     expect((await stat(join(String(localPath), 'empty'))).isDirectory()).toBe(true)
+  })
+
+  it('rejects a referenced file when its contents change before submission', async () => {
+    const sourceRoot = await temporaryDirectory('codentum-source-')
+    const storeRoot = await temporaryDirectory('codentum-drafts-')
+    const sourcePath = join(sourceRoot, 'mutable.bin')
+    await writeFile(sourcePath, Buffer.from([1, 2, 3]))
+
+    const scopeId = 'project:1234567890abcdef12345678'
+    const store = new RequirementDraftStore(storeRoot)
+    await store.initialize()
+    const added = await store.addFiles(scopeId, [sourcePath])
+    await writeFile(sourcePath, Buffer.from([1, 2, 4]))
+
+    await expect(store.prepareRequirementCommand(requirementCommand(scopeId, added.attachments), sourceRoot))
+      .rejects.toMatchObject({ code: 'ATTACHMENT_CHANGED' })
   })
 
   it('rejects links inside a selected folder instead of copying outside the tree', async () => {

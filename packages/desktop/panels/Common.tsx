@@ -26,6 +26,14 @@ export type IconName =
   | 'clock'
   | 'menu'
   | 'close'
+  | 'chat'
+  | 'plug'
+  | 'book'
+  | 'spark'
+  | 'settings'
+  | 'help'
+  | 'shield'
+  | 'search'
 
 const PATHS: Readonly<Record<IconName, ReactNode>> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -50,7 +58,15 @@ const PATHS: Readonly<Record<IconName, ReactNode>> = {
   warning: <><path d="M12 3 2.8 20h18.4zM12 9v4M12 17h.01" /></>,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v6l4 2" /></>,
   menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
-  close: <><path d="m6 6 12 12M18 6 6 18" /></>
+  close: <><path d="m6 6 12 12M18 6 6 18" /></>,
+  chat: <><path d="M4 5h16v12H9l-5 4z" /><path d="M8 9h8M8 13h5" /></>,
+  plug: <><path d="M8 3v5M16 3v5M6 8h12v3a6 6 0 0 1-6 6v4M9 21h6" /></>,
+  book: <><path d="M4 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H4zM20 4h-4a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h4z" /></>,
+  spark: <><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5zM18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" /></>,
+  settings: <><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L14.5 3h-5L9 6.1a8 8 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.5 3.1h5l.5-3.1a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z" /></>,
+  help: <><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.6 2.6 0 1 1 3.3 2.5c-.9.3-1.4.9-1.4 1.8M12 17h.01" /></>,
+  shield: <><path d="M12 3 20 6v5c0 5-3.4 8.2-8 10-4.6-1.8-8-5-8-10V6z" /><path d="m9 12 2 2 4-4" /></>,
+  search: <><circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" /></>
 }
 
 export function Icon({ name, size = 20 }: { readonly name: IconName; readonly size?: number }): ReactNode {

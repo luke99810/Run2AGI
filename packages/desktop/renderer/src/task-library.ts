@@ -1,0 +1,228 @@
+export type TaskSessionStatus = 'draft' | 'submitted'
+export type AccessMode = 'read_only' | 'workspace_write' | 'full_access'
+export type ConnectivityMode = 'local' | 'online'
+
+export interface TaskContextSelection {
+  readonly accessMode: AccessMode
+  readonly connectivityMode: ConnectivityMode
+  readonly pluginIds: readonly string[]
+  readonly knowledgeIds: readonly string[]
+  readonly skillIds: readonly string[]
+  readonly relatedTaskIds: readonly string[]
+}
+
+export interface TaskSession {
+  readonly id: string
+  readonly sourceId: string
+  readonly title: string
+  readonly preview: string
+  readonly attachmentNames: readonly string[]
+  readonly status: TaskSessionStatus
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly context: TaskContextSelection
+}
+
+export interface TaskHistoryEntry {
+  readonly taskId: string
+  readonly title: string
+  readonly summary: string
+  readonly status: TaskSessionStatus
+  readonly updatedAt: string
+}
+
+export interface WorkbenchPreferences {
+  readonly defaultAccessMode: AccessMode
+}
+
+export interface ResourceOption {
+  readonly id: string
+  readonly label: string
+  readonly detail: string
+  readonly availability: 'available' | 'pending_runtime'
+}
+
+export const PLUGIN_OPTIONS: readonly ResourceOption[] = [
+  { id: 'local-files', label: '本地文件', detail: '直接引用原始位置，提交前校验内容', availability: 'available' },
+  { id: 'git', label: 'Git', detail: '由 WorkerRuntime 在隔离 worktree 中使用', availability: 'available' },
+  { id: 'browser', label: '浏览器', detail: '等待 B 将浏览器工具加入 ToolSurface', availability: 'pending_runtime' }
+]
+
+export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
+  { id: 'project-knowledge', label: '项目知识库', detail: '读取当前项目 .codentum 知识投影', availability: 'available' },
+  { id: 'task-history', label: '历史任务', detail: '把本机任务索引交给中心 Agent 检索', availability: 'available' },
+  { id: 'team-memory', label: '团队记忆', detail: '等待 A/B 提供 MemoryIndex 查询端点', availability: 'pending_runtime' }
+]
+
+export const SKILL_OPTIONS: readonly ResourceOption[] = [
+  { id: 'frontend', label: '前端实现', detail: '请求 Coder 加载前端实现技能', availability: 'pending_runtime' },
+  { id: 'testing', label: '测试验证', detail: '请求 QA/Coder 加载测试技能', availability: 'pending_runtime' },
+  { id: 'review', label: '代码评审', detail: '请求 Reviewer 加载评审技能', availability: 'pending_runtime' }
+]
+
+const TASK_STORAGE_KEY = 'codentum.desktop.task-sessions.v1'
+const PREFERENCE_STORAGE_KEY = 'codentum.desktop.workbench-preferences.v1'
+const DEFAULT_CONTEXT: TaskContextSelection = {
+  accessMode: 'workspace_write',
+  connectivityMode: 'local',
+  pluginIds: ['local-files', 'git'],
+  knowledgeIds: ['project-knowledge', 'task-history'],
+  skillIds: [],
+  relatedTaskIds: []
+}
+const DEFAULT_PREFERENCES: WorkbenchPreferences = { defaultAccessMode: 'workspace_write' }
+
+function storage(): Storage | null {
+  return typeof window === 'undefined' ? null : window.localStorage
+}
+
+function newId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0').slice(-12)}`
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isAccessMode(value: unknown): value is AccessMode {
+  return value === 'read_only' || value === 'workspace_write' || value === 'full_access'
+}
+
+function isConnectivityMode(value: unknown): value is ConnectivityMode {
+  return value === 'local' || value === 'online'
+}
+
+function parseContext(value: unknown): TaskContextSelection | null {
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as Record<string, unknown>
+  if (
+    !isAccessMode(record['accessMode']) ||
+    !isStringArray(record['pluginIds']) ||
+    !isStringArray(record['knowledgeIds']) ||
+    !isStringArray(record['skillIds']) ||
+    !isStringArray(record['relatedTaskIds'])
+  ) return null
+  return {
+    accessMode: record['accessMode'],
+    connectivityMode: isConnectivityMode(record['connectivityMode']) ? record['connectivityMode'] : 'local',
+    pluginIds: [...new Set(record['pluginIds'])],
+    knowledgeIds: [...new Set(record['knowledgeIds'])],
+    skillIds: [...new Set(record['skillIds'])],
+    relatedTaskIds: [...new Set(record['relatedTaskIds'])]
+  }
+}
+
+function parseTask(value: unknown): TaskSession | null {
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as Record<string, unknown>
+  const context = parseContext(record['context'])
+  if (
+    typeof record['id'] !== 'string' ||
+    !/^[0-9a-f-]{36}$/u.test(record['id']) ||
+    typeof record['sourceId'] !== 'string' ||
+    typeof record['title'] !== 'string' ||
+    typeof record['preview'] !== 'string' ||
+    (record['status'] !== 'draft' && record['status'] !== 'submitted') ||
+    typeof record['createdAt'] !== 'string' ||
+    typeof record['updatedAt'] !== 'string' ||
+    context === null
+  ) return null
+  return {
+    id: record['id'],
+    sourceId: record['sourceId'],
+    title: record['title'],
+    preview: record['preview'],
+    attachmentNames: isStringArray(record['attachmentNames']) ? [...new Set(record['attachmentNames'])] : [],
+    status: record['status'],
+    createdAt: record['createdAt'],
+    updatedAt: record['updatedAt'],
+    context
+  }
+}
+
+export function loadTaskSessions(): readonly TaskSession[] {
+  try {
+    const raw = storage()?.getItem(TASK_STORAGE_KEY)
+    if (raw === null || raw === undefined) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(parseTask).filter((task): task is TaskSession => task !== null)
+  } catch {
+    return []
+  }
+}
+
+export function saveTaskSessions(tasks: readonly TaskSession[]): void {
+  storage()?.setItem(TASK_STORAGE_KEY, JSON.stringify(tasks))
+}
+
+export function loadWorkbenchPreferences(): WorkbenchPreferences {
+  try {
+    const raw = storage()?.getItem(PREFERENCE_STORAGE_KEY)
+    if (raw === null || raw === undefined) return DEFAULT_PREFERENCES
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return DEFAULT_PREFERENCES
+    const accessMode = (parsed as Record<string, unknown>)['defaultAccessMode']
+    return isAccessMode(accessMode) ? { defaultAccessMode: accessMode } : DEFAULT_PREFERENCES
+  } catch {
+    return DEFAULT_PREFERENCES
+  }
+}
+
+export function saveWorkbenchPreferences(preferences: WorkbenchPreferences): void {
+  storage()?.setItem(PREFERENCE_STORAGE_KEY, JSON.stringify(preferences))
+}
+
+export function createTaskSession(sourceId: string, preferences: WorkbenchPreferences, now = new Date()): TaskSession {
+  const timestamp = now.toISOString()
+  return {
+    id: newId(),
+    sourceId,
+    title: '新任务',
+    preview: '',
+    attachmentNames: [],
+    status: 'draft',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    context: { ...DEFAULT_CONTEXT, accessMode: preferences.defaultAccessMode }
+  }
+}
+
+export function taskDraftScope(task: TaskSession): string {
+  return `${task.sourceId}:task:${task.id}`
+}
+
+export function taskTitle(requirement: string): string {
+  const normalized = requirement.trim().replace(/\s+/gu, ' ')
+  if (normalized === '') return '新任务'
+  return normalized.length > 28 ? `${normalized.slice(0, 28)}…` : normalized
+}
+
+export function updateTaskFromDraft(task: TaskSession, requirement: string, now = new Date()): TaskSession {
+  const normalized = requirement.trim().replace(/\s+/gu, ' ')
+  return {
+    ...task,
+    title: taskTitle(requirement),
+    preview: normalized.slice(0, 160),
+    updatedAt: now.toISOString()
+  }
+}
+
+export function historyForAgent(tasks: readonly TaskSession[], activeTaskId: string): readonly TaskHistoryEntry[] {
+  return tasks
+    .filter((task) => task.id !== activeTaskId && task.preview !== '')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 30)
+    .map((task) => ({
+      taskId: task.id,
+      title: task.title,
+      summary: task.preview,
+      status: task.status,
+      updatedAt: task.updatedAt
+    }))
+}
+
+export function toggleSelection(values: readonly string[], id: string): readonly string[] {
+  return values.includes(id) ? values.filter((value) => value !== id) : [...values, id]
+}

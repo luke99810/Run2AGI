@@ -1,13 +1,21 @@
 import type { ReactNode } from 'react'
 import type { StateSnapshot } from '../shared/protocol'
 import { NAVIGATION, type NavigationKey, packetCounts, roleLabel } from '../renderer/src/domain'
+import type { TaskSession } from '../renderer/src/task-library'
 import { Icon } from './Common'
 
-export function Sidebar({ active, snapshot, onNavigate, onSelectWorker, collapsed, onToggle }: {
+const PRIMARY_NAV = new Set<NavigationKey>(['board', 'conversations', 'plugins', 'knowledge', 'skills'])
+const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'cost', 'roles', 'delivery'])
+
+export function Sidebar({ active, snapshot, tasks, activeTaskId, onNavigate, onSelectWorker, onNewTask, onSelectTask, collapsed, onToggle }: {
   readonly active: NavigationKey
   readonly snapshot: StateSnapshot | null
+  readonly tasks: readonly TaskSession[]
+  readonly activeTaskId: string | null
   readonly onNavigate: (next: NavigationKey) => void
   readonly onSelectWorker: (workerId: string) => void
+  readonly onNewTask: () => void
+  readonly onSelectTask: (taskId: string) => void
   readonly collapsed: boolean
   readonly onToggle: () => void
 }): ReactNode {
@@ -24,7 +32,10 @@ export function Sidebar({ active, snapshot, onNavigate, onSelectWorker, collapse
       </div>
 
       <nav className="primary-nav" aria-label="主要功能">
-        {NAVIGATION.map((item) => (
+        <button type="button" className={active === 'home' ? 'active' : ''} onClick={onNewTask} title={collapsed ? '新对话' : undefined}>
+          <Icon name="plus" size={20} /><span>新对话</span>
+        </button>
+        {NAVIGATION.filter((item) => PRIMARY_NAV.has(item.id)).map((item) => (
           <button
             key={item.id}
             type="button"
@@ -40,6 +51,33 @@ export function Sidebar({ active, snapshot, onNavigate, onSelectWorker, collapse
           </button>
         ))}
       </nav>
+
+      <section className="task-history-rail" aria-label="项目和最近任务">
+        <div className="sidebar-group-heading">项目</div>
+        <button type="button" className="sidebar-project-row" onClick={() => onNavigate('home')}>
+          <Icon name="folder" size={16} />
+          <span>{snapshot?.source.kind === 'project' ? snapshot.source.label : '没有项目'}</span>
+        </button>
+        <div className="sidebar-group-heading recent-heading"><span>最近</span><small>{tasks.length}</small></div>
+        <div className="task-history-list">
+          {tasks.length === 0 ? <p className="rail-empty">没有最近任务</p> : tasks.slice(0, 12).map((task) => (
+            <button type="button" className={task.id === activeTaskId ? 'active' : ''} key={task.id} onClick={() => onSelectTask(task.id)}>
+              <span><strong>{task.title}</strong></span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <details className="workspace-nav">
+        <summary>项目视图</summary>
+        <nav aria-label="项目视图">
+          {NAVIGATION.filter((item) => PROJECT_NAV.has(item.id)).map((item) => (
+            <button type="button" className={active === item.id ? 'active' : ''} key={item.id} onClick={() => onNavigate(item.id)}>
+              <Icon name={item.icon as Parameters<typeof Icon>[0]['name']} size={17} /><span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      </details>
 
       <section className="agent-rail" aria-label="Worker 状态">
         <div className="rail-heading">
@@ -63,6 +101,10 @@ export function Sidebar({ active, snapshot, onNavigate, onSelectWorker, collapse
         ) : null}
       </section>
 
+      <nav className="sidebar-utility-nav" aria-label="设置与帮助">
+        <button type="button" className={active === 'settings' ? 'active' : ''} onClick={() => onNavigate('settings')} title={collapsed ? '设置' : undefined}><Icon name="settings" size={19} /><span>设置</span></button>
+        <button type="button" className={active === 'help' ? 'active' : ''} onClick={() => onNavigate('help')} title={collapsed ? '帮助' : undefined}><Icon name="help" size={19} /><span>帮助</span></button>
+      </nav>
       <div className="sidebar-footer">
         <span className={`connection-dot ${snapshot === null ? 'offline' : 'online'}`} />
         <div><strong>{snapshot?.source.label ?? '未选择项目'}</strong><small>{snapshot?.source.kind === 'fixture' ? '演示快照' : '本地状态'}</small></div>

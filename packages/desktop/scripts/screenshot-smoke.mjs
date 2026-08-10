@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdir, stat, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
@@ -24,7 +25,7 @@ const FIXTURE_IDS = [
 ]
 
 const SCREENSHOTS = [
-  { name: '01-home.png', navigation: '新任务', heading: '交代研发任务' },
+  { name: '01-home.png', navigation: '新对话', heading: '要做什么软件？' },
   { name: '02-execution.png', navigation: '执行中心', heading: '执行中心' },
   { name: '03-board.png', navigation: '任务看板', heading: '任务看板' },
   { name: '04-dependency.png', navigation: '依赖关系', heading: '依赖关系' },
@@ -265,7 +266,7 @@ async function clickNavigation(client, label, expectedHeading) {
       const style = getComputedStyle(element)
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
     }
-    const button = [...document.querySelectorAll('.primary-nav button')]
+    const button = [...document.querySelectorAll('.sidebar button')]
       .find((candidate) => visible(candidate) && normalize(candidate.querySelector(':scope > span')?.textContent) === ${JSON.stringify(label)})
     if (!(button instanceof HTMLButtonElement)) return false
     button.click()
@@ -300,29 +301,76 @@ async function captureScreenshot(client, filename) {
 }
 
 async function exerciseInteractiveDetails(client, navigation) {
-  if (navigation === '新任务') {
+  if (navigation === '新对话') {
+    await waitFor(
+      client,
+      `document.querySelector('#requirement-input') instanceof HTMLTextAreaElement && !document.querySelector('#requirement-input').disabled && document.querySelector('.attachment-trigger') instanceof HTMLButtonElement && !document.querySelector('.attachment-trigger').disabled`,
+      'isolated task draft readiness'
+    )
     const composer = await evaluate(client, `(() => {
       const textarea = document.querySelector('#requirement-input')
       const send = document.querySelector('.send-button')
-      const reference = document.querySelector('.reference-button')
-      if (!(textarea instanceof HTMLTextAreaElement) || !(send instanceof HTMLButtonElement) || !(reference instanceof HTMLButtonElement)) return null
+      const attachment = document.querySelector('.attachment-trigger')
+      if (!(textarea instanceof HTMLTextAreaElement) || !(send instanceof HTMLButtonElement) || !(attachment instanceof HTMLButtonElement)) return null
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
       setter?.call(textarea, '离线草稿输入验证')
       textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      attachment.click()
       return {
         textareaDisabled: textarea.disabled,
         sendDisabled: send.disabled,
-        referenceDisabled: reference.disabled,
+        attachmentDisabled: attachment.disabled,
         text: document.querySelector('.composer-status')?.textContent ?? ''
       }
     })()`, 'exercise offline requirement composer')
-    if (composer === null || composer.textareaDisabled || !composer.sendDisabled || !composer.referenceDisabled) {
+    if (composer === null || composer.textareaDisabled || !composer.sendDisabled || composer.attachmentDisabled) {
       throw new Error(`Offline composer gating is incorrect: ${JSON.stringify(composer)}`)
     }
-    if (!composer.text.includes('草稿可以继续编辑')) {
+    if (!composer.text.includes('附件直接引用原位置')) {
       throw new Error(`Offline composer did not explain draft availability: ${JSON.stringify(composer)}`)
     }
+    await waitFor(client, `document.querySelector('.attachment-menu') !== null`, 'attachment menu')
+    const menuLabels = await evaluate(client, `([...document.querySelectorAll('.attachment-menu strong')].map((node) => node.textContent?.trim()))`, 'read attachment menu labels')
+    if (!menuLabels.includes('添加文件') || !menuLabels.includes('添加文件夹')) {
+      throw new Error(`Attachment menu is incomplete: ${JSON.stringify(menuLabels)}`)
+    }
+    const chatMenuLabels = await evaluate(client, `(() => {
+      const summary = document.querySelector('.chat-actions summary')
+      if (!(summary instanceof HTMLElement)) return []
+      summary.click()
+      return [...document.querySelectorAll('.chat-actions button strong')].map((node) => node.textContent?.trim())
+    })()`, 'open chat actions menu')
+    if (!chatMenuLabels.includes('搜索聊天记录') || !chatMenuLabels.includes('导出聊天记录')) {
+      throw new Error(`Chat actions menu is incomplete: ${JSON.stringify(chatMenuLabels)}`)
+    }
+    await evaluate(client, `document.querySelector('.chat-actions')?.removeAttribute('open')`, 'close chat actions menu')
+    const connectivity = await evaluate(client, `(() => {
+      const buttons = [...document.querySelectorAll('.connectivity-switch button')]
+      const online = buttons.find((button) => button.textContent?.trim() === '联网')
+      if (!(online instanceof HTMLButtonElement)) return false
+      online.click()
+      return true
+    })()`, 'select online mode')
+    if (!connectivity) {
+      throw new Error(`Online mode gating is incorrect: ${JSON.stringify(connectivity)}`)
+    }
+    await waitFor(client, `[...document.querySelectorAll('.connectivity-switch button')].some((button) => button.textContent?.trim() === '联网' && button.getAttribute('aria-checked') === 'true') && document.querySelector('.send-button')?.disabled === true`, 'online mode gating')
+    await evaluate(client, `([...document.querySelectorAll('.connectivity-switch button')].find((button) => button.textContent?.trim() === '本地'))?.click()`, 'restore local mode')
     await waitFor(client, `document.querySelector('#requirement-input')?.value === '离线草稿输入验证'`, 'offline draft input')
+    const divider = await evaluate(client, `(() => {
+      const handle = document.querySelector('.sidebar-resizer')
+      const sidebar = document.querySelector('.sidebar')
+      if (!(handle instanceof HTMLElement) || !(sidebar instanceof HTMLElement)) return null
+      const handleRect = handle.getBoundingClientRect()
+      return { x: handleRect.left + handleRect.width / 2, y: 260, width: sidebar.getBoundingClientRect().width }
+    })()`, 'read sidebar divider')
+    if (divider === null) throw new Error('Sidebar resize handle is missing')
+    const targetX = Math.min(400, divider.x + 40)
+    await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: divider.x, y: divider.y })
+    await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: divider.x, y: divider.y, button: 'left', buttons: 1, clickCount: 1 })
+    await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: targetX, y: divider.y, button: 'left', buttons: 1 })
+    await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: targetX, y: divider.y, button: 'left', buttons: 0, clickCount: 1 })
+    await waitFor(client, `document.querySelector('.sidebar')?.getBoundingClientRect().width >= ${divider.width + 24}`, 'resized sidebar width')
   }
   if (navigation === '执行中心') {
     await waitFor(client, `document.body.innerText.includes('没有真实 Worker 投影') || document.querySelectorAll('.worker-card').length > 0`, 'an honest execution projection')
@@ -384,6 +432,7 @@ async function terminateChild(child) {
 async function main() {
   await assertBuildExists()
   await mkdir(outputDirectory, { recursive: true })
+  const userDataDirectory = await mkdtemp(join(tmpdir(), 'codentum-screenshot-profile-'))
   const port = await reservePort()
   const childOutput = []
   const environment = { ...process.env }
@@ -395,6 +444,7 @@ async function main() {
     `--remote-debugging-port=${port}`,
     '--remote-allow-origins=*',
     '--disable-gpu',
+    `--user-data-dir=${userDataDirectory}`,
     desktopRoot
   ], {
     cwd: desktopRoot,
@@ -439,7 +489,7 @@ async function main() {
       if (!fixtureAudit.options.includes(fixtureId)) throw new Error(`Fixture is missing from the visible source selector: ${fixtureId}`)
     }
 
-    await clickNavigation(client, '新任务', '交代研发任务')
+    await clickNavigation(client, '新对话', '要做什么软件？')
     for (const fixtureId of FIXTURE_IDS) await selectFixture(client, fixtureId)
     await selectFixture(client, 'fixture:mid-flight')
     await waitFor(client, `document.querySelector('.fixture-badge')?.textContent?.includes('演示快照')`, 'fixture disclosure badge')
@@ -464,6 +514,7 @@ async function main() {
       client.close()
     }
     await terminateChild(child)
+    await rm(userDataDirectory, { force: true, recursive: true })
   }
 }
 

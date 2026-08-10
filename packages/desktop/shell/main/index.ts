@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import {
   app,
@@ -14,7 +15,7 @@ import {
 } from 'electron'
 import { StateHub } from '../../data'
 import { IPC_CHANNELS } from '../../shared/ipc'
-import { MAX_DRAFT_ATTACHMENTS, type OperatorAction, type OperatorCommand } from '../../shared/protocol'
+import { MAX_DRAFT_ATTACHMENTS, type EngineHandshake, type OperatorAction, type OperatorCommand } from '../../shared/protocol'
 import { SidecarManager } from './python-engine/SidecarManager'
 import { RequirementDraftStore } from './requirement-draft-store'
 
@@ -89,7 +90,13 @@ async function chooseProject(): Promise<Awaited<ReturnType<StateHub['selectProje
   })
   const selected = result.filePaths[0]
   if (result.canceled || selected === undefined) return null
-  return stateHub.selectProject(selected)
+  const descriptor = await stateHub.selectProject(selected)
+  if (descriptor.rootPath === undefined) throw new Error('Selected project did not provide a canonical root path')
+  const projectBindableSidecar = sidecar as (SidecarManager & {
+    bindProject?: (projectRoot: string) => Promise<EngineHandshake>
+  }) | undefined
+  await projectBindableSidecar?.bindProject?.(descriptor.rootPath)
+  return descriptor
 }
 
 async function chooseDraftFiles(scopeId: string): Promise<Awaited<ReturnType<RequirementDraftStore['load']>>> {
@@ -116,6 +123,22 @@ async function chooseDraftFolders(scopeId: string): Promise<Awaited<ReturnType<R
   })
   if (result.canceled) return draftStore.load(scopeId)
   return draftStore.addFolders(scopeId, result.filePaths)
+}
+
+async function exportChatRecord(suggestedName: unknown, markdown: unknown): Promise<boolean> {
+  if (mainWindow === undefined) return false
+  if (typeof suggestedName !== 'string' || suggestedName.length < 1 || suggestedName.length > 160) throw new TypeError('Invalid export filename')
+  if (typeof markdown !== 'string' || Buffer.byteLength(markdown, 'utf8') > 5 * 1024 * 1024) throw new TypeError('Invalid chat export')
+  const safeName = suggestedName.replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_').replace(/[. ]+$/u, '').slice(0, 120) || 'Codentum-chat'
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '导出聊天记录',
+    defaultPath: `${safeName}.md`,
+    buttonLabel: '导出',
+    filters: [{ name: 'Markdown', extensions: ['md'] }]
+  })
+  if (result.canceled || result.filePath === '') return false
+  await writeFile(result.filePath, markdown, { encoding: 'utf8', flag: 'w', mode: 0o600 })
+  return true
 }
 
 function cleanupWatcher(contents: WebContents): void {
@@ -173,6 +196,10 @@ function registerIpc(): void {
     if (typeof attachmentId !== 'string') throw new TypeError('A valid attachment id is required')
     if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
     return draftStore.discard(scopeId, attachmentId)
+  })
+  ipcMain.handle(IPC_CHANNELS.exportChatRecord, async (event, suggestedName: unknown, markdown: unknown) => {
+    assertTrustedSender(event)
+    return exportChatRecord(suggestedName, markdown)
   })
   ipcMain.handle(IPC_CHANNELS.watchSource, async (event, sourceId: unknown) => {
     assertTrustedSender(event)

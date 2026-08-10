@@ -35,6 +35,7 @@ export interface DesktopState {
   readonly saveRequirementDraft: (scopeId: string, draft: RequirementDraftSnapshot) => Promise<void>
   readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
   readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
+  readonly exportChatRecord: (suggestedName: string, markdown: string) => Promise<boolean>
   readonly refresh: () => Promise<void>
   readonly sendCommand: (command: OperatorCommand) => Promise<CommandReceipt>
 }
@@ -152,6 +153,15 @@ export function useDesktop(): DesktopState {
     }
   }, [bridge])
 
+  const exportChatRecord = useCallback(async (suggestedName: string, markdown: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.exportChatRecord(suggestedName, markdown)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
   const selectDraftFolders = useCallback(async (scopeId: string) => {
     if (bridge === undefined) throw new Error('桌面桥接未加载')
     try {
@@ -219,6 +229,9 @@ export function useDesktop(): DesktopState {
     if (bridge === undefined) throw new Error('桌面桥接未加载')
     const receipt = await bridge.sendCommand(command)
     setHandshake((current) => ({ ...current, stateRevision: Math.max(current.stateRevision, receipt.stateRevision) }))
+    void bridge.getEngineHandshake()
+      .then(setHandshake)
+      .catch(() => undefined)
     return receipt
   }, [bridge])
 
@@ -238,7 +251,8 @@ export function useDesktop(): DesktopState {
     saveRequirementDraft,
     moveRequirementDraft,
     discardDraftAttachment,
+    exportChatRecord,
     refresh,
     sendCommand
-  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, refresh, sendCommand])
+  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportChatRecord, refresh, sendCommand])
 }

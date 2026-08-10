@@ -1,7 +1,7 @@
-import { useCallback, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { OperatorAction } from '../../shared/protocol'
 import type { CommandDispatcher, CommandRequest } from './command-types'
-import { createOperatorCommand, hasCapability, sameProjectPath, type NavigationKey } from './domain'
+import { createOperatorCommand, hasCapability, packetCounts, sameProjectPath, type NavigationKey } from './domain'
 import { useDesktop } from './useDesktop'
 import { Sidebar } from '../../panels/Sidebar'
 import { Topbar } from '../../panels/Topbar'
@@ -14,8 +14,39 @@ import { DependencyView } from '../../views/DependencyView'
 import { CostView } from '../../views/CostView'
 import { RolesView } from '../../views/RolesView'
 import { DeliveryView } from '../../views/DeliveryView'
+import { ConversationsView, HelpView, ResourceLibraryView, SettingsView } from '../../views/WorkbenchViews'
+import {
+  createTaskSession,
+  historyForAgent,
+  loadTaskSessions,
+  loadWorkbenchPreferences,
+  saveTaskSessions,
+  saveWorkbenchPreferences,
+  taskDraftScope,
+  updateTaskFromDraft,
+  type TaskContextSelection,
+  type TaskSession,
+  type WorkbenchPreferences
+} from './task-library'
 
 let fallbackCommandCounter = 0
+const SIDEBAR_WIDTH_KEY = 'codentum.sidebar.width.v1'
+const MIN_SIDEBAR_WIDTH = 220
+const MAX_SIDEBAR_WIDTH = 420
+
+function clampSidebarWidth(width: number): number {
+  const viewportMaximum = typeof window === 'undefined' ? MAX_SIDEBAR_WIDTH : Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 480)
+  return Math.round(Math.min(Math.min(MAX_SIDEBAR_WIDTH, viewportMaximum), Math.max(MIN_SIDEBAR_WIDTH, width)))
+}
+
+function loadSidebarWidth(): number {
+  try {
+    const stored = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? '', 10)
+    return Number.isFinite(stored) ? clampSidebarWidth(stored) : 288
+  } catch {
+    return 288
+  }
+}
 
 function warningCopy(warning: string): string {
   if (warning.startsWith('[missing] State directory is unavailable:')) {
@@ -34,7 +65,134 @@ export function App(): ReactNode {
   const desktop = useDesktop()
   const [navigation, setNavigation] = useState<NavigationKey>('home')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
+  const [sidebarResizing, setSidebarResizing] = useState(false)
   const [focusedWorkerId, setFocusedWorkerId] = useState<string | null>(null)
+  const [tasks, setTasks] = useState<readonly TaskSession[]>(loadTaskSessions)
+  const [preferences, setPreferences] = useState<WorkbenchPreferences>(loadWorkbenchPreferences)
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const currentSourceId = desktop.selectedSourceId ?? 'unassigned'
+  const sourceTasks = tasks
+    .filter((task) => task.sourceId === currentSourceId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  const activeTask = sourceTasks.find((task) => task.id === activeTaskId)
+  const counts = packetCounts(desktop.snapshot?.packets ?? [])
+  const packetTotal = desktop.snapshot?.packets.length ?? 0
+  const completedPackets = counts.accepted + counts.abandoned
+  const activeWorkers = desktop.snapshot?.workers.filter((worker) =>
+    worker.state === 'running' || worker.state === 'starting'
+  ).length ?? 0
+
+  useEffect(() => {
+    saveTaskSessions(tasks)
+  }, [tasks])
+
+  useEffect(() => {
+    saveWorkbenchPreferences(preferences)
+  }, [preferences])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth))
+    } catch {
+      // The current width still works for this session when storage is unavailable.
+    }
+  }, [sidebarWidth])
+
+  const resizeSidebar = useCallback((clientX: number): void => {
+    setSidebarWidth(clampSidebarWidth(clientX))
+  }, [])
+
+  const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (sidebarCollapsed || event.button !== 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setSidebarResizing(true)
+    resizeSidebar(event.clientX)
+  }, [resizeSidebar, sidebarCollapsed])
+
+  const moveSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (!sidebarResizing || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+    resizeSidebar(event.clientX)
+  }, [resizeSidebar, sidebarResizing])
+
+  const stopSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    setSidebarResizing(false)
+  }, [])
+
+  const resizeSidebarWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const next = event.key === 'ArrowLeft' ? sidebarWidth - 8
+      : event.key === 'ArrowRight' ? sidebarWidth + 8
+        : event.key === 'Home' ? MIN_SIDEBAR_WIDTH
+          : event.key === 'End' ? MAX_SIDEBAR_WIDTH
+            : null
+    if (next === null) return
+    event.preventDefault()
+    setSidebarWidth(clampSidebarWidth(next))
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    if (activeTask !== undefined) return
+    const existing = sourceTasks[0]
+    if (existing !== undefined) {
+      setActiveTaskId(existing.id)
+      return
+    }
+    const created = createTaskSession(currentSourceId, preferences)
+    setTasks((current) => [...current, created])
+    setActiveTaskId(created.id)
+  }, [activeTask, currentSourceId, preferences, sourceTasks])
+
+  const updateTask = useCallback((taskId: string, updater: (task: TaskSession) => TaskSession): void => {
+    setTasks((current) => current.map((task) => task.id === taskId ? updater(task) : task))
+  }, [])
+
+  const createNewTask = useCallback((): void => {
+    const created = createTaskSession(currentSourceId, preferences)
+    setTasks((current) => [...current, created])
+    setActiveTaskId(created.id)
+    setNavigation('home')
+  }, [currentSourceId, preferences])
+
+  const selectTask = useCallback((taskId: string): void => {
+    setActiveTaskId(taskId)
+    setNavigation('home')
+  }, [])
+
+  const updateActiveContext = useCallback((context: TaskContextSelection): void => {
+    if (activeTaskId === null) return
+    updateTask(activeTaskId, (task) => ({ ...task, context, updatedAt: new Date().toISOString() }))
+  }, [activeTaskId, updateTask])
+
+  const exportActiveChat = useCallback(async (): Promise<boolean> => {
+    if (activeTask === undefined) return false
+    const draft = await desktop.loadRequirementDraft(taskDraftScope(activeTask))
+    const attachmentLines = draft.attachments.length === 0
+      ? ['- 无']
+      : draft.attachments.map((attachment) => `- ${attachment.name} (${attachment.kind === 'folder' ? `${attachment.fileCount} 个文件` : `${attachment.sizeBytes} bytes`}, SHA-256 ${attachment.sha256})`)
+    const context = activeTask.context
+    const markdown = [
+      `# ${activeTask.title}`,
+      '',
+      `- Task ID: ${activeTask.id}`,
+      `- 项目来源: ${activeTask.sourceId}`,
+      `- 状态: ${activeTask.status === 'submitted' ? '已提交' : '草稿'}`,
+      `- 模式: ${context.connectivityMode === 'online' ? '联网' : '本地'}`,
+      `- 访问权限: ${context.accessMode}`,
+      `- 创建时间: ${activeTask.createdAt}`,
+      `- 更新时间: ${activeTask.updatedAt}`,
+      '',
+      '## 需求记录',
+      '',
+      draft.text.trim() || '（尚未输入）',
+      '',
+      '## 引用文件',
+      '',
+      ...attachmentLines,
+      ''
+    ].join('\n')
+    return desktop.exportChatRecord(activeTask.title, markdown)
+  }, [activeTask, desktop])
 
   const openWorker = useCallback((workerId: string): void => {
     setFocusedWorkerId(workerId)
@@ -74,7 +232,9 @@ export function App(): ReactNode {
   let view: ReactNode
   switch (navigation) {
     case 'home':
-      view = (
+      view = activeTask === undefined ? (
+        <div className="task-preparing" role="status">正在准备独立任务空间…</div>
+      ) : (
         <HomeView
           snapshot={desktop.snapshot}
           handshake={desktop.handshake}
@@ -85,8 +245,17 @@ export function App(): ReactNode {
           saveRequirementDraft={desktop.saveRequirementDraft}
           moveRequirementDraft={desktop.moveRequirementDraft}
           discardDraftAttachment={desktop.discardDraftAttachment}
+          task={activeTask}
+          draftScope={taskDraftScope(activeTask)}
+          taskHistory={historyForAgent(sourceTasks, activeTask.id)}
+          onTaskDraftChange={(text) => updateTask(activeTask.id, (task) => updateTaskFromDraft(task, text))}
+          onTaskAttachmentNamesChange={(attachmentNames) => updateTask(activeTask.id, (task) => ({ ...task, attachmentNames, updatedAt: new Date().toISOString() }))}
+          onTaskContextChange={(context: TaskContextSelection) => updateTask(activeTask.id, (task) => ({ ...task, context, updatedAt: new Date().toISOString() }))}
+          onTaskSubmitted={() => updateTask(activeTask.id, (task) => ({ ...task, status: 'submitted', updatedAt: new Date().toISOString() }))}
           onOpenExecution={() => setNavigation('execution')}
           onOpenBoard={() => setNavigation('board')}
+          onSearchChat={() => setNavigation('conversations')}
+          onExportChat={exportActiveChat}
         />
       )
       break
@@ -119,11 +288,54 @@ export function App(): ReactNode {
     case 'delivery':
       view = <DeliveryView snapshot={desktop.snapshot} />
       break
+    case 'conversations':
+      view = <ConversationsView tasks={sourceTasks} activeTaskId={activeTask?.id ?? null} onSelectTask={selectTask} onNewTask={createNewTask} />
+      break
+    case 'plugins':
+    case 'knowledge':
+    case 'skills':
+      view = <ResourceLibraryView kind={navigation} task={activeTask} onContextChange={updateActiveContext} />
+      break
+    case 'settings':
+      view = <SettingsView preferences={preferences} onChange={setPreferences} />
+      break
+    case 'help':
+      view = <HelpView snapshot={desktop.snapshot} onOpenAgents={() => setNavigation('roles')} />
+      break
   }
 
   return (
-    <div className={`app-shell${sidebarCollapsed ? ' sidebar-is-collapsed' : ''}`}>
-      <Sidebar active={navigation} snapshot={desktop.snapshot} onNavigate={setNavigation} onSelectWorker={openWorker} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)} />
+    <div
+      className={`app-shell${sidebarCollapsed ? ' sidebar-is-collapsed' : ''}${sidebarResizing ? ' sidebar-is-resizing' : ''}`}
+      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+    >
+      <Sidebar
+        active={navigation}
+        snapshot={desktop.snapshot}
+        tasks={sourceTasks}
+        activeTaskId={activeTask?.id ?? null}
+        onNavigate={setNavigation}
+        onSelectWorker={openWorker}
+        onNewTask={createNewTask}
+        onSelectTask={selectTask}
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((current) => !current)}
+      />
+      <div
+        className="sidebar-resizer"
+        role="separator"
+        aria-label="调整侧栏宽度"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_SIDEBAR_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        aria-valuenow={sidebarWidth}
+        tabIndex={sidebarCollapsed ? -1 : 0}
+        onPointerDown={startSidebarResize}
+        onPointerMove={moveSidebarResize}
+        onPointerUp={stopSidebarResize}
+        onPointerCancel={stopSidebarResize}
+        onKeyDown={resizeSidebarWithKeyboard}
+      />
       <div className="app-workspace">
         <Topbar
           sources={desktop.sources}
@@ -140,6 +352,16 @@ export function App(): ReactNode {
           {desktop.snapshot?.warnings.map((warning, index) => <div className="global-warning" key={`${warning}-${index}`}><WarningNotice message={warningCopy(warning)} /></div>)}
           {desktop.loading ? <div className="loading-line" aria-label="正在读取状态"><span /></div> : null}
           {view}
+          {packetTotal > 0 && completedPackets < packetTotal ? (
+            <div className="run-progress-dock" aria-live="polite">
+              <div className="run-progress-pill">
+                <span className={`run-progress-wheel${activeWorkers > 0 ? ' active' : ''}`} aria-hidden="true" />
+                <span>{completedPackets} / {packetTotal} 个任务已完成</span>
+                <span className="run-progress-separator">·</span>
+                <span>{activeWorkers > 0 ? `${activeWorkers} 个 Worker 正在执行` : '等待执行'}</span>
+              </div>
+            </div>
+          ) : null}
           <footer className="content-footer">
             <span>只读状态：{desktop.snapshot?.revision ?? '—'}</span>
             <span>读取时间：{desktop.snapshot === null ? '—' : new Date(desktop.snapshot.readAt).toLocaleString('zh-CN')}</span>

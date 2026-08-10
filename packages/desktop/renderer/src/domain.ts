@@ -18,6 +18,12 @@ export type NavigationKey =
   | 'cost'
   | 'roles'
   | 'delivery'
+  | 'conversations'
+  | 'plugins'
+  | 'knowledge'
+  | 'skills'
+  | 'settings'
+  | 'help'
 
 export interface NavigationItem {
   readonly id: NavigationKey
@@ -29,6 +35,10 @@ export const NAVIGATION: readonly NavigationItem[] = [
   { id: 'home', label: '新任务', icon: 'plus' },
   { id: 'execution', label: '执行中心', icon: 'pulse' },
   { id: 'board', label: '任务看板', icon: 'board' },
+  { id: 'conversations', label: '对话', icon: 'chat' },
+  { id: 'plugins', label: '插件', icon: 'plug' },
+  { id: 'knowledge', label: '知识库', icon: 'book' },
+  { id: 'skills', label: 'Skills', icon: 'spark' },
   { id: 'waves', label: '依赖波次', icon: 'waves' },
   { id: 'dependency', label: '依赖关系', icon: 'graph' },
   { id: 'cost', label: '成本', icon: 'wallet' },
