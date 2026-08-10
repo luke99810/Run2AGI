@@ -1,0 +1,13 @@
+{
+  "model": "qwen-coder-plus-1106",
+  "prompt_digest": "sha256:70df196b3de3a838df3261afc9d8a777fdfd346baf4b224e0d0da73419ffb2cb",
+  "prompt_manifest_path": "prompt/manifest.json",
+  "response_path": "response.txt",
+  "role": "coder",
+  "session_id": "openai-compatible-8ebfe62034dc4ba7a126c8fbb7c591b6",
+  "spent_cny": 0.0,
+  "status": "completed",
+  "stop_reason": "end",
+  "tool_calls_path": "tool_calls.json",
+  "usage_path": "usage.json"
+}

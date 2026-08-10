@@ -1,0 +1,38 @@
+{
+  "id": "wp-rm0001",
+  "kind": "impl",
+  "state": "accepted",
+  "role": "coder",
+  "ownsPaths": [
+    "src/app/"
+  ],
+  "readsPaths": [
+    "tests/"
+  ],
+  "deps": [],
+  "acceptance": {
+    "kind": "test",
+    "predicate": "pytest",
+    "authoredBy": "qa"
+  },
+  "budget": {
+    "currency": "CNY",
+    "limitCny": 1.0,
+    "spentCny": 0.0,
+    "degradationChain": [
+      "drop_semantic"
+    ]
+  },
+  "routing": {
+    "model": "qwen-coder-plus-1106",
+    "effort": "medium"
+  },
+  "attempts": 1,
+  "evidence": [
+    "file:model\\result.json"
+  ],
+  "provenance": {
+    "createdBy": "planner",
+    "createdAt": "2026-08-10T00:00:00Z"
+  }
+}
