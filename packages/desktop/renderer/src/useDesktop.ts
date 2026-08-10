@@ -4,6 +4,7 @@ import type {
   DraftAttachment,
   EngineHandshake,
   OperatorCommand,
+  ProjectSelectionKind,
   RequirementDraftSnapshot,
   SnapshotSourceDescriptor,
   StateSnapshot
@@ -28,7 +29,7 @@ export interface DesktopState {
   readonly loading: boolean
   readonly error: string | null
   readonly selectSource: (sourceId: string) => void
-  readonly selectProject: () => Promise<void>
+  readonly selectProject: (kind: ProjectSelectionKind) => Promise<void>
   readonly selectDraftFiles: (scopeId: string) => Promise<RequirementDraftSnapshot>
   readonly selectDraftFolders: (scopeId: string) => Promise<RequirementDraftSnapshot>
   readonly loadRequirementDraft: (scopeId: string) => Promise<RequirementDraftSnapshot>
@@ -122,11 +123,11 @@ export function useDesktop(): DesktopState {
     }
   }, [bridge, selectedSourceId])
 
-  const selectProject = useCallback(async () => {
+  const selectProject = useCallback(async (kind: ProjectSelectionKind) => {
     if (bridge === undefined) return
     setError(null)
     try {
-      const source = await bridge.selectProject()
+      const source = await bridge.selectProject(kind)
       if (source === null) return
       setSources((current) => [
         ...current.filter((item) => item.kind !== 'project'),

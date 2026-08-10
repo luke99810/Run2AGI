@@ -145,7 +145,6 @@ export function HomeView({
         )}
         <RequirementComposer
           canSubmit={requirementAvailable}
-          canAddFiles={snapshot !== null}
           {...(requirementUnavailableReason === undefined ? {} : { unavailableReason: requirementUnavailableReason })}
           taskId={task.id}
           draftScope={draftScope}

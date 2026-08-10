@@ -80,7 +80,6 @@ function formatFileSize(bytes: number): string {
 
 export function RequirementComposer({
   canSubmit,
-  canAddFiles,
   unavailableReason,
   taskId,
   draftScope,
@@ -100,7 +99,6 @@ export function RequirementComposer({
   discardDraftAttachment
 }: {
   readonly canSubmit: boolean
-  readonly canAddFiles: boolean
   readonly unavailableReason?: string
   readonly taskId: string
   readonly draftScope: string
@@ -234,7 +232,7 @@ export function RequirementComposer({
 
   async function addAttachment(kind: DraftAttachment['kind']): Promise<void> {
     const scope = activeScope.current
-    if (!canAddFiles || scope === null) return
+    if (scope === null) return
     setAttachmentMenuOpen(false)
     setSelectingKind(kind)
     setError(null)
@@ -364,13 +362,13 @@ export function RequirementComposer({
             aria-label="添加附件"
             aria-haspopup="menu"
             aria-expanded={attachmentMenuOpen}
-            disabled={!canAddFiles || loadingDraft || selectingKind !== null || draft.attachments.length >= MAX_DRAFT_ATTACHMENTS}
+            disabled={loadingDraft || selectingKind !== null || draft.attachments.length >= MAX_DRAFT_ATTACHMENTS}
             onClick={() => {
               setAccessMenuOpen(false)
               setContextMenuOpen(false)
               setAttachmentMenuOpen((open) => !open)
             }}
-            title={canAddFiles ? '添加附件' : '草稿尚未就绪'}
+            title="添加附件"
           ><Icon name="plus" size={21} /></button>
           {attachmentMenuOpen ? (
             <div className="attachment-menu" role="menu" aria-label="添加附件">

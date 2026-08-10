@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createTaskSession,
   historyForAgent,
+  searchTaskSessions,
   taskDraftScope,
   taskRequestsValidation,
   toggleSelection,
@@ -35,6 +36,14 @@ describe('task library', () => {
     expect(historyForAgent([first, second], second.id)).toEqual([
       expect.objectContaining({ taskId: first.id, summary: '实现一个可以管理订阅费用的软件' })
     ])
+  })
+
+  it('searches local conversations by title, requirement text, and attachment name', () => {
+    const base = createTaskSession('unassigned', { defaultAccessMode: 'read_only' }, new Date('2026-08-10T00:00:00.000Z'))
+    const task = { ...updateTaskFromDraft(base, '实现一个本地文件分析工具'), attachmentNames: ['需求清单.xlsx'] }
+    expect(searchTaskSessions([task], '文件分析')).toEqual([task])
+    expect(searchTaskSessions([task], '需求清单.xlsx')).toEqual([task])
+    expect(searchTaskSessions([task], '不存在')).toEqual([])
   })
 
   it('toggles resource ids without duplicates', () => {

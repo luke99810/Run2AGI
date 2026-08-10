@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import {
   app,
   BrowserWindow,
@@ -15,7 +15,7 @@ import {
 } from 'electron'
 import { StateHub } from '../../data'
 import { IPC_CHANNELS } from '../../shared/ipc'
-import { MAX_DRAFT_ATTACHMENTS, type EngineHandshake, type OperatorAction, type OperatorCommand } from '../../shared/protocol'
+import { MAX_DRAFT_ATTACHMENTS, type EngineHandshake, type OperatorAction, type OperatorCommand, type ProjectSelectionKind } from '../../shared/protocol'
 import { SidecarManager } from './python-engine/SidecarManager'
 import { RequirementDraftStore } from './requirement-draft-store'
 
@@ -57,6 +57,10 @@ function assertSourceId(value: unknown): asserts value is string {
   }
 }
 
+function assertProjectSelectionKind(value: unknown): asserts value is ProjectSelectionKind {
+  if (value !== 'file' && value !== 'folder') throw new TypeError('A valid project selection kind is required')
+}
+
 function assertCommand(value: unknown): asserts value is OperatorCommand {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new TypeError('Invalid command envelope')
   const command = value as Record<string, unknown>
@@ -81,16 +85,17 @@ function fixtureRoot(): string {
     : resolve(app.getAppPath(), '..', '..', 'fixtures', 'golden-state')
 }
 
-async function chooseProject(): Promise<Awaited<ReturnType<StateHub['selectProject']>> | null> {
+async function chooseProject(kind: ProjectSelectionKind): Promise<Awaited<ReturnType<StateHub['selectProject']>> | null> {
   if (mainWindow === undefined || stateHub === undefined) return null
+  const selectingFile = kind === 'file'
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '打开 Codentum 项目',
-    buttonLabel: '打开项目',
-    properties: ['openDirectory']
+    title: selectingFile ? '选择任意文件' : '选择项目文件夹',
+    buttonLabel: selectingFile ? '打开文件' : '打开文件夹',
+    properties: selectingFile ? ['openFile', 'dontAddToRecent'] : ['openDirectory', 'dontAddToRecent']
   })
   const selected = result.filePaths[0]
   if (result.canceled || selected === undefined) return null
-  const descriptor = await stateHub.selectProject(selected)
+  const descriptor = await stateHub.selectProject(selectingFile ? dirname(selected) : selected)
   if (descriptor.rootPath === undefined) throw new Error('Selected project did not provide a canonical root path')
   const projectBindableSidecar = sidecar as (SidecarManager & {
     bindProject?: (projectRoot: string) => Promise<EngineHandshake>
@@ -157,9 +162,10 @@ function registerIpc(): void {
     if (stateHub === undefined) throw new Error('State source is unavailable')
     return stateHub.read(sourceId)
   })
-  ipcMain.handle(IPC_CHANNELS.selectProject, async (event) => {
+  ipcMain.handle(IPC_CHANNELS.selectProject, async (event, kind: unknown) => {
     assertTrustedSender(event)
-    return chooseProject()
+    assertProjectSelectionKind(kind)
+    return chooseProject(kind)
   })
   ipcMain.handle(IPC_CHANNELS.selectDraftFiles, async (event, scopeId: unknown) => {
     assertTrustedSender(event)
@@ -237,7 +243,7 @@ function createApplicationMenu(): void {
     {
       label: '文件',
       submenu: [
-        { label: '打开项目…', accelerator: 'CmdOrCtrl+O', click: () => void chooseProject() },
+        { label: '打开项目文件夹…', accelerator: 'CmdOrCtrl+O', click: () => void chooseProject('folder') },
         { type: 'separator' },
         { role: 'quit', label: '退出 Codentum' }
       ]

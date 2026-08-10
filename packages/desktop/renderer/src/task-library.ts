@@ -39,6 +39,14 @@ export function taskRequestsValidation(task: Pick<TaskSession, 'title' | 'previe
   return /(?:测试|验证|验收|集成|test|tests|testing|verify|validation|integration|qa)/iu.test(`${task.title} ${task.preview}`)
 }
 
+export function searchTaskSessions(tasks: readonly TaskSession[], query: string): readonly TaskSession[] {
+  const normalized = query.trim().toLocaleLowerCase('zh-CN')
+  if (normalized === '') return tasks
+  return tasks.filter((task) =>
+    `${task.title} ${task.preview} ${task.attachmentNames.join(' ')}`.toLocaleLowerCase('zh-CN').includes(normalized)
+  )
+}
+
 export interface ResourceOption {
   readonly id: string
   readonly label: string

@@ -5,7 +5,7 @@ import { IPC_CHANNELS } from '../../shared/ipc'
 const bridge: DesktopBridge = {
   listSources: () => ipcRenderer.invoke(IPC_CHANNELS.listSources),
   readSnapshot: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.readSnapshot, sourceId),
-  selectProject: () => ipcRenderer.invoke(IPC_CHANNELS.selectProject),
+  selectProject: (kind) => ipcRenderer.invoke(IPC_CHANNELS.selectProject, kind),
   selectDraftFiles: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.selectDraftFiles, scopeId),
   selectDraftFolders: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.selectDraftFolders, scopeId),
   loadRequirementDraft: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.loadRequirementDraft, scopeId),
