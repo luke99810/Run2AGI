@@ -176,7 +176,6 @@ export function App(): ReactNode {
       `- Task ID: ${activeTask.id}`,
       `- 项目来源: ${activeTask.sourceId}`,
       `- 状态: ${activeTask.status === 'submitted' ? '已提交' : '草稿'}`,
-      `- 模式: ${context.connectivityMode === 'online' ? '联网' : '本地'}`,
       `- 访问权限: ${context.accessMode}`,
       `- 创建时间: ${activeTask.createdAt}`,
       `- 更新时间: ${activeTask.updatedAt}`,
@@ -190,7 +189,7 @@ export function App(): ReactNode {
       ...attachmentLines,
       ''
     ].join('\n')
-    return desktop.exportChatRecord(activeTask.title, markdown)
+    return desktop.exportTaskRecord(activeTask.title, markdown)
   }, [activeTask, desktop])
 
   const openWorker = useCallback((workerId: string): void => {

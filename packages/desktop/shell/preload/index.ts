@@ -12,7 +12,7 @@ const bridge: DesktopBridge = {
   saveRequirementDraft: (scopeId, draft) => ipcRenderer.invoke(IPC_CHANNELS.saveRequirementDraft, scopeId, draft),
   moveRequirementDraft: (sourceScopeId, targetScopeId) => ipcRenderer.invoke(IPC_CHANNELS.moveRequirementDraft, sourceScopeId, targetScopeId),
   discardDraftAttachment: (scopeId, attachmentId) => ipcRenderer.invoke(IPC_CHANNELS.discardDraftAttachment, scopeId, attachmentId),
-  exportChatRecord: (suggestedName, markdown) => ipcRenderer.invoke(IPC_CHANNELS.exportChatRecord, suggestedName, markdown),
+  exportTaskRecord: (suggestedName, markdown) => ipcRenderer.invoke(IPC_CHANNELS.exportTaskRecord, suggestedName, markdown),
   watchSource: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.watchSource, sourceId),
   onSnapshot: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: StateSnapshot): void => listener(snapshot)

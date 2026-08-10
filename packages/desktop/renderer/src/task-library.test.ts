@@ -18,7 +18,7 @@ describe('task library', () => {
     )
     expect(taskDraftScope(task)).toMatch(/^project:1234567890abcdef12345678:task:[0-9a-f-]{36}$/u)
     expect(task.context.accessMode).toBe('workspace_write')
-    expect(task.context.connectivityMode).toBe('local')
+    expect(task.context).not.toHaveProperty('connectivityMode')
     expect(task.attachmentNames).toEqual([])
   })
 

@@ -8,7 +8,7 @@ export const IPC_CHANNELS = {
   saveRequirementDraft: 'codentum:draft:save-requirement',
   moveRequirementDraft: 'codentum:draft:move-requirement',
   discardDraftAttachment: 'codentum:draft:discard-attachment',
-  exportChatRecord: 'codentum:chat:export-record',
+  exportTaskRecord: 'codentum:task:export-record',
   watchSource: 'codentum:state:watch-source',
   snapshotChanged: 'codentum:state:snapshot-changed',
   engineHandshake: 'codentum:engine:handshake',

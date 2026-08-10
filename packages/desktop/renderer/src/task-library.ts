@@ -1,10 +1,8 @@
 export type TaskSessionStatus = 'draft' | 'submitted'
 export type AccessMode = 'read_only' | 'workspace_write' | 'full_access'
-export type ConnectivityMode = 'local' | 'online'
 
 export interface TaskContextSelection {
   readonly accessMode: AccessMode
-  readonly connectivityMode: ConnectivityMode
   readonly pluginIds: readonly string[]
   readonly knowledgeIds: readonly string[]
   readonly skillIds: readonly string[]
@@ -76,7 +74,6 @@ const TASK_STORAGE_KEY = 'codentum.desktop.task-sessions.v1'
 const PREFERENCE_STORAGE_KEY = 'codentum.desktop.workbench-preferences.v1'
 const DEFAULT_CONTEXT: TaskContextSelection = {
   accessMode: 'workspace_write',
-  connectivityMode: 'local',
   pluginIds: ['local-files', 'git'],
   knowledgeIds: ['project-knowledge', 'task-history'],
   skillIds: [],
@@ -101,10 +98,6 @@ function isAccessMode(value: unknown): value is AccessMode {
   return value === 'read_only' || value === 'workspace_write' || value === 'full_access'
 }
 
-function isConnectivityMode(value: unknown): value is ConnectivityMode {
-  return value === 'local' || value === 'online'
-}
-
 function parseContext(value: unknown): TaskContextSelection | null {
   if (typeof value !== 'object' || value === null) return null
   const record = value as Record<string, unknown>
@@ -117,7 +110,6 @@ function parseContext(value: unknown): TaskContextSelection | null {
   ) return null
   return {
     accessMode: record['accessMode'],
-    connectivityMode: isConnectivityMode(record['connectivityMode']) ? record['connectivityMode'] : 'local',
     pluginIds: [...new Set(record['pluginIds'])],
     knowledgeIds: [...new Set(record['knowledgeIds'])],
     skillIds: [...new Set(record['skillIds'])],

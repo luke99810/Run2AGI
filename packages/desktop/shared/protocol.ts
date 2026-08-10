@@ -143,7 +143,7 @@ export interface DesktopBridge {
   saveRequirementDraft(scopeId: string, draft: RequirementDraftSnapshot): Promise<void>
   moveRequirementDraft(sourceScopeId: string, targetScopeId: string): Promise<RequirementDraftSnapshot>
   discardDraftAttachment(scopeId: string, attachmentId: string): Promise<RequirementDraftSnapshot>
-  exportChatRecord(suggestedName: string, markdown: string): Promise<boolean>
+  exportTaskRecord(suggestedName: string, markdown: string): Promise<boolean>
   watchSource(sourceId: string): Promise<void>
   onSnapshot(listener: (snapshot: StateSnapshot) => void): () => void
   getEngineHandshake(): Promise<EngineHandshake>

@@ -357,22 +357,19 @@ async function exerciseInteractiveDetails(client, navigation) {
       summary.click()
       return [...document.querySelectorAll('.chat-actions button strong')].map((node) => node.textContent?.trim())
     })()`, 'open chat actions menu')
-    if (!chatMenuLabels.includes('搜索聊天记录') || !chatMenuLabels.includes('导出聊天记录')) {
+    if (!chatMenuLabels.includes('搜索任务记录') || !chatMenuLabels.includes('导出任务记录')) {
       throw new Error(`Chat actions menu is incomplete: ${JSON.stringify(chatMenuLabels)}`)
     }
     await evaluate(client, `document.querySelector('.chat-actions')?.removeAttribute('open')`, 'close chat actions menu')
-    const connectivity = await evaluate(client, `(() => {
-      const buttons = [...document.querySelectorAll('.connectivity-switch button')]
-      const online = buttons.find((button) => button.textContent?.trim() === '联网')
-      if (!(online instanceof HTMLButtonElement)) return false
-      online.click()
-      return true
-    })()`, 'select online mode')
-    if (!connectivity) {
-      throw new Error(`Online mode gating is incorrect: ${JSON.stringify(connectivity)}`)
+    const removedConnectivityMode = await evaluate(client, `(() => {
+      const composer = document.querySelector('.requirement-composer')
+      return composer !== null &&
+        composer.querySelector('.connectivity-switch') === null &&
+        ![...composer.querySelectorAll('button')].some((button) => ['本地', '联网'].includes(button.textContent?.trim() ?? ''))
+    })()`, 'verify removed connectivity mode')
+    if (!removedConnectivityMode) {
+      throw new Error('Removed connectivity mode is still visible')
     }
-    await waitFor(client, `[...document.querySelectorAll('.connectivity-switch button')].some((button) => button.textContent?.trim() === '联网' && button.getAttribute('aria-checked') === 'true') && document.querySelector('.send-button')?.disabled === true`, 'online mode gating')
-    await evaluate(client, `([...document.querySelectorAll('.connectivity-switch button')].find((button) => button.textContent?.trim() === '本地'))?.click()`, 'restore local mode')
     await waitFor(client, `document.querySelector('#requirement-input')?.value === '离线草稿输入验证'`, 'offline draft input')
     const divider = await evaluate(client, `(() => {
       const handle = document.querySelector('.sidebar-resizer')

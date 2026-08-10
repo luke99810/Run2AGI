@@ -130,13 +130,13 @@ async function chooseDraftFolders(scopeId: string): Promise<Awaited<ReturnType<R
   return draftStore.addFolders(scopeId, result.filePaths)
 }
 
-async function exportChatRecord(suggestedName: unknown, markdown: unknown): Promise<boolean> {
+async function exportTaskRecord(suggestedName: unknown, markdown: unknown): Promise<boolean> {
   if (mainWindow === undefined) return false
   if (typeof suggestedName !== 'string' || suggestedName.length < 1 || suggestedName.length > 160) throw new TypeError('Invalid export filename')
   if (typeof markdown !== 'string' || Buffer.byteLength(markdown, 'utf8') > 5 * 1024 * 1024) throw new TypeError('Invalid chat export')
   const safeName = suggestedName.replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_').replace(/[. ]+$/u, '').slice(0, 120) || 'Codentum-chat'
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: '导出聊天记录',
+    title: '导出任务记录',
     defaultPath: `${safeName}.md`,
     buttonLabel: '导出',
     filters: [{ name: 'Markdown', extensions: ['md'] }]
@@ -203,9 +203,9 @@ function registerIpc(): void {
     if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
     return draftStore.discard(scopeId, attachmentId)
   })
-  ipcMain.handle(IPC_CHANNELS.exportChatRecord, async (event, suggestedName: unknown, markdown: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.exportTaskRecord, async (event, suggestedName: unknown, markdown: unknown) => {
     assertTrustedSender(event)
-    return exportChatRecord(suggestedName, markdown)
+    return exportTaskRecord(suggestedName, markdown)
   })
   ipcMain.handle(IPC_CHANNELS.watchSource, async (event, sourceId: unknown) => {
     assertTrustedSender(event)
