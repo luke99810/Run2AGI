@@ -416,7 +416,9 @@ class MemoryIndex(Protocol):
 # 1. ★★ 预算一律用【货币】，不用 token。
 #    不同模型家族的分词器差异可达 ~30%。异构路由下按 token 记预算会静默失真，
 #    而且失真方向随路由变化 —— 查都没法查。所以本节【没有】任何
-#    token_budget / max_tokens 之类的预算字段，只有 usd。
+#    token_budget / max_tokens 之类的预算字段，只有 cny。
+#    （2026-08-06 起口径由 usd 改为 cny，见 ADR-0006。字段是
+#     limit_cny / spent_cny / cost_cny / grant_cny。）
 #
 # 2. ★★ 同一次尝试内不许换模型。
 #    提示词缓存是按模型分桶的，中途换模型 = 整个前缀冷重写，

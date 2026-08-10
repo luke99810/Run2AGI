@@ -32,11 +32,14 @@ members:
     responsibility: 控制平面 + 契约 + 集成仲裁 + 不变量守护
   B:
     role: 执行层
-    gitAuthor: null            # ← B 用 `git config user.name` 查到后填这里
+    gitAuthor: jjc             # 取自 git log 实际 commit（16 次全部为 jjc <18722611216@163.com>）
     responsibility: Harness + 角色实现 + 进化层（P4 起）
   C:
     role: 产品层
-    gitAuthor: null            # ← C 同上
+    # ⚠️ C 换过 user.name：zxy123（08-08 04:32）→ 赵心怡（08-08 19:12），同一邮箱
+    #    3444579730@qq.com。这里填的是最近一次的值，需 C 本人跑 `git config user.name`
+    #    核对；若她本机仍是 zxy123，改这里而不是改 commit。
+    gitAuthor: 赵心怡
     responsibility: 桌面端 + 交付链路
 
 modules:
