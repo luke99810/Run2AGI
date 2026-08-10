@@ -69,11 +69,13 @@ def test_prompt_bundle_is_stable_and_writes_manifest(tmp_path: Path) -> None:
     )
 
     assert first == second
-    manifest = json.loads((tmp_path / "evidence-a" / "prompt" / "manifest.json").read_text())
+    manifest = json.loads(
+        (tmp_path / "evidence-a" / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
     assert manifest["digest"] == first.digest
     assert manifest["context_refs"] == ["diff"]
-    assert (tmp_path / "evidence-a" / "prompt" / "system.md").read_text() == first.system
-    assert (tmp_path / "evidence-a" / "prompt" / "user.md").read_text() == first.user
+    assert (tmp_path / "evidence-a" / "prompt" / "system.md").read_text(encoding="utf-8") == first.system
+    assert (tmp_path / "evidence-a" / "prompt" / "user.md").read_text(encoding="utf-8") == first.user
     assert load_worker_prompt_bundle(tmp_path / "evidence-a") == first
 
 

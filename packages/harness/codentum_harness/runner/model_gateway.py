@@ -206,7 +206,8 @@ def _write_result(model_dir: Path, result: dict[str, object]) -> EvidenceRef:
         encoding="utf-8",
     )
     worker_evidence = model_dir.parent
-    return EvidenceRef(f"file:{(model_dir / 'result.json').relative_to(worker_evidence)}")
+    result_path = (model_dir / "result.json").relative_to(worker_evidence).as_posix()
+    return EvidenceRef(f"file:{result_path}")
 
 
 def _session_spent_cny(session: ModelSession) -> float:
