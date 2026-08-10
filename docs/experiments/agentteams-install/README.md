@@ -55,6 +55,66 @@ Ports:
 - `element-login.png`
 - `higress-console.png`
 - `agentteams-dashboard.png`
+- `manager-console-before-worker.png`
+- `manager-console-worker-request-sent.png`
+- `manager-console-worker-response.png`
+
+## Worker Creation Smoke
+
+Date: 2026-08-10 23:58 CST
+
+Goal: move beyond "the AgentTeams services open in a browser" and verify that the local manager substrate can create a Worker resource.
+
+The browser-based Manager Console accepted the request text but showed a transient `Channel Console not found` message, so the deterministic verification path used the official AgentTeams CLI inside `agentteams-controller`.
+
+Command:
+
+```text
+docker exec agentteams-controller agt create worker --name coder --runtime copaw --model qwen3.6-plus --identity 'Python development worker for Codentum local AgentTeams verification.' --wait-timeout 5m
+```
+
+Result caveat: the create command timed out waiting for the stricter Ready hook, but the resource and container reached Running:
+
+```text
+Error: worker/coder did not become ready within 5m0s (last status: phase=Running, state=running, message=backend=docker status=running)
+```
+
+Follow-up status checks:
+
+```text
+$ docker exec agentteams-controller agt get workers
+NAME   PHASE    MODEL         TEAM  RUNTIME
+coder  Running  qwen3.6-plus  -     copaw
+
+$ docker exec agentteams-controller agt worker ensure-ready --name coder
+worker/coder phase=Running
+```
+
+Worker status:
+
+```json
+{
+  "name": "coder",
+  "phase": "Running",
+  "containerManaged": true,
+  "state": "Running",
+  "model": "qwen3.6-plus",
+  "runtime": "copaw",
+  "identity": "Python development worker for Codentum local AgentTeams verification.",
+  "containerState": "running",
+  "matrixUserID": "@coder:matrix-local.agentteams.io:18080",
+  "roomID": "!CVKRikpAGdYOI9FlUJ:matrix-local.agentteams.io:18080",
+  "message": "backend=docker status=running"
+}
+```
+
+Running Worker container:
+
+```text
+agentteams-worker-coder  higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.2
+```
+
+Conclusion: AgentTeams local Worker resource creation is smoke-verified at the resource/container level. The Ready hook timeout remains a caveat and should not be described as full Team-mode integration.
 
 ## Local Secret Locations
 
