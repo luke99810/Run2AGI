@@ -3,6 +3,7 @@ import {
   createTaskSession,
   historyForAgent,
   taskDraftScope,
+  taskRequestsValidation,
   toggleSelection,
   updateTaskFromDraft
 } from './task-library'
@@ -39,5 +40,11 @@ describe('task library', () => {
   it('toggles resource ids without duplicates', () => {
     expect(toggleSelection(['git'], 'browser')).toEqual(['git', 'browser'])
     expect(toggleSelection(['git', 'browser'], 'git')).toEqual(['browser'])
+  })
+
+  it('only enables integration and validation for an explicit request', () => {
+    expect(taskRequestsValidation({ title: '调整桌面布局', preview: '让对话区域占满可用宽度' })).toBe(false)
+    expect(taskRequestsValidation({ title: '验证上传功能', preview: '运行文件导入测试并给出结果' })).toBe(true)
+    expect(taskRequestsValidation({ title: 'Run QA', preview: 'verify the integration flow' })).toBe(true)
   })
 })

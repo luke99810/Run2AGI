@@ -79,12 +79,13 @@ function EventTimeline({ worker }: { readonly worker: WorkerProjection }): React
   )
 }
 
-export function ExecutionView({ snapshot, handshake, dispatch, focusedWorkerId, onFocusHandled }: {
+export function ExecutionView({ snapshot, handshake, dispatch, focusedWorkerId, onFocusHandled, embedded = false }: {
   readonly snapshot: StateSnapshot | null
   readonly handshake: EngineHandshake
   readonly dispatch: CommandDispatcher
   readonly focusedWorkerId: string | null
   readonly onFocusHandled: () => void
+  readonly embedded?: boolean
 }): ReactNode {
   const workers = snapshot?.workers ?? []
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null)
@@ -115,11 +116,15 @@ export function ExecutionView({ snapshot, handshake, dispatch, focusedWorkerId, 
 
   return (
     <div className="page execution-view">
-      <PageHeader
-        eyebrow="Worker 事件投影"
-        title="执行中心"
-        description="读取 Worker manifest 与事件；运行控制只在引擎明确开放能力时出现。"
-      />
+      {embedded ? (
+        <div className="embedded-view-heading"><span>实时执行</span><h2>Agent 模块与调控</h2></div>
+      ) : (
+        <PageHeader
+          eyebrow="Worker 事件投影"
+          title="执行中心"
+          description="读取 Worker manifest 与事件；运行控制只在引擎明确开放能力时出现。"
+        />
+      )}
       {snapshot?.source.kind === 'fixture' ? <div className="fixture-notice"><Icon name="warning" size={18} /><span>当前是演示快照。这里的数据不会控制任何真实 Agent。</span></div> : null}
       {snapshot === null ? (
         <EmptyState title="还没有项目状态" detail="打开本地项目后，这里会展示状态文件中的 Worker。" icon="folder" />

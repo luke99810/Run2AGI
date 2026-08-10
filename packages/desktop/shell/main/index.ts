@@ -306,7 +306,11 @@ function createWindow(): BrowserWindow {
 }
 
 void app.whenReady().then(async () => {
-  stateHub = new StateHub({ fixtureRoot: fixtureRoot(), pollIntervalMs: 1_000, staleAfterMs: 30_000 })
+  stateHub = new StateHub({
+    fixtureRoot: process.env['CODENTUM_ENABLE_FIXTURES'] === '1' ? fixtureRoot() : null,
+    pollIntervalMs: 1_000,
+    staleAfterMs: 30_000
+  })
   draftStore = new RequirementDraftStore(resolve(app.getPath('userData'), 'requirement-drafts'))
   await draftStore.initialize()
   sidecar = new SidecarManager(app)

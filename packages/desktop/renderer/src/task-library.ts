@@ -35,6 +35,10 @@ export interface WorkbenchPreferences {
   readonly defaultAccessMode: AccessMode
 }
 
+export function taskRequestsValidation(task: Pick<TaskSession, 'title' | 'preview'>): boolean {
+  return /(?:测试|验证|验收|集成|test|tests|testing|verify|validation|integration|qa)/iu.test(`${task.title} ${task.preview}`)
+}
+
 export interface ResourceOption {
   readonly id: string
   readonly label: string

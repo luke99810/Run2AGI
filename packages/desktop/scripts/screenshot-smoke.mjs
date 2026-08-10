@@ -27,7 +27,7 @@ const FIXTURE_IDS = [
 const SCREENSHOTS = [
   { name: '01-home.png', navigation: '新对话', heading: '要做什么软件？' },
   { name: '02-execution.png', navigation: '执行中心', heading: '执行中心' },
-  { name: '03-board.png', navigation: '任务看板', heading: '任务看板' },
+  { name: '03-validation.png', navigation: '集成与验证', heading: '集成与验证' },
   { name: '04-dependency.png', navigation: '依赖关系', heading: '依赖关系' },
   { name: '05-cost.png', navigation: '成本', heading: '成本' },
   { name: '06-team.png', navigation: '研发团队', heading: '研发团队' }
@@ -329,6 +329,23 @@ async function exerciseInteractiveDetails(client, navigation) {
     if (!composer.text.includes('附件直接引用原位置')) {
       throw new Error(`Offline composer did not explain draft availability: ${JSON.stringify(composer)}`)
     }
+    const progress = await evaluate(client, `(() => {
+      const details = document.querySelector('.conversation-progress')
+      const summary = details?.querySelector('summary')
+      if (!(details instanceof HTMLDetailsElement) || !(summary instanceof HTMLElement)) return null
+      const collapsed = summary.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+      details.open = true
+      const rows = details.querySelectorAll('.conversation-progress-list button').length
+      details.open = false
+      return { collapsed, rows }
+    })()`, 'inspect conversation task progress')
+    if (progress === null || !progress.collapsed.includes('第 2 / 5 步') || progress.rows !== 5) {
+      throw new Error(`Conversation task progress is incomplete: ${JSON.stringify(progress)}`)
+    }
+    await waitFor(client, `(() => {
+      const button = [...document.querySelectorAll('.primary-nav button')].find((item) => item.textContent?.includes('集成与验证'))
+      return button instanceof HTMLButtonElement && !button.disabled
+    })()`, 'validation navigation to follow explicit task intent')
     await waitFor(client, `document.querySelector('.attachment-menu') !== null`, 'attachment menu')
     const menuLabels = await evaluate(client, `([...document.querySelectorAll('.attachment-menu strong')].map((node) => node.textContent?.trim()))`, 'read attachment menu labels')
     if (!menuLabels.includes('添加文件') || !menuLabels.includes('添加文件夹')) {
@@ -374,16 +391,6 @@ async function exerciseInteractiveDetails(client, navigation) {
   }
   if (navigation === '执行中心') {
     await waitFor(client, `document.body.innerText.includes('没有真实 Worker 投影') || document.querySelectorAll('.worker-card').length > 0`, 'an honest execution projection')
-  }
-  if (navigation === '任务看板') {
-    const clicked = await evaluate(client, `(() => {
-      const card = document.querySelector('.kanban-cards button')
-      if (!(card instanceof HTMLButtonElement)) return false
-      card.click()
-      return true
-    })()`, 'open a board task')
-    if (!clicked) throw new Error('The mid-flight board did not expose a clickable task card.')
-    await waitFor(client, `document.querySelector('.read-detail-panel')?.innerText.includes('任务详情')`, 'board task detail')
   }
   if (navigation === '依赖关系') {
     const clicked = await evaluate(client, `(() => {
@@ -439,6 +446,7 @@ async function main() {
   delete environment.ELECTRON_RUN_AS_NODE
   delete environment.ELECTRON_RENDERER_URL
   environment.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
+  environment.CODENTUM_ENABLE_FIXTURES = '1'
 
   const child = spawn(electronExecutable, [
     `--remote-debugging-port=${port}`,

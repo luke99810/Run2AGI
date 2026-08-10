@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import type { OperatorAction } from '../../shared/protocol'
 import type { CommandDispatcher, CommandRequest } from './command-types'
-import { createOperatorCommand, hasCapability, packetCounts, sameProjectPath, type NavigationKey } from './domain'
+import { createOperatorCommand, hasCapability, sameProjectPath, type NavigationKey } from './domain'
 import { useDesktop } from './useDesktop'
 import { Sidebar } from '../../panels/Sidebar'
 import { Topbar } from '../../panels/Topbar'
 import { ErrorNotice, WarningNotice } from '../../panels/Common'
 import { HomeView } from '../../views/HomeView'
 import { ExecutionView } from '../../views/ExecutionView'
-import { BoardView } from '../../views/BoardView'
 import { WavesView } from '../../views/WavesView'
 import { DependencyView } from '../../views/DependencyView'
 import { CostView } from '../../views/CostView'
@@ -23,6 +22,7 @@ import {
   saveTaskSessions,
   saveWorkbenchPreferences,
   taskDraftScope,
+  taskRequestsValidation,
   updateTaskFromDraft,
   type TaskContextSelection,
   type TaskSession,
@@ -30,9 +30,9 @@ import {
 } from './task-library'
 
 let fallbackCommandCounter = 0
-const SIDEBAR_WIDTH_KEY = 'codentum.sidebar.width.v1'
-const MIN_SIDEBAR_WIDTH = 220
-const MAX_SIDEBAR_WIDTH = 420
+const SIDEBAR_WIDTH_KEY = 'codentum.sidebar.width.v2'
+const MIN_SIDEBAR_WIDTH = 200
+const MAX_SIDEBAR_WIDTH = 380
 
 function clampSidebarWidth(width: number): number {
   const viewportMaximum = typeof window === 'undefined' ? MAX_SIDEBAR_WIDTH : Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - 480)
@@ -42,9 +42,9 @@ function clampSidebarWidth(width: number): number {
 function loadSidebarWidth(): number {
   try {
     const stored = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? '', 10)
-    return Number.isFinite(stored) ? clampSidebarWidth(stored) : 288
+    return Number.isFinite(stored) ? clampSidebarWidth(stored) : 248
   } catch {
-    return 288
+    return 248
   }
 }
 
@@ -76,12 +76,7 @@ export function App(): ReactNode {
     .filter((task) => task.sourceId === currentSourceId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   const activeTask = sourceTasks.find((task) => task.id === activeTaskId)
-  const counts = packetCounts(desktop.snapshot?.packets ?? [])
-  const packetTotal = desktop.snapshot?.packets.length ?? 0
-  const completedPackets = counts.accepted + counts.abandoned
-  const activeWorkers = desktop.snapshot?.workers.filter((worker) =>
-    worker.state === 'running' || worker.state === 'starting'
-  ).length ?? 0
+  const validationEnabled = activeTask !== undefined && taskRequestsValidation(activeTask)
 
   useEffect(() => {
     saveTaskSessions(tasks)
@@ -90,6 +85,10 @@ export function App(): ReactNode {
   useEffect(() => {
     saveWorkbenchPreferences(preferences)
   }, [preferences])
+
+  useEffect(() => {
+    if (navigation === 'delivery' && !validationEnabled) setNavigation('home')
+  }, [navigation, validationEnabled])
 
   useEffect(() => {
     try {
@@ -253,7 +252,6 @@ export function App(): ReactNode {
           onTaskContextChange={(context: TaskContextSelection) => updateTask(activeTask.id, (task) => ({ ...task, context, updatedAt: new Date().toISOString() }))}
           onTaskSubmitted={() => updateTask(activeTask.id, (task) => ({ ...task, status: 'submitted', updatedAt: new Date().toISOString() }))}
           onOpenExecution={() => setNavigation('execution')}
-          onOpenBoard={() => setNavigation('board')}
           onSearchChat={() => setNavigation('conversations')}
           onExportChat={exportActiveChat}
         />
@@ -270,9 +268,6 @@ export function App(): ReactNode {
         />
       )
       break
-    case 'board':
-      view = <BoardView snapshot={desktop.snapshot} />
-      break
     case 'waves':
       view = <WavesView snapshot={desktop.snapshot} />
       break
@@ -283,10 +278,22 @@ export function App(): ReactNode {
       view = <CostView snapshot={desktop.snapshot} />
       break
     case 'roles':
-      view = <RolesView snapshot={desktop.snapshot} />
+      view = (
+        <div className="team-combined-view">
+          <RolesView snapshot={desktop.snapshot} />
+          <ExecutionView
+            snapshot={desktop.snapshot}
+            handshake={desktop.handshake}
+            dispatch={dispatch}
+            focusedWorkerId={focusedWorkerId}
+            onFocusHandled={() => setFocusedWorkerId(null)}
+            embedded
+          />
+        </div>
+      )
       break
     case 'delivery':
-      view = <DeliveryView snapshot={desktop.snapshot} />
+      view = <DeliveryView snapshot={desktop.snapshot} enabled={validationEnabled} />
       break
     case 'conversations':
       view = <ConversationsView tasks={sourceTasks} activeTaskId={activeTask?.id ?? null} onSelectTask={selectTask} onNewTask={createNewTask} />
@@ -314,6 +321,7 @@ export function App(): ReactNode {
         snapshot={desktop.snapshot}
         tasks={sourceTasks}
         activeTaskId={activeTask?.id ?? null}
+        validationEnabled={validationEnabled}
         onNavigate={setNavigation}
         onSelectWorker={openWorker}
         onNewTask={createNewTask}
@@ -352,16 +360,6 @@ export function App(): ReactNode {
           {desktop.snapshot?.warnings.map((warning, index) => <div className="global-warning" key={`${warning}-${index}`}><WarningNotice message={warningCopy(warning)} /></div>)}
           {desktop.loading ? <div className="loading-line" aria-label="正在读取状态"><span /></div> : null}
           {view}
-          {packetTotal > 0 && completedPackets < packetTotal ? (
-            <div className="run-progress-dock" aria-live="polite">
-              <div className="run-progress-pill">
-                <span className={`run-progress-wheel${activeWorkers > 0 ? ' active' : ''}`} aria-hidden="true" />
-                <span>{completedPackets} / {packetTotal} 个任务已完成</span>
-                <span className="run-progress-separator">·</span>
-                <span>{activeWorkers > 0 ? `${activeWorkers} 个 Worker 正在执行` : '等待执行'}</span>
-              </div>
-            </div>
-          ) : null}
           <footer className="content-footer">
             <span>只读状态：{desktop.snapshot?.revision ?? '—'}</span>
             <span>读取时间：{desktop.snapshot === null ? '—' : new Date(desktop.snapshot.readAt).toLocaleString('zh-CN')}</span>
