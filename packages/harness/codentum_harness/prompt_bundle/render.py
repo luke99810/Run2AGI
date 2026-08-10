@@ -11,6 +11,7 @@ from pathlib import Path
 
 from codentum_contracts.interfaces import ModelMessage, ModelRequest, SpawnRequest
 from codentum_contracts.state import Effort, RoleSpec
+from codentum_roles import RolePromptLoadError, load_role_prompt
 
 from codentum_harness.context_broker import ContextBundle
 
@@ -116,6 +117,7 @@ def load_worker_prompt_bundle(evidence_dir: Path | str) -> WorkerPromptBundle:
 
 
 def _render_system(role_spec: RoleSpec) -> str:
+    role_prompt = _role_prompt_section(role_spec)
     lines = [
         "# Codentum Worker",
         "",
@@ -130,8 +132,25 @@ def _render_system(role_spec: RoleSpec) -> str:
         "Hard constraints live in RoleSpec, mounts, tool surface, and gates. "
         "This prompt is orientation only.",
         "",
+        *role_prompt,
     ]
     return "\n".join(lines)
+
+
+def _role_prompt_section(role_spec: RoleSpec) -> list[str]:
+    try:
+        role_prompt = load_role_prompt(role_spec)
+    except RolePromptLoadError as exc:
+        raise PromptBundleError(str(exc)) from exc
+
+    if role_prompt is None:
+        return []
+    return [
+        "## Role Prompt",
+        "",
+        role_prompt.rstrip(),
+        "",
+    ]
 
 
 def _render_user(request: SpawnRequest, *, context: ContextBundle | None) -> str:

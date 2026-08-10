@@ -1,0 +1,18 @@
+{
+  "id": "manager",
+  "summary": "协调 packet 调度、预算与阻塞恢复，产出可追溯决策。",
+  "usesModel": true,
+  "promptRef": "manager.md",
+  "writes": [".codentum/decisions/**", "evidence/manager/**"],
+  "reads": [".codentum/packets/**", ".codentum/graph.json", "docs/项目进展与记忆.md"],
+  "tools": ["read_state", "prioritize_packets", "rebalance_budget", "write_decision", "request_human_approval"],
+  "transitions": [
+    { "from": "blocked", "to": "ready", "requiresGate": "evidence_exists" },
+    { "from": "rejected", "to": "ready", "requiresGate": "evidence_exists" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus-2025-11-05",
+    "defaultEffort": "medium"
+  }
+}

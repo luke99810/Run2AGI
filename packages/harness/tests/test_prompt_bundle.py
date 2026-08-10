@@ -12,6 +12,7 @@ from codentum_harness.prompt_bundle import (
     load_worker_prompt_bundle,
     write_worker_prompt_bundle,
 )
+from codentum_roles import default_specs_dir, load_role_spec_file
 
 
 def request(workspace: Path, *, role: RoleId = "reviewer") -> SpawnRequest:
@@ -119,6 +120,15 @@ def test_prompt_bundle_can_be_converted_to_model_request(tmp_path: Path) -> None
     assert model_request.system == bundle.system
     assert model_request.messages[0].content == bundle.user
     assert model_request.effort == "high"
+
+
+def test_prompt_bundle_includes_rolespec_prompt_ref(tmp_path: Path) -> None:
+    coder_spec = load_role_spec_file(default_specs_dir() / "coder.json")
+
+    bundle = assemble_worker_prompt_bundle(request(tmp_path / "worker", role="coder"), coder_spec)
+
+    assert "## Role Prompt" in bundle.system
+    assert "Coder Prompt" in bundle.system
 
 
 def test_prompt_bundle_loader_rejects_digest_mismatch(tmp_path: Path) -> None:

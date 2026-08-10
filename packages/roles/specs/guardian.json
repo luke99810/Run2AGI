@@ -1,0 +1,10 @@
+{
+  "id": "guardian",
+  "summary": "确定性守门人，检查不变量、边界与运行时策略，不调用模型。",
+  "usesModel": false,
+  "promptRef": "guardian.md",
+  "writes": ["evidence/guardian/**"],
+  "reads": ["packages/contracts/**", "boundaries.yaml", ".codentum/packets/**"],
+  "tools": ["read_state", "check_invariants", "check_boundaries", "write_guardian_report"],
+  "transitions": []
+}

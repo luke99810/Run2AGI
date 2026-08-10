@@ -1,0 +1,17 @@
+{
+  "id": "intake",
+  "summary": "把人话需求澄清成可验收 brief，显式记录假设与 wont-have。",
+  "usesModel": true,
+  "promptRef": "intake.md",
+  "writes": ["brief/**"],
+  "reads": ["docs/00-总体设计方案.md", "docs/02-实施路线与交付计划.md", "fixtures/**"],
+  "tools": ["ask_human", "read_reference", "write_brief", "check_slots"],
+  "transitions": [
+    { "from": "running", "to": "review", "requiresGate": "evidence_exists" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus-2025-11-05",
+    "defaultEffort": "medium"
+  }
+}

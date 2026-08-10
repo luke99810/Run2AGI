@@ -13,9 +13,12 @@ from codentum_contracts.state import RoleId, RoleSpec
 from pydantic import ValidationError
 
 __all__ = [
+    "RolePromptLoadError",
     "RoleSpecLoadError",
+    "default_prompts_dir",
     "default_specs_dir",
     "load_builtin_role_specs",
+    "load_role_prompt",
     "load_role_spec_file",
     "load_role_specs_dir",
 ]
@@ -25,9 +28,35 @@ class RoleSpecLoadError(ValueError):
     """RoleSpec 无法加载或违反 schema 外约束。"""
 
 
+class RolePromptLoadError(ValueError):
+    """RoleSpec.promptRef 无法解析或读取。"""
+
+
 def default_specs_dir() -> Path:
     """仓库内置 RoleSpec 目录。"""
     return Path(__file__).resolve().parents[1] / "specs"
+
+
+def default_prompts_dir() -> Path:
+    """仓库内置角色 prompt 目录。"""
+    return Path(__file__).resolve().parents[1] / "prompts"
+
+
+def load_role_prompt(spec: RoleSpec, prompts_dir: Path | str | None = None) -> str | None:
+    """读取 RoleSpec.promptRef 指向的角色提示词。
+
+    prompt 是软性方向, 不是硬约束; 没有 promptRef 的临时测试 RoleSpec 仍允许加载。
+    但一旦声明了 promptRef, 就必须能解析到 prompts/ 下的普通文件, 避免路径穿越
+    或 dangling prompt 静默进入模型输入。
+    """
+    if spec.promptRef is None:
+        return None
+
+    prompt_path = _resolve_prompt_ref(spec.promptRef, prompts_dir or default_prompts_dir())
+    try:
+        return prompt_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RolePromptLoadError(f"无法读取 RoleSpec[{spec.id}] prompt: {prompt_path}") from exc
 
 
 def load_role_spec_file(path: Path | str) -> RoleSpec:
@@ -81,3 +110,23 @@ def _reject_duplicate_roles(specs: tuple[RoleSpec, ...]) -> None:
         if spec.id in seen:
             raise RoleSpecLoadError(f"RoleSpec 重复定义: {spec.id}")
         seen.add(spec.id)
+
+
+def _resolve_prompt_ref(prompt_ref: str, prompts_dir: Path | str) -> Path:
+    ref = Path(prompt_ref)
+    if ref.is_absolute():
+        raise RolePromptLoadError(f"promptRef 不允许使用绝对路径: {prompt_ref!r}")
+    if any(part in {"", ".", ".."} for part in ref.parts):
+        raise RolePromptLoadError(f"promptRef 不允许路径穿越或空路径片段: {prompt_ref!r}")
+    if ref.suffix != ".md":
+        raise RolePromptLoadError(f"promptRef 暂只支持 .md 文件: {prompt_ref!r}")
+
+    root = Path(prompts_dir)
+    path = root / ref
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise RolePromptLoadError(f"promptRef 必须位于 prompts/ 下: {prompt_ref!r}") from exc
+    if not path.is_file():
+        raise RolePromptLoadError(f"promptRef 指向的文件不存在: {prompt_ref!r}")
+    return path

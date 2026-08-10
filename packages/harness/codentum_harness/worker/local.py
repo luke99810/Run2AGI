@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -74,19 +74,20 @@ class LocalWorkerRuntime:
 
     def _prepare(self, req: SpawnRequest) -> PreparedExecution:
         spec = self._load_role_spec(req.role)
+        effective_req = req if req.tools else replace(req, tools=tuple(spec.tools))
         context = None
         if self._context_loader is not None:
             assert self._context_char_budget is not None
             context = assemble_context_bundle(
                 spec,
-                candidates=self._context_loader(req, spec),
+                candidates=self._context_loader(effective_req, spec),
                 char_budget=self._context_char_budget,
             )
         return PreparedExecution(
-            request=req,
+            request=effective_req,
             role_spec=spec,
-            tools=tuple(req.tools),
-            mount_paths=tuple(m.mount_path for m in req.mounts),
+            tools=tuple(effective_req.tools),
+            mount_paths=tuple(m.mount_path for m in effective_req.mounts),
             context=context,
         )
 

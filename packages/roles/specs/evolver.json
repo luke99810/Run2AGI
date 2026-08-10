@@ -1,0 +1,24 @@
+{
+  "id": "evolver",
+  "summary": "从失败与评审证据中沉淀候选 Skill、规则和改进建议。",
+  "usesModel": true,
+  "promptRef": "evolver.md",
+  "writes": ["packages/roles/skills/**", "evidence/evolution/**"],
+  "reads": ["evidence/reviews/**", "evidence/test-reports/**", "docs/adr/**", "packages/roles/specs/**"],
+  "tools": [
+    "read_trace",
+    "cluster_failures",
+    "write_skill_candidate",
+    "write_evolution_report",
+    "propose_rule"
+  ],
+  "transitions": [
+    { "from": "running", "to": "review", "requiresGate": "evidence_exists" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus-2025-11-05",
+    "defaultEffort": "high",
+    "batchEligible": true
+  }
+}

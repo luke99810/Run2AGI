@@ -132,6 +132,31 @@ def test_spawn_writes_evidence_manifest_and_event_log(git_repo: Path, tmp_path: 
     assert events[1]["payload"]["path"] == "checkpoints/0000.json"
 
 
+def test_spawn_fills_empty_tools_from_rolespec(git_repo: Path, tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    empty_tools_req = request(workspace)
+    empty_tools_req = SpawnRequest(
+        packet_id=empty_tools_req.packet_id,
+        role=empty_tools_req.role,
+        mounts=empty_tools_req.mounts,
+        tools=(),
+        routing=empty_tools_req.routing,
+        budget=empty_tools_req.budget,
+        workspace=empty_tools_req.workspace,
+        attempt=empty_tools_req.attempt,
+    )
+    runtime = LocalWorkerRuntime(repo_root=git_repo, role_specs=(role_spec(),))
+
+    handle = asyncio.run(runtime.spawn(empty_tools_req))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+
+    manifest = json.loads((evidence_dir / "manifest.json").read_text(encoding="utf-8"))
+    user_prompt = (evidence_dir / "prompt" / "user.md").read_text(encoding="utf-8")
+    assert manifest["tools"] == ["read_file", "write_file"]
+    assert "- read_file" in user_prompt
+    assert "- write_file" in user_prompt
+
+
 def test_spawn_prepares_context_into_checkpoint_with_single_public_entrypoint(
     git_repo: Path,
     tmp_path: Path,
