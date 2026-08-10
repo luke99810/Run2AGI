@@ -145,6 +145,69 @@ def test_model_gateway_runner_records_non_end_stop_reason_as_failure(git_repo: P
     assert result["stop_reason"] == "refusal"
 
 
+def test_model_gateway_runner_treats_blocker_report_as_failure(git_repo: Path) -> None:
+    req = request(git_repo)
+    evidence_root = git_repo / ".codentum" / "evidence" / "wp-abcdef-attempt-1"
+    write_worker_prompt_bundle(
+        request=req,
+        role_spec=role_spec(),
+        evidence_dir=evidence_root,
+    )
+    response = ModelResponse(
+        text=(
+            "### Blocker Report\n\n"
+            "The visible context does not provide any specific details about the task "
+            "or the changes that need to be made."
+        ),
+        tool_calls=(),
+        stop_reason="end",
+        usage=Usage(
+            cost_cny=0.07,
+            input_tokens=13,
+            output_tokens=11,
+            cached_input_tokens=0,
+        ),
+    )
+
+    outcome = ModelGatewayRunner(FakeGateway(response))(req)
+
+    assert isinstance(outcome, WorkerFailed)
+    assert outcome.reason_code == "acceptance_not_met"
+    assert outcome.spent_cny == 0.07
+    result = json.loads((evidence_root / "model" / "result.json").read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
+    assert result["error"] == "blocker_report"
+    assert result["detail"] == "explicit blocker heading"
+
+
+def test_model_gateway_runner_allows_non_blocker_completion(git_repo: Path) -> None:
+    req = request(git_repo)
+    evidence_root = git_repo / ".codentum" / "evidence" / "wp-abcdef-attempt-1"
+    write_worker_prompt_bundle(
+        request=req,
+        role_spec=role_spec(),
+        evidence_dir=evidence_root,
+    )
+    response = ModelResponse(
+        text="Implemented blocker report handling in the runner.",
+        tool_calls=(),
+        stop_reason="end",
+        usage=Usage(
+            cost_cny=0.03,
+            input_tokens=10,
+            output_tokens=6,
+            cached_input_tokens=0,
+        ),
+    )
+
+    outcome = ModelGatewayRunner(FakeGateway(response))(req)
+
+    assert isinstance(outcome, WorkerCompleted)
+    result = json.loads((evidence_root / "model" / "result.json").read_text(encoding="utf-8"))
+    assert result["status"] == "completed"
+    assert "error" not in result
+
+
 def success_response() -> ModelResponse:
     return ModelResponse(
         text="done",

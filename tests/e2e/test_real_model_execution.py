@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001, RUF002, RUF003
 """P0+ 判据：真实模型在控制平面内跑完一个 WorkPacket。
 
 ════════════════════════════════════════════════════════════════
@@ -73,9 +74,10 @@ deps / acceptance / budget / routing / attempts / evidence / provenance。
 这正是 §十五 推论 2 说的那件事：**「可判定」不等于「判得出差别」。**
 一条永远返回 true 的验收谓词也是机器可判定的。
 
-下面 `test_blocker_report_should_not_be_accepted` 用 xfail(strict=True) 钉住
-缺陷二 —— 它现在**预期失败**；一旦有人把它修好，strict 会让它变红，
-提醒把这条 xfail 摘掉。**不用普通断言，是因为那会把缺陷写成"预期行为"。**
+`packages/harness/tests/test_model_gateway_runner.py` 用假 gateway 钉住缺陷二：
+明确的 blocker 报告必须转成 `WorkerFailed(acceptance_not_met)`。下面的真实模型
+测试只在模型本次确实返回 blocker 时检查「不得 accepted」；如果模型没有返回 blocker，
+就跳过这条内容型断言，避免把模型随机行为写成稳定判据。
 """
 
 from __future__ import annotations
@@ -84,9 +86,9 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from shutil import which
 
 import pytest
-
 from codentum_contracts.state import PacketId, WorkPacket, dump_state
 from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.reconcile import ReconcileLoop
@@ -126,17 +128,31 @@ requires_key = pytest.mark.skipif(
 
 
 def _git_init(path: Path) -> None:
-    for cmd in (
-        ["git", "init", "-q"],
-        ["git", "config", "user.email", "e2e@codentum.local"],
-        ["git", "config", "user.name", "codentum-e2e"],
+    for args in (
+        ("init", "-q"),
+        ("config", "user.email", "e2e@codentum.local"),
+        ("config", "user.name", "codentum-e2e"),
     ):
-        subprocess.run(cmd, cwd=path, check=True, capture_output=True)
+        _run_git(path, *args)
     (path / ".gitkeep").write_text("", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "e2e base"], cwd=path, check=True, capture_output=True
+    _run_git(path, "add", "-A")
+    _run_git(path, "commit", "-q", "-m", "e2e base")
+
+
+def _run_git(path: Path, *args: str) -> None:
+    subprocess.run(  # noqa: S603 - fixed git executable, shell=False.
+        [_git(), *args],
+        cwd=path,
+        check=True,
+        capture_output=True,
     )
+
+
+def _git() -> str:
+    exe = which("git")
+    if exe is None:
+        raise RuntimeError("git executable not found")
+    return exe
 
 
 @pytest.fixture
@@ -284,17 +300,6 @@ def test_model_response_is_not_empty(project: Path) -> None:
 
 
 @requires_key
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "★ 已知缺陷（2026-08-10 首次真跑发现）：worker 自陈 blocker 仍被验收。"
-        "runner 按 stop_reason=end 判 completed，验收只看「有非 sys: 证据」，"
-        "于是「我做不了」这份报告成了交付物。"
-        "修法需要设计决定（验收谓词要能判出差别 / 契约要不要加任务描述字段），"
-        "不是一处补丁 —— 见 docs/项目进展与记忆.md 待办 22。"
-        "strict=True：修好之后这条会变红，提醒摘掉 xfail。"
-    ),
-)
 def test_blocker_report_should_not_be_accepted(project: Path) -> None:
     """模型明确说「上下文不足、干不了」时，packet 不该走到 accepted。"""
     state_dir = project / ".codentum"
@@ -324,6 +329,20 @@ def test_blocker_report_should_not_be_accepted(project: Path) -> None:
     # 这个 packet 没有任何任务描述（契约里也没有能放它的字段），
     # 模型只能报 blocker。那么它不该被判为「干完了」。
     final = loop.packet(PacketId("wp-rm0003"))
+    workspace = project.parent / "codentum-workers" / "wp-rm0003" / "attempt-1"
+    result_files = list(workspace.rglob(".codentum/evidence/*/model/result.json"))
+    assert result_files, "没有模型证据目录"
+    result = json.loads(result_files[0].read_text(encoding="utf-8"))
+    body = (result_files[0].parent / "response.txt").read_text(encoding="utf-8").lower()
+    explicit_blocker = (
+        result.get("error") == "blocker_report"
+        or "blocker report" in body
+        or ("visible context" in body and "does not provide" in body)
+    )
+    if not explicit_blocker:
+        pytest.skip("真实模型本次没有返回明确 blocker；确定性 blocker 判定由 runner 单测覆盖")
+
+    assert result["status"] == "failed"
     assert final.state != "accepted", (
         "worker 报了 blocker 却被验收 —— 「我做不了」被当成了交付物"
     )
