@@ -182,3 +182,80 @@ class TestRegisterBuiltinGates:
         for gate_id in runner.registered:
             v = runner.check(gate_id, pkt)
             assert not v.passed, f"{gate_id} should fail without evidence"
+
+# ════════════════════════════════════════════════════════════════
+#  ★ 回归防线：门禁不许拿控制面自己的簿记当证据
+#
+#  08-09 在 `_try_review_to_accepted` 的**兜底分支**修掉了「系统自己给
+#  自己签字」——packet 手上那条 `sys:lock:<pid>` 是 `_try_ready_to_running`
+#  自己写的，当时被当成了验收依据。
+#
+#  但门禁分支没修，而它在 `_try_review_to_accepted` 里**优先于**兜底分支。
+#  于是出现了一个反直觉的结果：**配了 gate_runner 的系统比没配的更松** ——
+#  打开护栏这个动作，反而绕过了那次修复。
+#
+#  这一组用例守的就是这件事。把 `builtin.py` 里的 `acceptance_evidence(...)`
+#  换回 `packet.evidence`，它们必须变红。
+# ════════════════════════════════════════════════════════════════
+
+class TestGatesRejectSysBookkeeping:
+    """sys: 前缀的簿记流水不能充当任何门禁的通过依据。"""
+
+    def test_all_gates_reject_sys_only_evidence(self) -> None:
+        runner = GateRunner()
+        register_builtin_gates(runner)
+        # 只有控制面自己写的锁簿记 —— 正是 08-09 那个缺陷的现场
+        pkt = _pkt(evidence=("sys:lock:wp-gate001:3",))
+        for gate_id in runner.registered:
+            v = runner.check(gate_id, pkt)
+            assert not v.passed, (
+                f"{gate_id} 拿 sys: 簿记当证据放行了 —— "
+                f"系统自己给自己签字。detail={v.detail!r}"
+            )
+
+    def test_all_gates_reject_worker_failure_marker(self) -> None:
+        """worker 明确失败过的 packet，任何门禁都不许放行。
+
+        ★ 判据要点：即使同时带着真实证据也不行。失败标记是**否决项**，
+          不是「再找一条好证据就能盖过去」的加权项。
+        """
+        runner = GateRunner()
+        register_builtin_gates(runner)
+        pkt = _pkt(evidence=(
+            "file:runner/result.json",
+            "sys:worker-failed:wp-gate001:runtime_error",
+        ))
+        for gate_id in runner.registered:
+            v = runner.check(gate_id, pkt)
+            assert not v.passed, (
+                f"{gate_id} 放行了一个 worker 失败过的 packet：{v.detail!r}"
+            )
+
+    def test_real_evidence_still_passes(self) -> None:
+        """★ 对照组：修复不能靠「把所有东西都拒掉」达成。
+
+        没有这一条，上面两条用「永远返回 False」也能全绿 ——
+        那种绿灯与「判得准」无关。
+        """
+        runner = GateRunner()
+        register_builtin_gates(runner)
+        pkt = _pkt(evidence=("sys:lock:wp-gate001:3", "file:runner/result.json"))
+        for gate_id in runner.registered:
+            v = runner.check(gate_id, pkt)
+            assert v.passed, f"{gate_id} 把真实证据也拒了：{v.detail!r}"
+
+    def test_passing_verdict_does_not_cite_sys_refs(self) -> None:
+        """通过时给出的 evidence_refs 里不能混进 sys: 簿记。
+
+        它会被写进 packet 的验收依据，成为「凭什么放行」的记录。
+        混进簿记等于把系统自己的流水写成了外部证明。
+        """
+        runner = GateRunner()
+        register_builtin_gates(runner)
+        pkt = _pkt(evidence=("sys:lock:wp-gate001:3", "file:runner/result.json"))
+        for gate_id in runner.registered:
+            v = runner.check(gate_id, pkt)
+            assert v.passed
+            assert all(not r.startswith("sys:") for r in v.evidence_refs), (
+                f"{gate_id} 把 sys: 簿记写进了验收依据：{v.evidence_refs}"
+            )

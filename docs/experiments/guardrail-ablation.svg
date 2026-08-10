@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" width="900" height="460" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<rect width="900" height="460" fill="#ffffff"/>
+<text x="70" y="34" font-size="17" font-weight="600" fill="#111">护栏消融对照：注入的已知故障有多少被静默放行</text>
+<text x="70" y="56" font-size="12" fill="#666">越高越糟。「护栏关」= ReconcileLoop 的默认配置（四个安全组件默认全是 None）</text>
+<line x1="70" y1="342.0" x2="870" y2="342.0" stroke="#e6e6e6" stroke-width="1"/>
+<text x="60" y="346.0" font-size="11" fill="#888" text-anchor="end">0%</text>
+<line x1="70" y1="280.5" x2="870" y2="280.5" stroke="#e6e6e6" stroke-width="1"/>
+<text x="60" y="284.5" font-size="11" fill="#888" text-anchor="end">25%</text>
+<line x1="70" y1="219.0" x2="870" y2="219.0" stroke="#e6e6e6" stroke-width="1"/>
+<text x="60" y="223.0" font-size="11" fill="#888" text-anchor="end">50%</text>
+<line x1="70" y1="157.5" x2="870" y2="157.5" stroke="#e6e6e6" stroke-width="1"/>
+<text x="60" y="161.5" font-size="11" fill="#888" text-anchor="end">75%</text>
+<line x1="70" y1="96.0" x2="870" y2="96.0" stroke="#e6e6e6" stroke-width="1"/>
+<text x="60" y="100.0" font-size="11" fill="#888" text-anchor="end">100%</text>
+<rect x="99.4" y="96.0" width="46.0" height="246.0" fill="#c0392b" rx="2"/>
+<text x="122.4" y="89.0" font-size="11.5" font-weight="600" fill="#c0392b" text-anchor="middle">8/8</text>
+<rect x="152.3" y="342.0" width="46.0" height="1.5" fill="#2d7d46" rx="2"/>
+<text x="175.3" y="335.0" font-size="11.5" font-weight="600" fill="#2d7d46" text-anchor="middle">0/8</text>
+<text x="150.0" y="364.0" font-size="11.5" fill="#333" text-anchor="middle">I1 单写者</text>
+<text x="150.0" y="379.0" font-size="11.5" fill="#333" text-anchor="middle">（路径锁）</text>
+<rect x="259.4" y="96.0" width="46.0" height="246.0" fill="#c0392b" rx="2"/>
+<text x="282.4" y="89.0" font-size="11.5" font-weight="600" fill="#c0392b" text-anchor="middle">8/8</text>
+<rect x="312.3" y="342.0" width="46.0" height="1.5" fill="#2d7d46" rx="2"/>
+<text x="335.3" y="335.0" font-size="11.5" font-weight="600" fill="#2d7d46" text-anchor="middle">0/8</text>
+<text x="310.0" y="364.0" font-size="11.5" fill="#333" text-anchor="middle">I5 单会话闭合</text>
+<text x="310.0" y="379.0" font-size="11.5" fill="#333" text-anchor="middle">（重试上限）</text>
+<rect x="419.4" y="96.0" width="46.0" height="246.0" fill="#c0392b" rx="2"/>
+<text x="442.4" y="89.0" font-size="11.5" font-weight="600" fill="#c0392b" text-anchor="middle">8/8</text>
+<rect x="472.3" y="342.0" width="46.0" height="1.5" fill="#2d7d46" rx="2"/>
+<text x="495.3" y="335.0" font-size="11.5" font-weight="600" fill="#2d7d46" text-anchor="middle">0/8</text>
+<text x="470.0" y="364.0" font-size="11.5" fill="#333" text-anchor="middle">全局预算上限</text>
+<rect x="579.4" y="96.0" width="46.0" height="246.0" fill="#c0392b" rx="2"/>
+<text x="602.4" y="89.0" font-size="11.5" font-weight="600" fill="#c0392b" text-anchor="middle">32/32</text>
+<rect x="632.3" y="342.0" width="46.0" height="1.5" fill="#2d7d46" rx="2"/>
+<text x="655.3" y="335.0" font-size="11.5" font-weight="600" fill="#2d7d46" text-anchor="middle">0/32</text>
+<text x="630.0" y="364.0" font-size="11.5" fill="#333" text-anchor="middle">I6 证据可判定</text>
+<text x="630.0" y="379.0" font-size="11.5" fill="#333" text-anchor="middle">（门禁层）†</text>
+<rect x="739.4" y="148.3" width="46.0" height="193.7" fill="#c0392b" rx="2"/>
+<text x="762.4" y="141.3" font-size="11.5" font-weight="600" fill="#c0392b" text-anchor="middle">315/400</text>
+<rect x="792.3" y="342.0" width="46.0" height="1.5" fill="#2d7d46" rx="2"/>
+<text x="815.3" y="335.0" font-size="11.5" font-weight="600" fill="#2d7d46" text-anchor="middle">0/400</text>
+<text x="790.0" y="364.0" font-size="11.5" fill="#333" text-anchor="middle">I1 单写者</text>
+<text x="790.0" y="379.0" font-size="11.5" fill="#333" text-anchor="middle">（并发压测）</text>
+<line x1="70" y1="342.0" x2="870" y2="342.0" stroke="#333" stroke-width="1.4"/>
+<rect x="70" y="405" width="12" height="12" fill="#c0392b" rx="2"/>
+<text x="88" y="415" font-size="12" fill="#333">护栏关 / 修复前（默认配置）</text>
+<rect x="280" y="405" width="12" height="12" fill="#2d7d46" rx="2"/>
+<text x="298" y="415" font-size="12" fill="#333">护栏开 / 修复后</text>
+<text x="70" y="442" font-size="10.5" fill="#777">† 门禁那一组是「08-10 修复前 vs 修复后」，不是开关 —— 修复前门禁把控制面自己的 sys: 簿记当成了证据。　数据：2026-08-10</text>
+</svg>

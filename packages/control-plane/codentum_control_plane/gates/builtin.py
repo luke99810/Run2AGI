@@ -8,11 +8,24 @@ P0 阶段提供三个基础门禁：
 
 ★ P0 简化：这些门禁只检查证据是否存在且格式正确。
   完整版需要实际读取证据文件内容并做交叉校验。
+
+★★ 08-10 修正：四个门禁原本都写 `if not packet.evidence`，
+   于是控制面自己写的 `sys:lock:<pid>` 簿记被当成了证据 ——
+   而这正是 08-09 在兜底分支修掉的那个缺陷（系统自己给自己签字）。
+   门禁分支在 `_try_review_to_accepted` 里**优先于**兜底分支，
+   所以当时的结果是：**配了 gate_runner 的系统比没配的更松。**
+   现在四个门禁一律只认 `codentum_control_plane.evidence` 的口径，
+   并且见到 worker 失败标记直接判否。
 """
 
 from __future__ import annotations
 
 from codentum_contracts.state import EvidenceRef, WorkPacket
+
+from codentum_control_plane.evidence import (
+    acceptance_evidence,
+    worker_failure_markers,
+)
 
 from .runner import GateRunner, GateVerdict
 
@@ -34,17 +47,30 @@ def evidence_exists_gate(
     ★ 这是 I6 在门禁层的强制点。
     状态推进必须附证据引用，声明不算。
     """
-    if not packet.evidence:
+    failed = worker_failure_markers(packet.evidence)
+    if failed:
         return GateVerdict(
             passed=False,
             gate_id="evidence_exists",
-            detail="packet 没有携带任何证据。I6：状态推进必须附证据引用。",
+            detail=f"packet 带有 worker 失败标记，不予放行：{', '.join(failed)}",
+        )
+
+    real = acceptance_evidence(packet.evidence)
+    if not real:
+        return GateVerdict(
+            passed=False,
+            gate_id="evidence_exists",
+            detail=(
+                "packet 没有携带任何**可作为依据**的证据。I6：状态推进必须附证据引用。"
+                f"（现有 {len(packet.evidence)} 条全部是 sys: 簿记，"
+                "那是控制面自己写的流水，不是活干完了的证明）"
+            ),
         )
     return GateVerdict(
         passed=True,
         gate_id="evidence_exists",
-        detail=f"packet 携带 {len(packet.evidence)} 条证据",
-        evidence_refs=packet.evidence,
+        detail=f"packet 携带 {len(real)} 条真实证据",
+        evidence_refs=tuple(EvidenceRef(r) for r in real),
     )
 
 
@@ -57,11 +83,23 @@ def self_test_gate(
     P0 简化：检查是否有证据且 packet 的 acceptance 非空。
     完整版：解析测试报告证据，确认全部通过。
     """
-    if not packet.evidence:
+    failed = worker_failure_markers(packet.evidence)
+    if failed:
         return GateVerdict(
             passed=False,
             gate_id="self-test",
-            detail="自测门禁未通过：缺少测试证据。Coder 必须提交测试通过的证据。",
+            detail=f"自测门禁未通过：worker 明确失败过（{', '.join(failed)}）。",
+        )
+
+    real = acceptance_evidence(packet.evidence)
+    if not real:
+        return GateVerdict(
+            passed=False,
+            gate_id="self-test",
+            detail=(
+                "自测门禁未通过：缺少测试证据。Coder 必须提交测试通过的证据。"
+                "（sys: 簿记不算 —— 拿到过锁不等于跑过测试）"
+            ),
         )
 
     if not packet.acceptance.predicate.strip():
@@ -75,7 +113,7 @@ def self_test_gate(
         passed=True,
         gate_id="self-test",
         detail=f"自测门禁通过（验收谓词: {packet.acceptance.predicate[:80]}）",
-        evidence_refs=packet.evidence,
+        evidence_refs=tuple(EvidenceRef(r) for r in real),
     )
 
 
@@ -88,11 +126,20 @@ def acceptance_gate(
     P0 简化：检查 evidence 非空且 acceptance.authoredBy != packet.role。
     完整版：实际运行验收测试并检查结果。
     """
-    if not packet.evidence:
+    failed = worker_failure_markers(packet.evidence)
+    if failed:
         return GateVerdict(
             passed=False,
             gate_id="acceptance",
-            detail="验收门禁未通过：缺少验收证据。",
+            detail=f"验收门禁未通过：worker 明确失败过（{', '.join(failed)}）。",
+        )
+
+    real = acceptance_evidence(packet.evidence)
+    if not real:
+        return GateVerdict(
+            passed=False,
+            gate_id="acceptance",
+            detail="验收门禁未通过：缺少验收证据（sys: 簿记不算）。",
         )
 
     # ★ I2：验收的作者不能是执行者自己
@@ -110,7 +157,7 @@ def acceptance_gate(
         passed=True,
         gate_id="acceptance",
         detail=f"验收门禁通过（验收作者: {packet.acceptance.authoredBy!r}）",
-        evidence_refs=packet.evidence,
+        evidence_refs=tuple(EvidenceRef(r) for r in real),
     )
 
 
@@ -123,18 +170,30 @@ def review_gate(
     P0 简化：检查 evidence 非空（视为评审已完成）。
     完整版：读取评审证据，确认评审结果为"批准"而非"需要修改"。
     """
-    if not packet.evidence:
+    failed = worker_failure_markers(packet.evidence)
+    if failed:
         return GateVerdict(
             passed=False,
             gate_id="review",
-            detail="评审门禁未通过：缺少评审证据。Reviewer 必须提交评审结论。",
+            detail=f"评审门禁未通过：worker 明确失败过（{', '.join(failed)}）。",
+        )
+
+    real = acceptance_evidence(packet.evidence)
+    if not real:
+        return GateVerdict(
+            passed=False,
+            gate_id="review",
+            detail=(
+                "评审门禁未通过：缺少评审证据。Reviewer 必须提交评审结论。"
+                "（sys: 簿记不算）"
+            ),
         )
 
     return GateVerdict(
         passed=True,
         gate_id="review",
-        detail=f"评审门禁通过（{len(packet.evidence)} 条证据）",
-        evidence_refs=packet.evidence,
+        detail=f"评审门禁通过（{len(real)} 条真实证据）",
+        evidence_refs=tuple(EvidenceRef(r) for r in real),
     )
 
 

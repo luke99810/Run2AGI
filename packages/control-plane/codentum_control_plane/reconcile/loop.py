@@ -42,6 +42,11 @@ from codentum_contracts.state import (
 from codentum_control_plane.locks import LockTable
 from codentum_control_plane.gates import GateRunner, register_builtin_gates
 from codentum_control_plane.budget import BudgetTracker
+from codentum_control_plane.evidence import (
+    SYS_EVIDENCE_PREFIX,
+    WORKER_FAILED_EVIDENCE_PREFIX,
+    is_acceptance_evidence,
+)
 from codentum_control_plane.guardian import Guardian
 from codentum_control_plane.state_machine import TransitionTable
 
@@ -59,21 +64,13 @@ TERMINAL_STATES: frozenset[PacketState] = frozenset({"accepted", "abandoned"})
 #  证据前缀约定
 # ════════════════════════════════════════════════════════════
 #
-# ★ I6：「状态推进必须附证据引用，声明不算。执行完成但证据没落盘 = 没做过。」
+# ★ 判据本体已移到 `codentum_control_plane.evidence`，因为门禁层也要用同一份。
+#   原来它只写在这里，于是 08-09 那次修复只落到了兜底分支，
+#   `gates/builtin.py` 里的四个门禁仍把 `sys:` 簿记算成证据 ——
+#   配了 gate_runner 反而比不配更松。详见 evidence.py 的模块注释。
 #
-# reconcile 自己在推进过程中会写入一些**簿记性**证据（拿到了锁、worker 失败了）。
-# 这些是控制面的内部流水，不是「活干完了」的证明 —— 拿它们当验收依据，
-# 等于系统自己给自己签字。所以统一加 `sys:` 前缀，验收时一律排除。
-SYS_EVIDENCE_PREFIX = "sys:"
-
-#: worker 以 failed 收场时打在 packet 上的标记，让失败对后续判定可见。
-#: 没有它的话，失败只存在于 transition 的 detail 字符串里，验收环节读不到。
-WORKER_FAILED_EVIDENCE_PREFIX = "sys:worker-failed:"
-
-
-def _is_acceptance_evidence(ref: str) -> bool:
-    """这条证据能不能作为验收依据。控制面自产的簿记流水不算。"""
-    return not ref.startswith(SYS_EVIDENCE_PREFIX)
+# 下面三个名字保留为再导出，外部引用（含测试）不受影响。
+_is_acceptance_evidence = is_acceptance_evidence
 
 
 def _now_iso() -> str:
