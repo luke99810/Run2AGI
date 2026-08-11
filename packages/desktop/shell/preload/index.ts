@@ -13,6 +13,11 @@ const bridge: DesktopBridge = {
   moveRequirementDraft: (sourceScopeId, targetScopeId) => ipcRenderer.invoke(IPC_CHANNELS.moveRequirementDraft, sourceScopeId, targetScopeId),
   discardDraftAttachment: (scopeId, attachmentId) => ipcRenderer.invoke(IPC_CHANNELS.discardDraftAttachment, scopeId, attachmentId),
   exportTaskRecord: (suggestedName, markdown) => ipcRenderer.invoke(IPC_CHANNELS.exportTaskRecord, suggestedName, markdown),
+  listManagedResources: (kind) => ipcRenderer.invoke(IPC_CHANNELS.listManagedResources, kind),
+  selectManagedResources: (kind, sourceKind) => ipcRenderer.invoke(IPC_CHANNELS.selectManagedResources, kind, sourceKind),
+  addManagedResourceUrl: (kind, url) => ipcRenderer.invoke(IPC_CHANNELS.addManagedResourceUrl, kind, url),
+  updateManagedResource: (id, patch) => ipcRenderer.invoke(IPC_CHANNELS.updateManagedResource, id, patch),
+  removeManagedResource: (id) => ipcRenderer.invoke(IPC_CHANNELS.removeManagedResource, id),
   watchSource: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.watchSource, sourceId),
   onSnapshot: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: StateSnapshot): void => listener(snapshot)

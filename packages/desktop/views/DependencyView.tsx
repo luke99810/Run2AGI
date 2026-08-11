@@ -92,7 +92,7 @@ export function DependencyView({ snapshot }: { readonly snapshot: StateSnapshot 
             ) : selected === undefined ? (
               <MissingDependencyInspector nodeId={selectedId} />
             ) : (
-              <DependencyInspector packet={selected} />
+              <DependencyInspector packet={selected} locks={snapshot?.graph?.ownership.locks ?? []} ownershipVersion={snapshot?.graph?.ownership.version} />
             )}
           </aside>
         </div>
@@ -101,7 +101,12 @@ export function DependencyView({ snapshot }: { readonly snapshot: StateSnapshot 
   )
 }
 
-function DependencyInspector({ packet }: { readonly packet: WorkPacket }): ReactNode {
+function DependencyInspector({ packet, locks, ownershipVersion }: {
+  readonly packet: WorkPacket
+  readonly locks: readonly { readonly pathPrefix: string; readonly heldBy: string; readonly acquiredAt: string }[]
+  readonly ownershipVersion: number | undefined
+}): ReactNode {
+  const heldLocks = locks.filter((lock) => lock.heldBy === packet.id)
   return (
     <div className="inspector-content">
       <div><span>任务节点</span><h2>{packetTitle(packet)}</h2></div>
@@ -111,6 +116,16 @@ function DependencyInspector({ packet }: { readonly packet: WorkPacket }): React
         <div><dt>前置依赖</dt><dd>{packet.deps.length === 0 ? '状态源未声明' : packet.deps.join('、')}</dd></div>
         <div><dt>负责路径</dt><dd>{packet.ownsPaths.length === 0 ? '未声明' : packet.ownsPaths.join('、')}</dd></div>
         <div><dt>只读路径</dt><dd>{packet.readsPaths.length === 0 ? '无' : packet.readsPaths.join('、')}</dd></div>
+        <div><dt>验收类型</dt><dd>{packet.acceptance.kind} · 由 {roleLabel(packet.acceptance.authoredBy)} 编写</dd></div>
+        <div><dt>验收判据</dt><dd><code>{packet.acceptance.predicate}</code>{packet.acceptance.threshold === undefined ? null : ` · 阈值 ${packet.acceptance.threshold}`}</dd></div>
+        <div><dt>任务预算</dt><dd>¥{packet.budget.spentCny.toFixed(2)} / ¥{packet.budget.limitCny.toFixed(2)}</dd></div>
+        <div><dt>降级链</dt><dd>{packet.budget.degradationChain.length === 0 ? '未声明' : packet.budget.degradationChain.join(' → ')}</dd></div>
+        <div><dt>模型路由</dt><dd>{packet.routing === undefined ? '使用角色默认策略' : `${packet.routing.model} · ${packet.routing.effort}${packet.routing.batch === true ? ' · Batch' : ''}`}</dd></div>
+        <div><dt>尝试次数</dt><dd>{packet.attempts}</dd></div>
+        <div><dt>证据引用</dt><dd>{packet.evidence.length === 0 ? '尚无' : packet.evidence.join('、')}</dd></div>
+        <div><dt>创建来源</dt><dd>{roleLabel(packet.provenance.createdBy)} · {new Date(packet.provenance.createdAt).toLocaleString('zh-CN')}{packet.provenance.parent === undefined ? '' : ` · 父任务 ${packet.provenance.parent}`}</dd></div>
+        <div><dt>所有权锁</dt><dd>{heldLocks.length === 0 ? '当前未持有路径锁' : heldLocks.map((lock) => `${lock.pathPrefix}（${new Date(lock.acquiredAt).toLocaleString('zh-CN')}）`).join('、')}</dd></div>
+        <div><dt>锁版本</dt><dd>{ownershipVersion ?? '状态源未提供'}</dd></div>
       </dl>
     </div>
   )

@@ -11,6 +11,45 @@ import type {
 
 export type SnapshotSourceKind = 'fixture' | 'project'
 export type ProjectSelectionKind = 'file' | 'folder'
+export type ManagedResourceKind = 'plugin' | 'knowledge' | 'skill'
+export type ManagedResourceSourceKind = 'file' | 'folder' | 'git_url'
+export type ManagedResourceScope = 'global' | 'role' | 'project'
+export type ManagedResourceRuntimeStatus = 'registered' | 'pending_runtime' | 'missing_source'
+
+export interface ManagedResource {
+  readonly id: string
+  readonly kind: ManagedResourceKind
+  readonly name: string
+  readonly description: string
+  readonly sourceKind: ManagedResourceSourceKind
+  readonly sourceLabel: string
+  readonly scope: ManagedResourceScope
+  readonly roleId?: string
+  readonly enabled: boolean
+  readonly runtimeStatus: ManagedResourceRuntimeStatus
+  readonly addedAt: string
+  readonly updatedAt: string
+}
+
+export interface ManagedResourcePatch {
+  readonly enabled?: boolean
+  readonly scope?: ManagedResourceScope
+  readonly roleId?: string
+}
+
+/**
+ * C sends this stable request shape through A's submit_requirement payload.
+ * A archives it today; B can consume it when resolving RoleSpec/ToolSurface.
+ */
+export interface ResourceSelection {
+  readonly id: string
+  readonly kind: ManagedResourceKind
+  readonly scope: ManagedResourceScope
+  readonly roleId?: string
+  readonly sourceKind: ManagedResourceSourceKind
+  readonly localPath?: string
+  readonly gitUrl?: string
+}
 
 export interface SnapshotSourceDescriptor {
   readonly id: string
@@ -144,6 +183,11 @@ export interface DesktopBridge {
   moveRequirementDraft(sourceScopeId: string, targetScopeId: string): Promise<RequirementDraftSnapshot>
   discardDraftAttachment(scopeId: string, attachmentId: string): Promise<RequirementDraftSnapshot>
   exportTaskRecord(suggestedName: string, markdown: string): Promise<boolean>
+  listManagedResources(kind?: ManagedResourceKind): Promise<readonly ManagedResource[]>
+  selectManagedResources(kind: ManagedResourceKind, sourceKind: 'file' | 'folder'): Promise<readonly ManagedResource[]>
+  addManagedResourceUrl(kind: ManagedResourceKind, url: string): Promise<ManagedResource>
+  updateManagedResource(id: string, patch: ManagedResourcePatch): Promise<ManagedResource>
+  removeManagedResource(id: string): Promise<boolean>
   watchSource(sourceId: string): Promise<void>
   onSnapshot(listener: (snapshot: StateSnapshot) => void): () => void
   getEngineHandshake(): Promise<EngineHandshake>

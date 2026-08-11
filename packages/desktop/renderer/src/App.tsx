@@ -306,7 +306,19 @@ export function App(): ReactNode {
     case 'plugins':
     case 'knowledge':
     case 'skills':
-      view = <ResourceLibraryView kind={navigation} task={activeTask} onContextChange={updateActiveContext} />
+      view = (
+        <ResourceLibraryView
+          kind={navigation}
+          task={activeTask}
+          snapshot={desktop.snapshot}
+          onContextChange={updateActiveContext}
+          listManagedResources={desktop.listManagedResources}
+          selectManagedResources={desktop.selectManagedResources}
+          addManagedResourceUrl={desktop.addManagedResourceUrl}
+          updateManagedResource={desktop.updateManagedResource}
+          removeManagedResource={desktop.removeManagedResource}
+        />
+      )
       break
     case 'mcp':
       view = <McpView services={[]} />

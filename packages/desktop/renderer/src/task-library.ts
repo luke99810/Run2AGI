@@ -65,9 +65,31 @@ export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
 ]
 
 export const SKILL_OPTIONS: readonly ResourceOption[] = [
-  { id: 'frontend', label: '前端实现', detail: '请求 Coder 加载前端实现技能', availability: 'pending_runtime' },
-  { id: 'testing', label: '测试验证', detail: '请求 QA/Coder 加载测试技能', availability: 'pending_runtime' },
-  { id: 'review', label: '代码评审', detail: '请求 Reviewer 加载评审技能', availability: 'pending_runtime' }
+  { id: 'requirement-clarify', label: '需求澄清', detail: 'Intake · 需求槽位与假设确认', availability: 'pending_runtime' },
+  { id: 'contract-design', label: '契约设计', detail: 'Architect · API、数据与边界契约', availability: 'pending_runtime' },
+  { id: 'feasibility-probe', label: '可行性探测', detail: 'Architect · 安装、编译与冲突探测', availability: 'pending_runtime' },
+  { id: 'boundary-score', label: '边界评分', detail: 'Architect · 并行潜力与耦合度评估', availability: 'pending_runtime' },
+  { id: 'packet-split', label: '任务拆分', detail: 'Planner · 生成可执行 WorkPacket', availability: 'pending_runtime' },
+  { id: 'virtual-schedule', label: '虚拟排程', detail: 'Planner · 关键路径、冲突与死锁检查', availability: 'pending_runtime' },
+  { id: 'acceptance-authoring', label: '验收用例编写', detail: 'QA · 先于实现编写验收测试', availability: 'pending_runtime' },
+  { id: 'adversarial-review', label: '对抗评审', detail: 'Reviewer · 反证式代码评审', availability: 'pending_runtime' },
+  { id: 'diagnose-assist', label: '诊断协助', detail: 'Helper · 只读定位失败根因', availability: 'pending_runtime' },
+  { id: 'integrate-merge', label: '集成合并', detail: 'Integrator · 合并、冒烟与回退', availability: 'pending_runtime' },
+  { id: 'dependency-policy-check', label: '依赖策略检查', detail: 'Global · 新依赖准入与替代建议', availability: 'pending_runtime' },
+  { id: 'rule-conformance-check', label: '规则符合性检查', detail: 'Global · 规则集与变更一致性', availability: 'pending_runtime' },
+  { id: 'gate-check', label: '门禁检查', detail: 'Global · 阶段转换前执行门禁', availability: 'pending_runtime' },
+  { id: 'context-recipe', label: '上下文配方', detail: 'Global · 按角色与预算组装上下文', availability: 'pending_runtime' },
+  { id: 'cost-estimate', label: '成本估算', detail: 'Global · 生成分阶段成本区间', availability: 'pending_runtime' },
+  { id: 'provisioning-collect', label: '交付配置收集', detail: 'Integrator · 收集并校验交付配置', availability: 'pending_runtime' },
+  { id: 'secret-leak-scan', label: '凭证泄漏扫描', detail: 'Global · 交付前不可豁免扫描', availability: 'pending_runtime' },
+  { id: 'deploy-verify-checklist', label: '部署验证清单', detail: 'Integrator · 版本、健康与冒烟验证', availability: 'pending_runtime' },
+  { id: 'cold-start-verify', label: '冷启动验证', detail: 'Global · 零缓存环境复现验证', availability: 'pending_runtime' },
+  { id: 'canary-release', label: '金丝雀发布', detail: 'Integrator · 分阶段发布与自动回滚', availability: 'pending_runtime' },
+  { id: 'failure-cluster', label: '失败聚类', detail: 'Evolver · 聚类 Trace 中的失败模式', availability: 'pending_runtime' },
+  { id: 'experience-distill', label: '经验蒸馏', detail: 'Evolver · 证伪后沉淀可复用经验', availability: 'pending_runtime' },
+  { id: 'shadow-replay', label: '影子回放', detail: 'Evolver · 能力变更回归验证', availability: 'pending_runtime' },
+  { id: 'skill-authoring', label: 'Skill 生成', detail: 'Evolver · 生成 manifest、实现与测试', availability: 'pending_runtime' },
+  { id: 'mutation-test', label: '变异测试', detail: 'QA · 验证测试是否真正有效', availability: 'pending_runtime' }
 ]
 
 const TASK_STORAGE_KEY = 'codentum.desktop.task-sessions.v1'

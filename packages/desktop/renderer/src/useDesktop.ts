@@ -3,6 +3,9 @@ import type {
   CommandReceipt,
   DraftAttachment,
   EngineHandshake,
+  ManagedResource,
+  ManagedResourceKind,
+  ManagedResourcePatch,
   OperatorCommand,
   ProjectSelectionKind,
   RequirementDraftSnapshot,
@@ -37,6 +40,11 @@ export interface DesktopState {
   readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
   readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
   readonly exportTaskRecord: (suggestedName: string, markdown: string) => Promise<boolean>
+  readonly listManagedResources: (kind?: ManagedResourceKind) => Promise<readonly ManagedResource[]>
+  readonly selectManagedResources: (kind: ManagedResourceKind, sourceKind: 'file' | 'folder') => Promise<readonly ManagedResource[]>
+  readonly addManagedResourceUrl: (kind: ManagedResourceKind, url: string) => Promise<ManagedResource>
+  readonly updateManagedResource: (id: string, patch: ManagedResourcePatch) => Promise<ManagedResource>
+  readonly removeManagedResource: (id: string) => Promise<boolean>
   readonly refresh: () => Promise<void>
   readonly sendCommand: (command: OperatorCommand) => Promise<CommandReceipt>
 }
@@ -208,6 +216,51 @@ export function useDesktop(): DesktopState {
     }
   }, [bridge])
 
+  const listManagedResources = useCallback(async (kind?: ManagedResourceKind) => {
+    if (bridge === undefined) return []
+    try {
+      return await bridge.listManagedResources(kind)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const selectManagedResources = useCallback(async (kind: ManagedResourceKind, sourceKind: 'file' | 'folder') => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.selectManagedResources(kind, sourceKind)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const addManagedResourceUrl = useCallback(async (kind: ManagedResourceKind, url: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.addManagedResourceUrl(kind, url)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const updateManagedResource = useCallback(async (id: string, patch: ManagedResourcePatch) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.updateManagedResource(id, patch)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const removeManagedResource = useCallback(async (id: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.removeManagedResource(id)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
   const refresh = useCallback(async () => {
     if (bridge === undefined) return
     setError(null)
@@ -253,7 +306,12 @@ export function useDesktop(): DesktopState {
     moveRequirementDraft,
     discardDraftAttachment,
     exportTaskRecord,
+    listManagedResources,
+    selectManagedResources,
+    addManagedResourceUrl,
+    updateManagedResource,
+    removeManagedResource,
     refresh,
     sendCommand
-  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, refresh, sendCommand])
+  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, listManagedResources, selectManagedResources, addManagedResourceUrl, updateManagedResource, removeManagedResource, refresh, sendCommand])
 }

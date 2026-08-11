@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { EngineHandshake, StateSnapshot, WorkerProjection } from '../shared/protocol'
 import type { CommandDispatcher } from '../renderer/src/command-types'
-import { projectWorkerModules, roleLabel, shortPacketId } from '../renderer/src/domain'
+import { formatCny, projectWorkerModules, roleLabel, shortPacketId } from '../renderer/src/domain'
 import { CommandPanel } from '../panels/CommandPanel'
 import { EmptyState, Icon, PacketSummary, PageHeader } from '../panels/Common'
 
@@ -65,17 +65,37 @@ function ModuleSequence({ worker, selectedModuleId, onSelectModule }: {
 }
 
 function EventTimeline({ worker }: { readonly worker: WorkerProjection }): ReactNode {
-  const events = [...worker.events].sort((left, right) => right.seq - left.seq).slice(0, 8)
+  const events = [...worker.events].sort((left, right) => right.seq - left.seq).slice(0, 20)
   if (events.length === 0) return <p className="quiet-empty">这个 Worker 还没有可显示的运行事件。</p>
   return (
     <ol className="event-timeline">
       {events.map((event) => (
         <li key={`${event.seq}-${event.kind}`}>
           <span />
-          <div><strong>{event.kind}</strong><small>序号 {event.seq} · {new Date(event.at).toLocaleString('zh-CN')}</small></div>
+          <div>
+            <strong>{event.kind}</strong>
+            <small>序号 {event.seq} · {new Date(event.at).toLocaleString('zh-CN')}</small>
+            {Object.keys(event.payload).length === 0 ? null : (
+              <details className="event-payload"><summary>查看事件数据</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>
+            )}
+          </div>
         </li>
       ))}
     </ol>
+  )
+}
+
+function WorkerRuntimeDetails({ worker }: { readonly worker: WorkerProjection }): ReactNode {
+  return (
+    <dl className="worker-runtime-details">
+      <div><dt>Worker</dt><dd title={worker.workerId}>{worker.workerId}</dd></div>
+      <div><dt>WorkPacket</dt><dd title={worker.packetId}>{worker.packetId}</dd></div>
+      <div><dt>尝试次数</dt><dd>{worker.attempt}</dd></div>
+      <div><dt>本次成本</dt><dd>{worker.spentCny === undefined ? '运行时未提供' : formatCny(worker.spentCny)}</dd></div>
+      <div><dt>工作目录</dt><dd title={worker.workspace}>{worker.workspace ?? '运行时未提供'}</dd></div>
+      <div><dt>开始</dt><dd>{worker.startedAt === undefined ? '未提供' : new Date(worker.startedAt).toLocaleString('zh-CN')}</dd></div>
+      <div><dt>结束</dt><dd>{worker.finishedAt === undefined ? '尚未结束' : new Date(worker.finishedAt).toLocaleString('zh-CN')}</dd></div>
+    </dl>
   )
 }
 
@@ -154,7 +174,11 @@ export function ExecutionView({ snapshot, handshake, dispatch, focusedWorkerId, 
                   <ModuleSequence worker={selectedWorker} selectedModuleId={selectedModuleId} onSelectModule={setSelectedModuleId} />
                 </section>
                 <section className="detail-card">
-                  <div className="card-heading"><div><span>最近事件</span><h2>运行记录</h2></div><small>只显示最新 8 条</small></div>
+                  <div className="card-heading"><div><span>A/B 运行时投影</span><h2>执行详情</h2></div><small>未提供的字段不会推测</small></div>
+                  <WorkerRuntimeDetails worker={selectedWorker} />
+                </section>
+                <section className="detail-card">
+                  <div className="card-heading"><div><span>最近事件</span><h2>运行记录</h2></div><small>最新 20 条，可展开 payload</small></div>
                   <EventTimeline worker={selectedWorker} />
                 </section>
               </>

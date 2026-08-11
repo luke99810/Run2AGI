@@ -32,6 +32,8 @@ const SCREENSHOTS = [
   { name: '05-cost.png', navigation: '成本', heading: '成本' },
   { name: '06-team.png', navigation: '研发团队', heading: '研发团队' },
   { name: '07-evidence.png', navigation: '证据与审计', heading: '证据与审计' },
+  { name: '08-skills.png', navigation: 'Skills', heading: 'Skills' },
+  { name: '11-knowledge.png', navigation: '知识库', heading: '知识库' },
   { name: '10-mcp.png', navigation: 'MCP', heading: 'MCP 服务' }
 ]
 
@@ -441,9 +443,13 @@ async function exerciseInteractiveDetails(client, navigation) {
     })()`, 'open a dependency node')
     if (!clicked) throw new Error('The dependency graph did not expose a clickable task node.')
     await waitFor(client, `document.querySelector('.graph-inspector')?.innerText.includes('任务节点')`, 'dependency inspector')
+    const packetDetails = await evaluate(client, `document.querySelector('.graph-inspector')?.innerText ?? ''`, 'audit packet and lock details')
+    if (!packetDetails.includes('验收判据') || !packetDetails.includes('任务预算') || !packetDetails.includes('所有权锁') || !packetDetails.includes('锁版本')) {
+      throw new Error(`Dependency inspector does not expose the A/B packet and ownership projection: ${JSON.stringify(packetDetails)}`)
+    }
   }
   if (navigation === '成本') {
-    await waitFor(client, `document.querySelector('.budget-hero') !== null && document.body.innerText.includes('本项目已发生成本')`, 'cost budget content')
+    await waitFor(client, `document.querySelector('.budget-hero') !== null && document.body.innerText.includes('本项目已发生成本') && [...document.querySelectorAll('.primary-nav button')].some((button) => button.textContent?.trim() === '成本')`, 'cost budget content and primary navigation')
   }
   if (navigation === '研发团队') {
     const roster = await evaluate(client, `(() => ({
@@ -454,6 +460,14 @@ async function exerciseInteractiveDetails(client, navigation) {
     if (roster.cards !== 11 || !roster.labels.includes('产品需求经理') || !roster.labels.includes('安全守护')) {
       throw new Error(`Role roster is incomplete: ${JSON.stringify(roster)}`)
     }
+    const projectionCopy = await evaluate(client, `document.querySelector('.page-header')?.textContent ?? ''`, 'audit role projection wording')
+    if (!projectionCopy.includes('系统岗位 11') || !projectionCopy.includes('项目投影')) {
+      throw new Error(`Role projection wording is incomplete: ${JSON.stringify(projectionCopy)}`)
+    }
+    const embeddedCost = await evaluate(client, `document.body.innerText.includes('成本由预算树和模型路由确定性治理')`, 'verify standalone cost placement')
+    if (embeddedCost) {
+      throw new Error('Cost governance must stay on the standalone cost page, not the team page.')
+    }
   }
   if (navigation === '证据与审计') {
     const audit = await evaluate(client, `(() => ({
@@ -463,6 +477,18 @@ async function exerciseInteractiveDetails(client, navigation) {
     }))()`, 'audit evidence projection')
     if (audit.evidence < 1 || audit.decisions < 1 || !audit.disclosed) {
       throw new Error(`Evidence view is incomplete or overclaims fixture state: ${JSON.stringify(audit)}`)
+    }
+    await waitFor(client, `document.body.innerText.includes('产物引用')`, 'evidence artifact references')
+  }
+  if (navigation === '知识库') {
+    const rag = await evaluate(client, `(() => ({
+      pending: document.body.innerText.includes('RAG 未连接'),
+      boundary: document.body.innerText.includes('不能把登记文件全文直接塞入 Prompt'),
+      indexUnavailable: document.body.innerText.includes('索引版本') && document.body.innerText.includes('未提供'),
+      projection: document.body.innerText.includes('知识关系') && document.body.innerText.includes('溯源关系')
+    }))()`, 'audit knowledge RAG boundary')
+    if (!rag.pending || !rag.boundary || !rag.indexUnavailable || !rag.projection) {
+      throw new Error(`Knowledge view overclaims or omits the RAG boundary: ${JSON.stringify(rag)}`)
     }
   }
   if (navigation === 'MCP') {
@@ -475,6 +501,57 @@ async function exerciseInteractiveDetails(client, navigation) {
     if (mcp.services !== '0' || !mcp.runtimeUnavailable || !mcp.emptyState || !mcp.boundary) {
       throw new Error(`MCP view is incomplete or claims unavailable runtime state: ${JSON.stringify(mcp)}`)
     }
+  }
+  if (navigation === 'Skills') {
+    const initial = await evaluate(client, `(() => {
+      const add = document.querySelector('.resource-add-menu')
+      if (!(add instanceof HTMLDetailsElement)) return null
+      add.open = true
+      return {
+        builtIns: document.querySelectorAll('.resource-list label').length,
+        menu: [...add.querySelectorAll('button')].map((button) => button.textContent?.trim())
+      }
+    })()`, 'audit Skills catalog and add menu')
+    if (initial === null || initial.builtIns !== 25 || !initial.menu.some((label) => label?.includes('本地文件')) || !initial.menu.some((label) => label?.includes('本地文件夹')) || !initial.menu.some((label) => label?.includes('Git URL'))) {
+      throw new Error(`Skills catalog or add menu is incomplete: ${JSON.stringify(initial)}`)
+    }
+    await evaluate(client, `(() => {
+      const button = [...document.querySelectorAll('.resource-add-menu button')].find((item) => item.textContent?.includes('Git URL'))
+      if (!(button instanceof HTMLButtonElement)) return false
+      button.click()
+      return true
+    })()`, 'open Git Skill form')
+    await waitFor(client, `document.querySelector('.resource-git-form input') instanceof HTMLInputElement`, 'Git Skill form')
+    await evaluate(client, `(() => {
+      const input = document.querySelector('.resource-git-form input')
+      const form = document.querySelector('.resource-git-form')
+      if (!(input instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, 'https://example.com/codentum-ui-skill.git')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      form.requestSubmit()
+      return true
+    })()`, 'register Git Skill')
+    await waitFor(client, `document.querySelector('.managed-resource-list')?.textContent?.includes('codentum-ui-skill')`, 'registered Git Skill')
+    const custom = await evaluate(client, `(() => ({
+      text: document.querySelector('.managed-resource-list')?.textContent ?? '',
+      exposedUrl: document.querySelector('.managed-resource-list')?.textContent?.includes('https://') ?? false,
+      scope: document.querySelector('.managed-resource-controls select')?.value
+    }))()`, 'audit registered Git Skill')
+    if (!custom.text.includes('待 A/B 运行时接入') || custom.exposedUrl || custom.scope !== 'role') {
+      throw new Error(`Registered Git Skill state is incorrect: ${JSON.stringify(custom)}`)
+    }
+    await evaluate(client, `(() => {
+      const menu = document.querySelector('.resource-add-menu')
+      const input = document.querySelector('.page-search input')
+      if (menu instanceof HTMLDetailsElement) menu.open = false
+      if (!(input instanceof HTMLInputElement)) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, 'codentum-ui-skill')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`, 'focus custom Git Skill for screenshot')
+    await waitFor(client, `document.querySelectorAll('.resource-list label').length === 0 && document.querySelectorAll('.managed-resource-list article').length === 1`, 'filtered custom Git Skill')
   }
 }
 
