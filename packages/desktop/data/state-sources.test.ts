@@ -292,3 +292,46 @@ function runGit(root: string, args: readonly string[]): Promise<void> {
     })
   })
 }
+
+describe('StateHub.projectRoot 必须认得草稿作用域', () => {
+  // ★ 2026-08-11 用真引擎驱动桌面端时撞出来的：从界面提交需求必然抛
+  //   `Unknown state source: project:<hash>:task:<uuid>`。
+  //
+  //   链路是这样断的：
+  //     renderer  taskDraftScope() → `${sourceId}:task:${taskId}`
+  //     main      stateHub.projectRoot(draftScope)
+  //     hub       this.sources.get(draftScope)   ← 表是按 sourceId 建的
+  //
+  //   `project:<24hex>` 与 `project:<24hex>:task:<uuid>` 永远不相等，
+  //   于是**每一次界面提交都会失败**。
+  //
+  //   ★ 为什么没被测出来：`RequirementComposer` 没有任何测试文件 import
+  //     （08-10 核对 C 的任务书时已经记过这条），而 main 侧的
+  //     `requirement-draft-store.test.ts` 直接给的是裸 scopeId，
+  //     绕开了「scope 与 sourceId 不是同一个字符串」这件事。
+
+  it('传入 sourceId 时返回项目根', async () => {
+    const project = await copyFixtureProject('empty')
+    const hub = new StateHub({ fixtureRoot: null })
+    const descriptor = await hub.selectProject(project)
+    expect(hub.projectRoot(descriptor.id)).toBe(descriptor.rootPath)
+    hub.close()
+  })
+
+  it('★ 传入 `<sourceId>:task:<uuid>` 形式的草稿作用域时也要认 —— 修复前必红', async () => {
+    const project = await copyFixtureProject('empty')
+    const hub = new StateHub({ fixtureRoot: null })
+    const descriptor = await hub.selectProject(project)
+    const draftScope = `${descriptor.id}:task:11111111-2222-3333-4444-555555555555`
+    expect(hub.projectRoot(draftScope)).toBe(descriptor.rootPath)
+    hub.close()
+  })
+
+  it('真正不存在的源仍要报错，不能被前缀解析吞掉', async () => {
+    const hub = new StateHub({ fixtureRoot: null })
+    expect(() => hub.projectRoot('project:deadbeefdeadbeefdeadbeef:task:x')).toThrow(
+      /Unknown state source/u
+    )
+    hub.close()
+  })
+})

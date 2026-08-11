@@ -44,8 +44,22 @@ export class StateHub {
     return this.getSource(sourceId).read()
   }
 
-  projectRoot(sourceId: string): string {
+  /**
+   * 由「状态源 id」或「草稿作用域」解析出项目根路径。
+   *
+   * ★ 必须同时认这两种，因为主进程转发 `submit_requirement` 时传进来的是
+   *   **草稿作用域**（`renderer/src/task-library.ts` 的 `taskDraftScope()`：
+   *   `` `${sourceId}:task:${taskId}` ``），而 `sources` 这张表是按 sourceId 建的。
+   *   `project:<24hex>` 与 `project:<24hex>:task:<uuid>` 永远不相等 ——
+   *   在补上这段之前，**每一次从界面提交需求都会抛
+   *   `Unknown state source`**。
+   *
+   * ★ 只削掉 `:task:` 之后的部分，不做模糊匹配：真正不存在的源仍要报错，
+   *   否则「源没注册」会被伪装成「源找到了」，那比现在这个明确的失败更糟。
+   */
+  projectRoot(sourceIdOrDraftScope: string): string {
     this.assertOpen()
+    const sourceId = stripTaskSuffix(sourceIdOrDraftScope)
     const descriptor = this.getSource(sourceId).descriptor
     if (descriptor.kind !== 'project' || descriptor.rootPath === undefined) {
       throw new Error('The selected state source is not a local project.')
@@ -89,6 +103,14 @@ export class StateHub {
   private assertOpen(): void {
     if (this.closed) throw new Error('StateHub is closed.')
   }
+}
+
+const TASK_SCOPE_SEPARATOR = ':task:'
+
+/** `project:<hash>:task:<uuid>` → `project:<hash>`；没有后缀就原样返回。 */
+function stripTaskSuffix(scope: string): string {
+  const at = scope.indexOf(TASK_SCOPE_SEPARATOR)
+  return at === -1 ? scope : scope.slice(0, at)
 }
 
 function discoverFixtures(fixtureRoot: string): string[] {
