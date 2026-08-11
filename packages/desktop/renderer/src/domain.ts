@@ -22,6 +22,7 @@ export type NavigationKey =
   | 'plugins'
   | 'knowledge'
   | 'skills'
+  | 'mcp'
   | 'settings'
   | 'help'
 
@@ -38,6 +39,7 @@ export const NAVIGATION: readonly NavigationItem[] = [
   { id: 'plugins', label: '插件', icon: 'plug' },
   { id: 'knowledge', label: '知识库', icon: 'book' },
   { id: 'skills', label: 'Skills', icon: 'spark' },
+  { id: 'mcp', label: 'MCP', icon: 'server' },
   { id: 'waves', label: '依赖波次', icon: 'waves' },
   { id: 'dependency', label: '依赖关系', icon: 'graph' },
   { id: 'cost', label: '成本', icon: 'wallet' },

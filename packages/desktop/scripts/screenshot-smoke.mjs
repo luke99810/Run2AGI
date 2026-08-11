@@ -31,7 +31,8 @@ const SCREENSHOTS = [
   { name: '04-dependency.png', navigation: '依赖关系', heading: '依赖关系' },
   { name: '05-cost.png', navigation: '成本', heading: '成本' },
   { name: '06-team.png', navigation: '研发团队', heading: '研发团队' },
-  { name: '07-evidence.png', navigation: '证据与审计', heading: '证据与审计' }
+  { name: '07-evidence.png', navigation: '证据与审计', heading: '证据与审计' },
+  { name: '10-mcp.png', navigation: 'MCP', heading: 'MCP 服务' }
 ]
 
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
@@ -462,6 +463,17 @@ async function exerciseInteractiveDetails(client, navigation) {
     }))()`, 'audit evidence projection')
     if (audit.evidence < 1 || audit.decisions < 1 || !audit.disclosed) {
       throw new Error(`Evidence view is incomplete or overclaims fixture state: ${JSON.stringify(audit)}`)
+    }
+  }
+  if (navigation === 'MCP') {
+    const mcp = await evaluate(client, `(() => ({
+      services: document.querySelector('.mcp-summary > div:first-child strong')?.textContent?.trim(),
+      runtimeUnavailable: document.body.innerText.includes('运行时未提供 MCP 投影'),
+      emptyState: document.body.innerText.includes('尚未配置 MCP 服务'),
+      boundary: document.body.innerText.includes('RoleSpec、ToolSurface 与 Guardian 收紧')
+    }))()`, 'audit MCP projection')
+    if (mcp.services !== '0' || !mcp.runtimeUnavailable || !mcp.emptyState || !mcp.boundary) {
+      throw new Error(`MCP view is incomplete or claims unavailable runtime state: ${JSON.stringify(mcp)}`)
     }
   }
 }

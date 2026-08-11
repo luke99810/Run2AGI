@@ -34,6 +34,7 @@ export type IconName =
   | 'help'
   | 'shield'
   | 'search'
+  | 'server'
 
 const PATHS: Readonly<Record<IconName, ReactNode>> = {
   plus: <><path d="M12 5v14M5 12h14" /></>,
@@ -66,7 +67,8 @@ const PATHS: Readonly<Record<IconName, ReactNode>> = {
   settings: <><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L14.5 3h-5L9 6.1a8 8 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.5 3.1h5l.5-3.1a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1z" /></>,
   help: <><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.6 2.6 0 1 1 3.3 2.5c-.9.3-1.4.9-1.4 1.8M12 17h.01" /></>,
   shield: <><path d="M12 3 20 6v5c0 5-3.4 8.2-8 10-4.6-1.8-8-5-8-10V6z" /><path d="m9 12 2 2 4-4" /></>,
-  search: <><circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" /></>
+  search: <><circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" /></>,
+  server: <><rect x="4" y="4" width="16" height="6" rx="2" /><rect x="4" y="14" width="16" height="6" rx="2" /><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5" /></>
 }
 
 export function Icon({ name, size = 20 }: { readonly name: IconName; readonly size?: number }): ReactNode {
