@@ -57,7 +57,7 @@ def engine_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("PYTHONPATH", f"{joined}{os.pathsep}{existing}" if existing else joined)
     for name in _KEY_ENVS:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-not-a-real-key-for-tests")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "REPLACE_ME_DASHSCOPE_API_KEY_FOR_TESTS")
     yield
 
 

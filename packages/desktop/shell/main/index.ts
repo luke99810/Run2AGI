@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import {
   app,
   BrowserWindow,
@@ -15,7 +15,7 @@ import {
 } from 'electron'
 import { StateHub } from '../../data'
 import { IPC_CHANNELS } from '../../shared/ipc'
-import { MAX_DRAFT_ATTACHMENTS, type EngineHandshake, type OperatorAction, type OperatorCommand } from '../../shared/protocol'
+import { MAX_DRAFT_ATTACHMENTS, type OperatorAction, type OperatorCommand, type ProjectSelectionKind } from '../../shared/protocol'
 import { SidecarManager } from './python-engine/SidecarManager'
 import { RequirementDraftStore } from './requirement-draft-store'
 
@@ -57,6 +57,10 @@ function assertSourceId(value: unknown): asserts value is string {
   }
 }
 
+function assertProjectSelectionKind(value: unknown): asserts value is ProjectSelectionKind {
+  if (value !== 'file' && value !== 'folder') throw new TypeError('A valid project selection kind is required')
+}
+
 function assertCommand(value: unknown): asserts value is OperatorCommand {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new TypeError('Invalid command envelope')
   const command = value as Record<string, unknown>
@@ -81,21 +85,19 @@ function fixtureRoot(): string {
     : resolve(app.getAppPath(), '..', '..', 'fixtures', 'golden-state')
 }
 
-async function chooseProject(): Promise<Awaited<ReturnType<StateHub['selectProject']>> | null> {
+async function chooseProject(kind: ProjectSelectionKind): Promise<Awaited<ReturnType<StateHub['selectProject']>> | null> {
   if (mainWindow === undefined || stateHub === undefined) return null
+  const selectingFile = kind === 'file'
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '打开 Codentum 项目',
-    buttonLabel: '打开项目',
-    properties: ['openDirectory']
+    title: selectingFile ? '选择任意文件' : '选择项目文件夹',
+    buttonLabel: selectingFile ? '打开文件' : '打开文件夹',
+    properties: selectingFile ? ['openFile', 'dontAddToRecent'] : ['openDirectory', 'dontAddToRecent']
   })
   const selected = result.filePaths[0]
   if (result.canceled || selected === undefined) return null
-  const descriptor = await stateHub.selectProject(selected)
+  const descriptor = await stateHub.selectProject(selectingFile ? dirname(selected) : selected)
   if (descriptor.rootPath === undefined) throw new Error('Selected project did not provide a canonical root path')
-  const projectBindableSidecar = sidecar as (SidecarManager & {
-    bindProject?: (projectRoot: string) => Promise<EngineHandshake>
-  }) | undefined
-  await projectBindableSidecar?.bindProject?.(descriptor.rootPath)
+  await sidecar?.bindProject(descriptor.rootPath)
   return descriptor
 }
 
@@ -125,13 +127,13 @@ async function chooseDraftFolders(scopeId: string): Promise<Awaited<ReturnType<R
   return draftStore.addFolders(scopeId, result.filePaths)
 }
 
-async function exportChatRecord(suggestedName: unknown, markdown: unknown): Promise<boolean> {
+async function exportTaskRecord(suggestedName: unknown, markdown: unknown): Promise<boolean> {
   if (mainWindow === undefined) return false
   if (typeof suggestedName !== 'string' || suggestedName.length < 1 || suggestedName.length > 160) throw new TypeError('Invalid export filename')
   if (typeof markdown !== 'string' || Buffer.byteLength(markdown, 'utf8') > 5 * 1024 * 1024) throw new TypeError('Invalid chat export')
   const safeName = suggestedName.replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_').replace(/[. ]+$/u, '').slice(0, 120) || 'Codentum-chat'
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: '导出聊天记录',
+    title: '导出任务记录',
     defaultPath: `${safeName}.md`,
     buttonLabel: '导出',
     filters: [{ name: 'Markdown', extensions: ['md'] }]
@@ -157,9 +159,10 @@ function registerIpc(): void {
     if (stateHub === undefined) throw new Error('State source is unavailable')
     return stateHub.read(sourceId)
   })
-  ipcMain.handle(IPC_CHANNELS.selectProject, async (event) => {
+  ipcMain.handle(IPC_CHANNELS.selectProject, async (event, kind: unknown) => {
     assertTrustedSender(event)
-    return chooseProject()
+    assertProjectSelectionKind(kind)
+    return chooseProject(kind)
   })
   ipcMain.handle(IPC_CHANNELS.selectDraftFiles, async (event, scopeId: unknown) => {
     assertTrustedSender(event)
@@ -197,9 +200,9 @@ function registerIpc(): void {
     if (draftStore === undefined) throw new Error('Requirement draft store is unavailable')
     return draftStore.discard(scopeId, attachmentId)
   })
-  ipcMain.handle(IPC_CHANNELS.exportChatRecord, async (event, suggestedName: unknown, markdown: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.exportTaskRecord, async (event, suggestedName: unknown, markdown: unknown) => {
     assertTrustedSender(event)
-    return exportChatRecord(suggestedName, markdown)
+    return exportTaskRecord(suggestedName, markdown)
   })
   ipcMain.handle(IPC_CHANNELS.watchSource, async (event, sourceId: unknown) => {
     assertTrustedSender(event)
@@ -237,7 +240,7 @@ function createApplicationMenu(): void {
     {
       label: '文件',
       submenu: [
-        { label: '打开项目…', accelerator: 'CmdOrCtrl+O', click: () => void chooseProject() },
+        { label: '打开项目文件夹…', accelerator: 'CmdOrCtrl+O', click: () => void chooseProject('folder') },
         { type: 'separator' },
         { role: 'quit', label: '退出 Codentum' }
       ]
@@ -306,7 +309,11 @@ function createWindow(): BrowserWindow {
 }
 
 void app.whenReady().then(async () => {
-  stateHub = new StateHub({ fixtureRoot: fixtureRoot(), pollIntervalMs: 1_000, staleAfterMs: 30_000 })
+  stateHub = new StateHub({
+    fixtureRoot: process.env['CODENTUM_ENABLE_FIXTURES'] === '1' ? fixtureRoot() : null,
+    pollIntervalMs: 1_000,
+    staleAfterMs: 30_000
+  })
   draftStore = new RequirementDraftStore(resolve(app.getPath('userData'), 'requirement-drafts'))
   await draftStore.initialize()
   sidecar = new SidecarManager(app)

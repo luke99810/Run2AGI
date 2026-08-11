@@ -63,7 +63,9 @@ RULES: list[tuple[str, re.Pattern[str], str]] = [
 ]
 
 PLACEHOLDER = re.compile(
-    r"^(REPLACE_ME|CHANGE_?ME|YOUR_|<|\$\{|x{3,}$|placeholder|example|dummy|test[_-]?key)", re.IGNORECASE
+    r"^(REPLACE_ME|CHANGE_?ME|YOUR_|<|\$\{|x{3,}$|placeholder|example|dummy|test[_-]?key|"
+    r"sk-(?:not[-_]?a[-_]?real[-_]?key|test[_-]?key|placeholder|dummy))",
+    re.IGNORECASE,
 )
 
 SKIP_DIRS = {

@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { App } from 'electron'
@@ -145,6 +146,8 @@ export class SidecarManager {
   #client: PythonEngineClient | undefined
   #handshake: EngineHandshake = unavailable('Sidecar has not started')
   #starting: Promise<EngineHandshake> | undefined
+  #projectRoot: string | undefined
+  #binding: Promise<EngineHandshake> | undefined
 
   public constructor(app: Pick<App, 'isPackaged' | 'getAppPath'>) {
     this.#app = app
@@ -167,14 +170,19 @@ export class SidecarManager {
       const launch = resolveSidecarLaunch(this.#app)
       this.#client = PythonEngineClient.launch({
         ...launch,
+        ...(this.#projectRoot === undefined ? {} : { cwd: this.#projectRoot }),
         env: {
           ...process.env,
           PYTHONIOENCODING: 'utf-8',
-          PYTHONUTF8: '1'
+          PYTHONUTF8: '1',
+          ...(this.#projectRoot === undefined ? {} : { CODENTUM_PROJECT_ROOT: this.#projectRoot })
         }
       })
       const raw = await this.#client.request<unknown>('handshake', { protocolVersion: PROTOCOL_VERSION }, 12_000)
       if (!isHandshake(raw)) throw new Error('Sidecar returned an incompatible handshake')
+      if (raw.connected && !this.#matchesBoundProject(raw.projectRoot)) {
+        throw new Error('Agent engine did not bind the selected project')
+      }
       this.#handshake = raw
       return raw
     } catch (error) {
@@ -191,6 +199,9 @@ export class SidecarManager {
     try {
       const raw = await this.#client.request<unknown>('handshake', { protocolVersion: PROTOCOL_VERSION }, 12_000)
       if (!isHandshake(raw)) throw new Error('Sidecar returned an incompatible handshake')
+      if (raw.connected && !this.#matchesBoundProject(raw.projectRoot)) {
+        throw new Error('Agent engine is bound to a different project')
+      }
       this.#handshake = raw
       return raw
     } catch (error) {
@@ -221,10 +232,45 @@ export class SidecarManager {
     return raw
   }
 
-  public async close(): Promise<void> {
+  public async bindProject(projectRoot: string): Promise<EngineHandshake> {
+    if (this.#binding !== undefined) await this.#binding.catch(() => undefined)
+    const binding = this.#bindProjectOnce(projectRoot)
+    this.#binding = binding
+    try {
+      return await binding
+    } finally {
+      if (this.#binding === binding) this.#binding = undefined
+    }
+  }
+
+  async #bindProjectOnce(projectRoot: string): Promise<EngineHandshake> {
+    if (!isAbsolute(projectRoot)) throw new Error('Project root must be absolute')
+    const canonicalRoot = await realpath(projectRoot)
+    const info = await stat(canonicalRoot)
+    if (!info.isDirectory()) throw new Error('Project root must be a directory')
+    if (this.#projectRoot === canonicalRoot && this.#client?.isRunning === true) return this.handshake()
+    await this.#stopClient(1_000)
+    this.#projectRoot = canonicalRoot
+    return this.start()
+  }
+
+  #matchesBoundProject(engineProjectRoot: string | undefined): boolean {
+    if (this.#projectRoot === undefined) return true
+    if (engineProjectRoot === undefined) return false
+    const expected = resolve(this.#projectRoot)
+    const actual = resolve(engineProjectRoot)
+    return process.platform === 'win32' ? actual.toLowerCase() === expected.toLowerCase() : actual === expected
+  }
+
+  async #stopClient(graceMs = 1_500): Promise<void> {
     await this.#starting?.catch(() => undefined)
-    await this.#client?.close()
+    await this.#client?.close(graceMs).catch(() => undefined)
     this.#client = undefined
     this.#handshake = unavailable('Sidecar is stopped')
+  }
+
+  public async close(): Promise<void> {
+    await this.#binding?.catch(() => undefined)
+    await this.#stopClient()
   }
 }

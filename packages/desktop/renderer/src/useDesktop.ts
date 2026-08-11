@@ -4,6 +4,7 @@ import type {
   DraftAttachment,
   EngineHandshake,
   OperatorCommand,
+  ProjectSelectionKind,
   RequirementDraftSnapshot,
   SnapshotSourceDescriptor,
   StateSnapshot
@@ -28,14 +29,14 @@ export interface DesktopState {
   readonly loading: boolean
   readonly error: string | null
   readonly selectSource: (sourceId: string) => void
-  readonly selectProject: () => Promise<void>
+  readonly selectProject: (kind: ProjectSelectionKind) => Promise<void>
   readonly selectDraftFiles: (scopeId: string) => Promise<RequirementDraftSnapshot>
   readonly selectDraftFolders: (scopeId: string) => Promise<RequirementDraftSnapshot>
   readonly loadRequirementDraft: (scopeId: string) => Promise<RequirementDraftSnapshot>
   readonly saveRequirementDraft: (scopeId: string, draft: RequirementDraftSnapshot) => Promise<void>
   readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
   readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
-  readonly exportChatRecord: (suggestedName: string, markdown: string) => Promise<boolean>
+  readonly exportTaskRecord: (suggestedName: string, markdown: string) => Promise<boolean>
   readonly refresh: () => Promise<void>
   readonly sendCommand: (command: OperatorCommand) => Promise<CommandReceipt>
 }
@@ -122,11 +123,11 @@ export function useDesktop(): DesktopState {
     }
   }, [bridge, selectedSourceId])
 
-  const selectProject = useCallback(async () => {
+  const selectProject = useCallback(async (kind: ProjectSelectionKind) => {
     if (bridge === undefined) return
     setError(null)
     try {
-      const source = await bridge.selectProject()
+      const source = await bridge.selectProject(kind)
       if (source === null) return
       setSources((current) => [
         ...current.filter((item) => item.kind !== 'project'),
@@ -153,10 +154,10 @@ export function useDesktop(): DesktopState {
     }
   }, [bridge])
 
-  const exportChatRecord = useCallback(async (suggestedName: string, markdown: string) => {
+  const exportTaskRecord = useCallback(async (suggestedName: string, markdown: string) => {
     if (bridge === undefined) throw new Error('桌面桥接未加载')
     try {
-      return await bridge.exportChatRecord(suggestedName, markdown)
+      return await bridge.exportTaskRecord(suggestedName, markdown)
     } catch (reason) {
       throw new Error(errorMessage(reason))
     }
@@ -251,8 +252,8 @@ export function useDesktop(): DesktopState {
     saveRequirementDraft,
     moveRequirementDraft,
     discardDraftAttachment,
-    exportChatRecord,
+    exportTaskRecord,
     refresh,
     sendCommand
-  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportChatRecord, refresh, sendCommand])
+  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, refresh, sendCommand])
 }

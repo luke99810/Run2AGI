@@ -15,6 +15,12 @@ afterEach(async () => {
 })
 
 describe('FixtureStateSource', () => {
+  it('can keep demo fixtures out of the product source list', () => {
+    const hub = new StateHub({ fixtureRoot: null })
+    expect(hub.listSources()).toEqual([])
+    hub.close()
+  })
+
   it.each([
     ['empty', 0, 0],
     ['mid-flight', 5, 3],

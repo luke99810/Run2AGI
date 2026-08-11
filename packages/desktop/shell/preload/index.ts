@@ -5,14 +5,14 @@ import { IPC_CHANNELS } from '../../shared/ipc'
 const bridge: DesktopBridge = {
   listSources: () => ipcRenderer.invoke(IPC_CHANNELS.listSources),
   readSnapshot: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.readSnapshot, sourceId),
-  selectProject: () => ipcRenderer.invoke(IPC_CHANNELS.selectProject),
+  selectProject: (kind) => ipcRenderer.invoke(IPC_CHANNELS.selectProject, kind),
   selectDraftFiles: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.selectDraftFiles, scopeId),
   selectDraftFolders: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.selectDraftFolders, scopeId),
   loadRequirementDraft: (scopeId) => ipcRenderer.invoke(IPC_CHANNELS.loadRequirementDraft, scopeId),
   saveRequirementDraft: (scopeId, draft) => ipcRenderer.invoke(IPC_CHANNELS.saveRequirementDraft, scopeId, draft),
   moveRequirementDraft: (sourceScopeId, targetScopeId) => ipcRenderer.invoke(IPC_CHANNELS.moveRequirementDraft, sourceScopeId, targetScopeId),
   discardDraftAttachment: (scopeId, attachmentId) => ipcRenderer.invoke(IPC_CHANNELS.discardDraftAttachment, scopeId, attachmentId),
-  exportChatRecord: (suggestedName, markdown) => ipcRenderer.invoke(IPC_CHANNELS.exportChatRecord, suggestedName, markdown),
+  exportTaskRecord: (suggestedName, markdown) => ipcRenderer.invoke(IPC_CHANNELS.exportTaskRecord, suggestedName, markdown),
   watchSource: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.watchSource, sourceId),
   onSnapshot: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: StateSnapshot): void => listener(snapshot)
