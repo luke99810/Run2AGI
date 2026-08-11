@@ -2,6 +2,7 @@
   "id": "qa",
   "summary": "在实现前写验收测试，并执行验收报告。",
   "usesModel": true,
+  "promptRef": "qa.md",
   "writes": ["tests/acceptance/**", "evidence/qa/**"],
   "reads": ["packages/contracts/**", "fixtures/**"],
   "tools": ["read_file", "write_acceptance_tests", "run_acceptance_tests"],

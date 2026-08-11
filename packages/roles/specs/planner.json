@@ -1,0 +1,18 @@
+{
+  "id": "planner",
+  "summary": "把 brief 和契约拆成 WorkPacket，控制粒度、依赖和预算。",
+  "usesModel": true,
+  "promptRef": "planner.md",
+  "writes": [".codentum/packets/**", ".codentum/plans/**"],
+  "reads": ["brief/**", "packages/contracts/**", "boundaries.yaml", "fixtures/**"],
+  "tools": ["read_brief", "read_contract", "write_packet", "write_dependency_graph", "check_boundaries", "estimate_budget"],
+  "transitions": [
+    { "from": "pending", "to": "ready", "requiresGate": "evidence_exists" },
+    { "from": "running", "to": "review", "requiresGate": "evidence_exists" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus-2025-11-05",
+    "defaultEffort": "medium"
+  }
+}

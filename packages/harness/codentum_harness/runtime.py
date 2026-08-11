@@ -18,16 +18,26 @@ from codentum_harness.model_gateway import (
     TokenPricing,
 )
 from codentum_harness.runner import CommandRunner, ModelGatewayRunner
-from codentum_harness.worker import LocalWorkerRuntime, WorkerContextLoader, WorkerRunner
+from codentum_harness.worker import (
+    AgentTeamsClient,
+    AgentTeamsDockerCLIClient,
+    AgentTeamsDockerCLIConfig,
+    LocalWorkerRuntime,
+    TeamWorkerRuntime,
+    WorkerContextLoader,
+    WorkerRunner,
+)
 
 __all__ = [
     "LocalWorkerRuntimeConfig",
     "ModelGatewayConfig",
     "RunnerConfig",
+    "TeamWorkerRuntimeConfig",
     "TokenPricingConfig",
     "build_local_worker_runtime",
     "build_model_gateway",
     "build_runner",
+    "build_team_worker_runtime",
 ]
 
 
@@ -133,6 +143,19 @@ class LocalWorkerRuntimeConfig:
     context_char_budget: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TeamWorkerRuntimeConfig:
+    """Configuration for creating an AgentTeams-backed WorkerRuntime."""
+
+    repo_root: Path | str
+    context_char_budget: int | None = None
+    worker_runtime: str = "copaw"
+    worker_name_prefix: str = "codentum"
+    create_wait_timeout_seconds: float = 300.0
+    controller_container: str = "agentteams-controller"
+    docker_executable: str | None = None
+
+
 def build_runner(
     config: RunnerConfig | None,
     *,
@@ -235,6 +258,37 @@ def build_local_worker_runtime(
         role_specs=role_specs,
         context_loader=context_loader,
         context_char_budget=config.context_char_budget,
+    )
+
+
+def build_team_worker_runtime(
+    config: TeamWorkerRuntimeConfig,
+    *,
+    role_specs: tuple[RoleSpec, ...] | None = None,
+    context_loader: WorkerContextLoader | None = None,
+    client: AgentTeamsClient | None = None,
+) -> TeamWorkerRuntime:
+    """Assemble an AgentTeams-backed WorkerRuntime without changing contracts."""
+
+    if config.context_char_budget is not None and config.context_char_budget <= 0:
+        raise ValueError("context_char_budget must be positive")
+    if config.create_wait_timeout_seconds <= 0:
+        raise ValueError("create_wait_timeout_seconds must be positive")
+    resolved_client = client or AgentTeamsDockerCLIClient(
+        AgentTeamsDockerCLIConfig(
+            controller_container=config.controller_container,
+            docker_executable=config.docker_executable,
+        )
+    )
+    return TeamWorkerRuntime(
+        repo_root=config.repo_root,
+        client=resolved_client,
+        role_specs=role_specs,
+        context_loader=context_loader,
+        context_char_budget=config.context_char_budget,
+        worker_runtime=config.worker_runtime,
+        worker_name_prefix=config.worker_name_prefix,
+        create_wait_timeout_seconds=config.create_wait_timeout_seconds,
     )
 
 

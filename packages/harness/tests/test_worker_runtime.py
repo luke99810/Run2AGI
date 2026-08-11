@@ -16,6 +16,8 @@ from codentum_contracts import (
     RoleSpec,
     SpawnRequest,
     WorkerCompleted,
+    WorkPacket,
+    dump_state,
 )
 from codentum_contracts.interfaces import WorkerEvent
 from codentum_harness.context_broker import ContextCandidate
@@ -132,6 +134,87 @@ def test_spawn_writes_evidence_manifest_and_event_log(git_repo: Path, tmp_path: 
     assert events[1]["payload"]["path"] == "checkpoints/0000.json"
 
 
+def test_spawn_fills_empty_tools_from_rolespec(git_repo: Path, tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    empty_tools_req = request(workspace)
+    empty_tools_req = SpawnRequest(
+        packet_id=empty_tools_req.packet_id,
+        role=empty_tools_req.role,
+        mounts=empty_tools_req.mounts,
+        tools=(),
+        routing=empty_tools_req.routing,
+        budget=empty_tools_req.budget,
+        workspace=empty_tools_req.workspace,
+        attempt=empty_tools_req.attempt,
+    )
+    runtime = LocalWorkerRuntime(repo_root=git_repo, role_specs=(role_spec(),))
+
+    handle = asyncio.run(runtime.spawn(empty_tools_req))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+
+    manifest = json.loads((evidence_dir / "manifest.json").read_text(encoding="utf-8"))
+    user_prompt = (evidence_dir / "prompt" / "user.md").read_text(encoding="utf-8")
+    assert manifest["tools"] == ["read_file", "write_file"]
+    assert "- read_file" in user_prompt
+    assert "- write_file" in user_prompt
+
+
+def test_spawn_injects_packet_intent_from_workpacket_file(git_repo: Path, tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    _write_packet(
+        git_repo,
+        WorkPacket(
+            id=PacketId("wp-abcdef"),
+            kind="impl",
+            state="pending",
+            role="coder",
+            ownsPaths=("src/app/",),
+            readsPaths=("tests/",),
+            deps=(),
+            acceptance={
+                "kind": "test",
+                "predicate": "pytest tests/acceptance/test_app.py",
+                "authoredBy": "qa",
+            },
+            budget={
+                "currency": "CNY",
+                "limitCny": 1.0,
+                "spentCny": 0.0,
+                "degradationChain": ("summary",),
+            },
+            attempts=0,
+            evidence=(),
+            provenance={"createdBy": "planner", "createdAt": "2026-08-10T00:00:00Z"},
+        ),
+    )
+    runtime = LocalWorkerRuntime(repo_root=git_repo, role_specs=(role_spec(),))
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    user_prompt = (evidence_dir / "prompt" / "user.md").read_text(encoding="utf-8")
+
+    assert "### packet-intent" in user_prompt
+    assert "pytest tests/acceptance/test_app.py" in user_prompt
+    assert "ownsPaths: src/app/" in user_prompt
+    assert "Visible Context\n\n- (none)" not in user_prompt
+
+
+def test_spawn_falls_back_to_request_intent_when_packet_file_is_missing(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    runtime = LocalWorkerRuntime(repo_root=git_repo, role_specs=(role_spec(),))
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    user_prompt = (evidence_dir / "prompt" / "user.md").read_text(encoding="utf-8")
+
+    assert "### packet-intent" in user_prompt
+    assert "Source: SpawnRequest fallback" in user_prompt
+    assert "Visible Context\n\n- (none)" not in user_prompt
+
+
 def test_spawn_prepares_context_into_checkpoint_with_single_public_entrypoint(
     git_repo: Path,
     tmp_path: Path,
@@ -164,7 +247,7 @@ def test_spawn_prepares_context_into_checkpoint_with_single_public_entrypoint(
             workspace / ".codentum" / "evidence" / handle.worker_id / "checkpoints" / "0000.json"
         ).read_text(encoding="utf-8")
     )
-    assert checkpoint["context"]["slices"][0]["ref"] == "packet"
+    assert {slice_["ref"] for slice_ in checkpoint["context"]["slices"]} == {"packet-intent", "packet"}
 
 
 async def _spawn_and_settle(runtime: LocalWorkerRuntime, req: SpawnRequest) -> WorkerCompleted:
@@ -211,3 +294,12 @@ def _git() -> str:
     if exe is None:
         raise RuntimeError("git executable not found")
     return exe
+
+
+def _write_packet(repo: Path, packet: WorkPacket) -> None:
+    packets_dir = repo / ".codentum" / "packets"
+    packets_dir.mkdir(parents=True, exist_ok=True)
+    (packets_dir / f"{packet.id}.json").write_text(
+        json.dumps(dump_state(packet), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )

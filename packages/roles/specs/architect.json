@@ -1,0 +1,24 @@
+{
+  "id": "architect",
+  "summary": "把需求转成契约、ADR 与模块边界，优先消除传播面最大的设计错误。",
+  "usesModel": true,
+  "promptRef": "architect.md",
+  "writes": ["packages/contracts/**", "docs/adr/**", "boundaries.yaml"],
+  "reads": ["brief/**", "fixtures/**", "docs/00-总体设计方案.md", "docs/04-模型路由表.md"],
+  "tools": [
+    "read_brief",
+    "write_contract",
+    "write_adr",
+    "schema_validate",
+    "probe_feasibility",
+    "update_boundaries"
+  ],
+  "transitions": [
+    { "from": "running", "to": "review", "requiresGate": "self-test" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus-2025-11-05",
+    "defaultEffort": "high"
+  }
+}

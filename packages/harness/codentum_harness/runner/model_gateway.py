@@ -28,6 +28,19 @@ __all__ = [
     "ModelGatewayRunner",
 ]
 
+_BLOCKER_HEADING_PREFIXES = (
+    "blocker report",
+    "blocker:",
+    "blocked:",
+    "blocking issue",
+    "cannot proceed",
+    "can't proceed",
+    "unable to proceed",
+    "阻塞报告",
+    "无法继续",
+    "不能继续",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ModelGatewayRunner:
@@ -159,7 +172,12 @@ def _record_response(
     )
 
     spent_cny = max(response.usage.cost_cny, _session_spent_cny(session))
-    status = "completed" if response.stop_reason == "end" and not response.tool_calls else "failed"
+    blocker_reason = _explicit_blocker_reason(response.text)
+    status = (
+        "completed"
+        if blocker_reason is None and response.stop_reason == "end" and not response.tool_calls
+        else "failed"
+    )
     result: dict[str, object] = {
         "status": status,
         "model": session.model,
@@ -173,7 +191,18 @@ def _record_response(
         "tool_calls_path": "tool_calls.json",
         "usage_path": "usage.json",
     }
+    if blocker_reason is not None:
+        result["error"] = "blocker_report"
+        result["detail"] = blocker_reason
     evidence = _write_result(paths.model_dir, result)
+
+    if blocker_reason is not None:
+        return WorkerFailed(
+            reason_code=FailureCode.ACCEPTANCE_NOT_MET,
+            detail=f"model reported blocker: {blocker_reason}",
+            evidence=(evidence,),
+            spent_cny=spent_cny,
+        )
 
     if status != "completed":
         detail = (
@@ -199,6 +228,48 @@ def _tool_calls(response: ModelResponse) -> list[dict[str, Any]]:
     return [asdict(tool_call) for tool_call in response.tool_calls]
 
 
+def _explicit_blocker_reason(text: str) -> str | None:
+    """Classify explicit self-reported blockers without guessing task semantics."""
+
+    normalized = _normalized_text(text)
+    if not normalized:
+        return None
+
+    for line in _first_nonempty_lines(text, limit=10):
+        if line.startswith(_BLOCKER_HEADING_PREFIXES):
+            return "explicit blocker heading"
+
+    if "visible context" in normalized and "does not provide" in normalized:
+        return "visible context does not provide task details"
+    if "visible context" in normalized and "no task" in normalized:
+        return "visible context missing task details"
+    if "insufficient context" in normalized and ("task" in normalized or "changes" in normalized):
+        return "insufficient context for requested task"
+    if "可见上下文" in normalized and ("没有" in normalized or "不足" in normalized):
+        return "visible context missing task details"
+    return None
+
+
+def _first_nonempty_lines(text: str, *, limit: int) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = _strip_markdown_prefix(raw_line).lower()
+        if not line:
+            continue
+        lines.append(line)
+        if len(lines) == limit:
+            break
+    return lines
+
+
+def _strip_markdown_prefix(line: str) -> str:
+    return line.strip().lstrip("#>*_-0123456789. \t").strip()
+
+
+def _normalized_text(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
 def _write_result(model_dir: Path, result: dict[str, object]) -> EvidenceRef:
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "result.json").write_text(
@@ -206,7 +277,8 @@ def _write_result(model_dir: Path, result: dict[str, object]) -> EvidenceRef:
         encoding="utf-8",
     )
     worker_evidence = model_dir.parent
-    return EvidenceRef(f"file:{(model_dir / 'result.json').relative_to(worker_evidence).as_posix()}")
+    result_path = (model_dir / "result.json").relative_to(worker_evidence).as_posix()
+    return EvidenceRef(f"file:{result_path}")
 
 
 def _session_spent_cny(session: ModelSession) -> float:

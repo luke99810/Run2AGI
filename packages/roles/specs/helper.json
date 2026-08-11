@@ -1,0 +1,19 @@
+{
+  "id": "helper",
+  "summary": "分级求助 L1，在 Coder 自修复失败后介入诊断并给出可执行修复。",
+  "usesModel": true,
+  "promptRef": "helper.md",
+  "writes": ["workspace/**", "evidence/helper/**"],
+  "reads": ["packages/contracts/**", "tests/**", "evidence/diffs/**", "evidence/test-reports/**"],
+  "invisible": ["evidence/coder-reasoning/**"],
+  "tools": ["read_file", "write_file", "run_tests", "create_diff", "diagnose_blocker", "write_help_report"],
+  "transitions": [
+    { "from": "running", "to": "review", "requiresGate": "self-test" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus-2025-11-05",
+    "defaultEffort": "high",
+    "mustDifferFrom": ["coder"]
+  }
+}

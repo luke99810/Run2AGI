@@ -1,0 +1,12 @@
+{
+  "attempt": 1,
+  "context_refs": [
+    "requirement:wp-5fe438a743b1"
+  ],
+  "digest": "sha256:b82688274fdc74f387259642cf777f75784e0b8b19a551b37ab29f445306a061",
+  "packet_id": "wp-5fe438a743b1",
+  "role": "coder",
+  "schema_version": 1,
+  "system_path": "system.md",
+  "user_path": "user.md"
+}

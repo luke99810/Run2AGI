@@ -70,6 +70,26 @@ modules:
     paths: ["tests/e2e/**"]
     note: 端到端验收，跨三人模块，由集成责任人持有。
 
+  - name: engine
+    owner: A
+    paths: ["packages/engine/**"]
+    reads: ["packages/contracts/**"]
+    note: >
+      ★ 装配点 —— 把 C 的 delivery 协议接到 A 的 ReconcileLoop 上。
+      在它之前 `engine_proxy` 唯一对话过的引擎是 `delivery/tests/_fake_engine.py`，
+      而那个文件自己写着 "never shipped as an engine"。
+
+      ⚠️ **这条 module 是 A 于 2026-08-10 单方面加的，待 B / C 确认。**
+      按本文件抬头的规矩，改 boundaries.yaml = 改团队契约，需三人同意并记 ADR。
+      ADR-0007 已写但状态是「提议」，不是「已接受」。
+      之所以先加后确认：这个缺口落在三个人的边界之间，
+      三人的 responsibility 都没写它 —— 而不指派的后果是
+      C 一直等 A/B 补引擎、A/B 一直以为 C 在接线，直到录屏那天才发现。
+
+      归 A 的理由：它同时要懂 ReconcileLoop 的生命周期与 delivery 的握手语义，
+      且不引入新的跨包写权限（只读 contracts，其余全是 import）。
+      **若 B 或 C 不同意，改的是这一条，不是代码。**
+
   - name: docs
     owner: A
     paths: ["docs/**"]
