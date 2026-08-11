@@ -81,7 +81,7 @@ review，因为 `_try_review_to_accepted` 拿 packet 自己的 role 去问
 | **Planner** | 一个需求 → **一个** packet，不是分解 | 写死一套假拆分演示更好看，但那是编的 |
 | **Intake** | 占位验收署名按优先级退到存在的角色（当前 `qa`），日志留痕 | B 补 `intake` RoleSpec 后自动切回，有测试钉着 |
 | `WorkPacket` 无任务描述字段 | 需求原文经 `context_loader` 进 `ContextBundle`（设计里本来就有的注入点） | 契约层缺陷仍在，走 ADR-0008 |
-| worker 自陈干不了仍被验收 | **半修**：B 在 `ModelGatewayRunner` 加了确定性 blocker 检测，**显式**的「Blocker Report / 无法继续」现在会转成 `WorkerFailed`，引擎走同一条 runner 所以直接继承 | 剩下的一半仍未修：模型把代码写在回复正文里、`tool_calls` 为空、**一个文件都没创建**，照样 `accepted` ——「写了字」不等于「交了活」 |
+| ~~worker 自陈干不了仍被验收~~ | ✅ **已修**：B 的确定性 blocker 检测挡住「明说做不了」，A 的 `touched_paths` 判定挡住「什么都没说、也什么都没做」（`kind ∈ impl/test/fix` 改动数为 0 → 不得验收） | 判据从「模型说了什么」换成了「工作区里多了什么」，见 §二十二 |
 | `ReconcileLoop` 没有公开的 `admit(packet)` | 本包直接写了私有字段，已记为待办 27 | A 的控制平面改动 |
 
 ---

@@ -83,7 +83,7 @@ python -m pytest tests/e2e/test_engine_live_model.py -q
 - ❌ **不证明「模型改了代码」** —— 那条判据由 `TestRealExecution`
   （command_runner）守着，两条合起来才是完整的 P0
 
-### ★ 缺陷二现在是「半修」，说准很重要
+### ★ 缺陷二已在 08-11 补齐另一半（本文档记录的那一轮跑在修复之前）
 
 08-10 记的缺陷二是：`stop_reason=end` + 无 tool_calls → runner 判 completed →
 门禁看到一条真实证据 → `accepted`，于是「我做不了」被当成了交付物。
@@ -92,14 +92,19 @@ python -m pytest tests/e2e/test_engine_live_model.py -q
 `Blocker Report` / `cannot proceed` / `无法继续` 等前缀 → `WorkerFailed`）。
 引擎走的是同一个 runner，所以**直接继承了这个修复，不需要自己再写一遍**。
 
-**但另一半仍然存在，而且本轮就是它的样本**：模型没有报 blocker，
+**本轮就是另一半的样本 —— 它已于 08-11 修掉**：模型没有报 blocker，
 它把代码写在了回复正文里 —— `tool_calls` 为空，**一个文件都没有被创建**，
 packet 仍然 `accepted`。
 
 > 前一半能靠关键词判定解决：**说了「我做不了」**。
 > 后一半不能：**什么都没说，只是什么也没做。**
-> 判据得从「模型说了什么」换成「工作区里多了什么」——
-> 那是设计决定，不是补丁。
+> 判据得从「模型说了什么」换成「工作区里多了什么」。
+>
+> ★ 08-11 已修：`WorkerCompleted.touched_paths` 是**冻结契约里本来就有的字段**，
+> worker 一直在报，控制平面从来没看过一眼 —— 不是缺数据，是缺判定。
+> 现在 `kind ∈ {impl, test, fix}` 的 packet 改动数为 0 即判未完成。
+> **本目录这一轮跑在修复之前**，所以它的终态是 accepted；
+> 同样的输入现在会停在 review。见 §二十二。
 
 原来那条 `xfail(strict=True)` 已由 B 改写：确定性判定移到
 `packages/harness/tests/test_model_gateway_runner.py`（不依赖模型随机行为），

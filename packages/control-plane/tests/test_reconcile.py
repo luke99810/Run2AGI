@@ -104,10 +104,11 @@ def _make_packet(
     deps: tuple[str, ...] = (),
     owns: tuple[str, ...] = ("src/test/",),
     role: str = "coder",
+    kind: str = "impl",
 ) -> WorkPacket:
     return WorkPacket(
         id=PacketId(pid),
-        kind="impl",
+        kind=kind,  # type: ignore[arg-type]
         state=state,  # type: ignore[arg-type]
         role=role,  # type: ignore[arg-type]
         ownsPaths=owns,
@@ -652,3 +653,175 @@ class TestEdgeCases:
         assert isinstance(report, TickReport)
         assert len(report.transitions) > 0
         assert isinstance(report.transitions[0], PacketTransition)
+
+
+# ════════════════════════════════════════════════════════════════
+#  Tests: 「说完成」不等于「干了活」 —— 缺陷二的另一半
+# ════════════════════════════════════════════════════════════════
+
+class TestCompletedButTouchedNothing:
+    """★ 回归防线：worker 自称完成、证据也是真的，但一个文件都没改。
+
+    2026-08-10 修掉的是「拿控制面自己的簿记当证据」，
+    B 在 runner 里修掉的是「模型明说 blocker 却判 completed」。
+    剩下这一半最安静：**模型什么都没说，只是什么也没做** ——
+    把代码写在回复正文里，`result.json` 确实落了盘（所以证据是真的），
+    但工作区一个文件都没变。
+
+    ★ 判据一直都在：`WorkerCompleted.touched_paths` 是**冻结契约里的字段**，
+      worker 老老实实报了。控制平面从来没看过一眼 ——
+      不是缺数据，是缺判定。
+    """
+
+    def test_impl_packet_that_touched_nothing_is_not_accepted(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """带着真实证据、但 touched_paths 为空 → 停在 review，不得验收。"""
+
+        mock = _MockWorkerRuntime(
+            outcome=WorkerCompleted(
+                # ★ 证据是**真的**（非 sys: 前缀）—— 这正是这条缺陷难抓的原因：
+                #   前两次的判据（前缀判定）在这里全部放行。
+                evidence=(EvidenceRef("file:model/result.json"),),
+                spent_cny=0.5,
+                touched_paths=(),
+            )
+        )
+        empty_loop.worker_runtime = mock
+
+        pkt = _make_packet("wp-notouch01", state="pending", owns=("src/notouch/",))
+        _inject(empty_loop, pkt)
+
+        report = empty_loop.run_until_stable(max_ticks=20)
+        final = empty_loop.packet(PacketId("wp-notouch01"))
+
+        assert final.state == "review", (
+            f"一个文件都没改却走到了 {final.state} —— 「写了字」被当成了「交了活」。"
+            f"轨迹：{[(t.from_state, t.to_state, t.detail) for t in report.transitions]}"
+        )
+        assert any(ref.startswith("sys:worker-failed:") for ref in final.evidence), (
+            f"没落成机器可读的失败标记，下游读不到：{final.evidence}"
+        )
+
+    def test_impl_packet_that_touched_files_is_accepted(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 对照组。没有它，上面那条用「永远停在 review」也能绿。"""
+
+        empty_loop.worker_runtime = _MockWorkerRuntime(outcome=_completed_outcome())
+
+        pkt = _make_packet("wp-touch0001", state="pending", owns=("src/test/",))
+        _inject(empty_loop, pkt)
+
+        empty_loop.run_until_stable(max_ticks=20)
+        assert empty_loop.packet(PacketId("wp-touch0001")).state == "accepted"
+
+    def test_kinds_that_legitimately_touch_nothing_are_not_punished(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 第二个对照组：`review` 类 packet 的产出是判断，不是文件。
+
+        一刀切「没改文件就算没干活」会把它们全判失败 ——
+        那不是更严格，是把判据变成噪音。
+        """
+
+        empty_loop.worker_runtime = _MockWorkerRuntime(
+            outcome=WorkerCompleted(
+                evidence=(EvidenceRef("review:wp-review001@sha256:abc"),),
+                spent_cny=0.2,
+                touched_paths=(),
+            )
+        )
+
+        pkt = _make_packet(
+            "wp-review001", state="pending", owns=("src/review/",), kind="review"
+        )
+        _inject(empty_loop, pkt)
+
+        empty_loop.run_until_stable(max_ticks=20)
+        assert empty_loop.packet(PacketId("wp-review001")).state == "accepted", (
+            "review 类 packet 本来就可能一个文件都不碰，不该被这条判据误伤"
+        )
+
+
+class TestBookkeepingPathsDoNotCountAsWork:
+    """★★ 第二次踩同一个坑：`touched_paths` 本身会被系统自己的产物污染。
+
+    2026-08-11 真链路实测：模型一个文件都没建，`touched_paths` 却有 10 条 ——
+    全是 `.codentum/evidence/**`，harness 自己写进 worker 工作区的
+    prompt / response / usage / manifest。
+
+    于是「改动数 > 0」这条判据**被系统自己的产物满足了**。
+    这和「拿 sys: 簿记当证据」是同一个 bug 下沉了一层：
+    前者污染 evidence 列表，这里污染 touched_paths。
+
+    ★ 单元测试当时全绿 —— 因为 mock 里的 touched_paths 是干净的。
+      只有真的跑一次链路才看得见。这条测试把那次实测钉下来。
+    """
+
+    def test_only_bookkeeping_touched_is_not_work(self, empty_loop: ReconcileLoop) -> None:
+        """全是 `.codentum/` 下的文件 → 等于什么都没干。"""
+
+        empty_loop.worker_runtime = _MockWorkerRuntime(
+            outcome=WorkerCompleted(
+                evidence=(EvidenceRef("file:model/result.json"),),
+                spent_cny=0.5,
+                touched_paths=(
+                    ".codentum/evidence/wp-bk01-attempt-1/model/result.json",
+                    ".codentum/evidence/wp-bk01-attempt-1/prompt/user.md",
+                    ".codentum/evidence/wp-bk01-attempt-1/events.jsonl",
+                ),
+            )
+        )
+        pkt = _make_packet("wp-bk000001", state="pending", owns=("src/bk/",))
+        _inject(empty_loop, pkt)
+
+        empty_loop.run_until_stable(max_ticks=20)
+        final = empty_loop.packet(PacketId("wp-bk000001"))
+        assert final.state == "review", (
+            f"系统自己写的簿记被当成了「干了活」，packet 走到了 {final.state}"
+        )
+
+    def test_windows_separators_are_normalized(self, empty_loop: ReconcileLoop) -> None:
+        """★ 反斜杠也必须被识别为簿记。
+
+        漏掉归一化的话，判据在 Linux 上有效、在 Windows 上失效，**且不报错**。
+        本项目已经踩过两次同类（EvidenceRef 分隔符、流编码）。
+        """
+
+        empty_loop.worker_runtime = _MockWorkerRuntime(
+            outcome=WorkerCompleted(
+                evidence=(EvidenceRef("file:model/result.json"),),
+                spent_cny=0.5,
+                touched_paths=(r".codentum\evidence\wp-bk02-attempt-1\model\result.json",),
+            )
+        )
+        pkt = _make_packet("wp-bk000002", state="pending", owns=("src/bk2/",))
+        _inject(empty_loop, pkt)
+
+        empty_loop.run_until_stable(max_ticks=20)
+        assert empty_loop.packet(PacketId("wp-bk000002")).state == "review"
+
+    def test_real_output_alongside_bookkeeping_still_counts(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 对照组：簿记之外还有真产出 → 必须照常验收。
+
+        没有这条，上面两条用「一律判未完成」也能绿。
+        """
+
+        empty_loop.worker_runtime = _MockWorkerRuntime(
+            outcome=WorkerCompleted(
+                evidence=(EvidenceRef("file:model/result.json"),),
+                spent_cny=0.5,
+                touched_paths=(
+                    ".codentum/evidence/wp-bk03-attempt-1/model/result.json",
+                    "src/bk3/subscriptions.py",  # ← 真正的产出
+                ),
+            )
+        )
+        pkt = _make_packet("wp-bk000003", state="pending", owns=("src/bk3/",))
+        _inject(empty_loop, pkt)
+
+        empty_loop.run_until_stable(max_ticks=20)
+        assert empty_loop.packet(PacketId("wp-bk000003")).state == "accepted"

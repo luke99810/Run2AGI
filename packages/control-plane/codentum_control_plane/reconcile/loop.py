@@ -57,6 +57,54 @@ logger = logging.getLogger(__name__)
 
 
 TERMINAL_STATES: frozenset[PacketState] = frozenset({"accepted", "abandoned"})
+
+BOOKKEEPING_PATH_PREFIX = ".codentum/"
+"""工作区里属于**系统自己**的目录 —— 判断「干没干活」时必须排除。
+
+★ harness 把 prompt / response / usage / manifest / checkpoints 全写进
+  worker 工作区的 `.codentum/evidence/**`。它们确实是「工作区里新增的文件」，
+  但它们是**系统写的**，不是 worker 干出来的产物。
+
+  实测：模型一个文件都没建，`touched_paths` 有 10 条，全是这些。
+  拿它当「干了活」的判据，等于让系统给自己签字 —— 与 `sys:` 前缀那个洞
+  是同一个 bug，只是从 evidence 列表下沉到了 touched_paths。
+"""
+
+
+def _worker_authored_paths(paths: Sequence[str]) -> tuple[str, ...]:
+    """滤掉系统自己写进工作区的簿记，只留 worker 真正的产出。
+
+    ★ 同时归一化分隔符：`_git_changed_paths` 走 `git status --porcelain`，
+      输出的是正斜杠；但别的 runner 未必。在 Windows 上漏掉这一步，
+      `.codentum\\evidence\\...` 会因为前缀匹配不上而被当成真实产出 ——
+      **判据在一个平台上有效、在另一个平台上失效，且不报错。**
+      这个坑本项目已经踩过两次（EvidenceRef 分隔符、流编码）。
+    """
+    kept: list[str] = []
+    for raw in paths:
+        normalized = str(raw).replace("\\", "/")
+        # ★ 不要用 `lstrip("./")` —— 它剥的是**字符集合**不是前缀，
+        #   `.codentum/x` 会被剥成 `codentum/x`，前缀判定随之失效。
+        #   第一版就是这么写的，被本节的测试当场抓住。
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        if normalized.startswith(BOOKKEEPING_PATH_PREFIX):
+            continue
+        kept.append(str(raw))
+    return tuple(kept)
+
+
+MUST_TOUCH_FILES_KINDS: frozenset[str] = frozenset({"impl", "test", "fix"})
+"""这几类 packet 干完活必然会改文件，改动数为 0 就是没干活。
+
+★ 为什么不是全部 kind：`review` / `spike` / `design` 本来就可能一个文件都不碰
+  （评审的产出是判断，探针的产出是结论）。一刀切会把它们全判成失败 ——
+  那不是更严格，是把判据变成噪音。
+
+★ `contract` / `integrate` / `evolve` 暂不列入：前两者确实会改文件，但目前还没有
+  真实样本能确认它们的 worker 一定经由 touched_paths 上报；宁可先漏判，
+  不要先误判。有样本了再加，加的时候记得先写会红的测试。
+"""
 """终态包不再被 reconcile 处理。"""
 
 
@@ -339,6 +387,32 @@ class ReconcileLoop:
     #  调和主循环
     # ════════════════════════════════════════════════════════════
 
+    def admit(self, packet: WorkPacket) -> None:
+        """把一个新 packet 纳入调和范围。**准入校验由调用方负责。**
+
+        ★ 为什么需要这个方法：在它之前，唯一的入口是「先把 packet 文件写进
+          `packets/`，再 `load_state()` 重读一遍」。测试这么用没问题，
+          产品入口这么用会有一个窗口 —— 校验通过与落盘之间，
+          文件已经在磁盘上了但内存里还没有，此时崩溃会留下一个没被校验过的
+          packet 等着下次 `load_state()` 读回来。
+
+          于是引擎一度直接写 `loop._packets[...]` 和 `loop._dirty` 两个私有字段。
+          能跑，但那等于把「怎么纳入一个 packet」这件事的定义散到了包外面 ——
+          哪天这里加了索引或校验，外面那两行不会跟着变，也不会报错。
+
+        ★ 不在这里跑 `AdmissionChecker`：准入需要 RoleSpec，而控制平面
+          **不接触 RoleSpec**（见 `_build_spawn_request` 的注释）。
+          把它塞进来会让控制平面依赖角色层，破坏那条边界。
+          调用方先 check 再 admit，这个顺序由调用方的测试守。
+        """
+        if packet.id in self._packets:
+            raise ValueError(
+                f"packet {packet.id} 已存在。重新提交同一个 id 会静默覆盖它的状态与证据 —— "
+                f"要重开应当新建 packet 并在 provenance.parent 里标明来源。"
+            )
+        self._packets[packet.id] = packet
+        self._dirty = True
+
     def tick(self) -> TickReport:
         """执行一轮调和。
 
@@ -577,10 +651,57 @@ class ReconcileLoop:
                         model=packet.routing.model if packet.routing else "",
                     )
 
+            # ★ 「说完成」不等于「干了活」—— 缺陷二的另一半。
+            #
+            #   2026-08-10 修掉的是「拿控制面自己的簿记当证据」，
+            #   B 在 runner 里修掉的是「模型明说 blocker 却判 completed」。
+            #   剩下这一半更安静：**模型什么都没说，只是什么也没做** ——
+            #   把代码写在回复正文里，一个文件都没落，
+            #   `stop_reason=end` + 无 tool_calls → runner 判 completed →
+            #   证据是真的（result.json 确实存在）→ 门禁放行 → accepted。
+            #
+            #   判据必须从「模型说了什么」换成「工作区里多了什么」。
+            #   而这个数据**一直都在**：`WorkerCompleted.touched_paths` 是冻结契约
+            #   里的字段，worker 老老实实报了改过哪些文件 ——
+            #   ★ 控制平面从来没看过一眼。不是缺数据，是缺判定。
+            #
+            #   只对「必然产生文件改动」的 kind 生效：review / spike / design
+            #   本来就可能一个文件都不碰，一刀切会把它们全判失败。
+            #   ★★ 第二次踩同一个坑：`touched_paths` 本身也会被簿记污染。
+            #   实测（08-11 真链路）：模型一个文件都没建，`touched_paths` 却有
+            #   10 条 —— 全是 `.codentum/evidence/**`，harness 自己写进工作区的
+            #   prompt / response / usage / manifest。判据「改动数 > 0」被
+            #   **系统自己的产物**满足了。
+            #
+            #   这和「拿 sys: 簿记当证据」是同一个 bug 下沉了一层：
+            #   前者污染的是 evidence 列表，这里污染的是 touched_paths。
+            #   单元测试全绿（mock 里 touched_paths 是干净的），
+            #   ★ 只有真的跑一次链路才看得见。
+            touched = _worker_authored_paths(getattr(outcome, "touched_paths", ()) or ())
+            if packet.kind in MUST_TOUCH_FILES_KINDS and not touched:
+                marker = EvidenceRef(
+                    f"{WORKER_FAILED_EVIDENCE_PREFIX}{packet.id}:acceptance_not_met"
+                )
+                logger.warning(
+                    "packet %s（kind=%s）自称完成，但 touched_paths 为空 —— "
+                    "没有任何文件被改动，判为未完成。进入 review 但不会被自动验收。",
+                    packet.id, packet.kind,
+                )
+                return self._apply_transition(
+                    packet,
+                    target="review",
+                    detail=(
+                        f"Worker 自称完成但未改动任何文件（kind={packet.kind}）——"
+                        f"「写了字」不等于「交了活」，进入评审"
+                    ),
+                    evidence_refs=(tuple(outcome.evidence) or ()) + (marker,),
+                    extra_updates={"attempts": packet.attempts + 1},
+                )
+
             return self._apply_transition(
                 packet,
                 target="review",
-                detail=f"Worker 完成，spent=¥{outcome.spent_cny:.4f}",
+                detail=f"Worker 完成，spent=¥{outcome.spent_cny:.4f}，改动 {len(touched)} 个路径",
                 evidence_refs=tuple(outcome.evidence) if outcome.evidence else (),
                 extra_updates={"attempts": packet.attempts + 1},
             )

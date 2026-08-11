@@ -329,18 +329,12 @@ class EngineService:
         with self._lock:
             loop = self._build_loop()
             loop.load_state()
-            loop._packets[packet.id] = packet  # noqa: SLF001 —— 见下方注释
-            loop._dirty = True  # noqa: SLF001
+            # ★ 走公开的 admit()，不再直接写 loop 的私有字段（待办 27 已修）。
+            #   admit 只负责纳入，准入校验由上面那几行负责 —— 顺序不能反：
+            #   先校验再纳入，否则违规 packet 会先进内存再被落盘。
+            loop.admit(packet)
             loop.save_state()
             revision = self._session.bump()
-
-        # ★ 直接写 loop 的私有字段是有意的，也是一处**记在案的欠账**：
-        #   ReconcileLoop 目前没有公开的 `admit(packet)` 入口，
-        #   现有调用方（测试）都是先把 packet 文件写进 packets/ 再 load_state。
-        #   在这里复刻那套「先写文件再重读」会让准入校验和落盘之间出现一个
-        #   窗口。正确的修法是给 ReconcileLoop 加一个公开的准入方法 ——
-        #   那是 A 的控制平面改动，不该顺手塞进这次接线里。
-        #   记为待办：`docs/项目进展与记忆.md` 待办 27。
 
         thread = threading.Thread(
             target=self._run_until_stable,
