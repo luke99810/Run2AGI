@@ -1,17 +1,18 @@
 import type { ReactNode } from 'react'
 import type { StateSnapshot } from '../shared/protocol'
-import { NAVIGATION, type NavigationKey, packetCounts, roleLabel } from '../renderer/src/domain'
+import { NAVIGATION, type NavigationKey, roleLabel } from '../renderer/src/domain'
 import type { TaskSession } from '../renderer/src/task-library'
 import { Icon } from './Common'
 
-const PRIMARY_NAV = new Set<NavigationKey>(['board', 'conversations', 'plugins', 'knowledge', 'skills'])
-const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'cost', 'roles', 'delivery'])
+const PRIMARY_NAV = new Set<NavigationKey>(['conversations', 'plugins', 'knowledge', 'skills', 'roles', 'delivery'])
+const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'cost'])
 
-export function Sidebar({ active, snapshot, tasks, activeTaskId, onNavigate, onSelectWorker, onNewTask, onSelectTask, collapsed, onToggle }: {
+export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabled, onNavigate, onSelectWorker, onNewTask, onSelectTask, collapsed, onToggle }: {
   readonly active: NavigationKey
   readonly snapshot: StateSnapshot | null
   readonly tasks: readonly TaskSession[]
   readonly activeTaskId: string | null
+  readonly validationEnabled: boolean
   readonly onNavigate: (next: NavigationKey) => void
   readonly onSelectWorker: (workerId: string) => void
   readonly onNewTask: () => void
@@ -19,7 +20,6 @@ export function Sidebar({ active, snapshot, tasks, activeTaskId, onNavigate, onS
   readonly collapsed: boolean
   readonly onToggle: () => void
 }): ReactNode {
-  const counts = packetCounts(snapshot?.packets ?? [])
   const currentWorkers = snapshot?.workers.filter((worker) => worker.state === 'running' || worker.state === 'starting' || worker.state === 'waiting') ?? []
   return (
     <aside className={`sidebar${collapsed ? ' collapsed' : ''}`}>
@@ -40,6 +40,7 @@ export function Sidebar({ active, snapshot, tasks, activeTaskId, onNavigate, onS
             key={item.id}
             type="button"
             className={active === item.id ? 'active' : ''}
+            disabled={item.id === 'delivery' && !validationEnabled}
             onClick={() => onNavigate(item.id)}
             title={collapsed ? item.label : undefined}
             aria-current={active === item.id ? 'page' : undefined}
@@ -47,7 +48,7 @@ export function Sidebar({ active, snapshot, tasks, activeTaskId, onNavigate, onS
             <Icon name={item.icon as Parameters<typeof Icon>[0]['name']} size={20} />
             <span>{item.label}</span>
             {item.id === 'execution' && currentWorkers.length > 0 ? <em>{currentWorkers.length}</em> : null}
-            {item.id === 'board' && counts.blocked > 0 ? <em className="danger-count">{counts.blocked}</em> : null}
+            {item.id === 'delivery' && !validationEnabled ? <em>待需求</em> : null}
           </button>
         ))}
       </nav>

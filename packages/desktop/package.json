@@ -60,11 +60,6 @@
         "from": "../delivery/dist/codentum-sidecar",
         "to": "python/codentum-sidecar",
         "filter": ["**/*"]
-      },
-      {
-        "from": "../../fixtures/golden-state",
-        "to": "fixtures/golden-state",
-        "filter": ["**/*"]
       }
     ],
     "win": {

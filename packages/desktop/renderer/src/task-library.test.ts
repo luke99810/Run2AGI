@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   createTaskSession,
   historyForAgent,
+  searchTaskSessions,
   taskDraftScope,
+  taskRequestsValidation,
   toggleSelection,
   updateTaskFromDraft
 } from './task-library'
@@ -16,7 +18,7 @@ describe('task library', () => {
     )
     expect(taskDraftScope(task)).toMatch(/^project:1234567890abcdef12345678:task:[0-9a-f-]{36}$/u)
     expect(task.context.accessMode).toBe('workspace_write')
-    expect(task.context.connectivityMode).toBe('local')
+    expect(task.context).not.toHaveProperty('connectivityMode')
     expect(task.attachmentNames).toEqual([])
   })
 
@@ -36,8 +38,22 @@ describe('task library', () => {
     ])
   })
 
+  it('searches local conversations by title, requirement text, and attachment name', () => {
+    const base = createTaskSession('unassigned', { defaultAccessMode: 'read_only' }, new Date('2026-08-10T00:00:00.000Z'))
+    const task = { ...updateTaskFromDraft(base, '实现一个本地文件分析工具'), attachmentNames: ['需求清单.xlsx'] }
+    expect(searchTaskSessions([task], '文件分析')).toEqual([task])
+    expect(searchTaskSessions([task], '需求清单.xlsx')).toEqual([task])
+    expect(searchTaskSessions([task], '不存在')).toEqual([])
+  })
+
   it('toggles resource ids without duplicates', () => {
     expect(toggleSelection(['git'], 'browser')).toEqual(['git', 'browser'])
     expect(toggleSelection(['git', 'browser'], 'git')).toEqual(['browser'])
+  })
+
+  it('only enables integration and validation for an explicit request', () => {
+    expect(taskRequestsValidation({ title: '调整桌面布局', preview: '让对话区域占满可用宽度' })).toBe(false)
+    expect(taskRequestsValidation({ title: '验证上传功能', preview: '运行文件导入测试并给出结果' })).toBe(true)
+    expect(taskRequestsValidation({ title: 'Run QA', preview: 'verify the integration flow' })).toBe(true)
   })
 })

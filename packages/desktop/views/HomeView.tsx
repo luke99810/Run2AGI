@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DraftAttachment, EngineHandshake, RequirementDraftSnapshot, StateSnapshot } from '../shared/protocol'
 import type { CommandDispatcher } from '../renderer/src/command-types'
-import { formatCny, hasCapability, packetCounts, roleLabel, sameProjectPath } from '../renderer/src/domain'
+import { formatCny, hasCapability, PACKET_STATE_LABELS, packetCounts, packetTitle, roleLabel, sameProjectPath } from '../renderer/src/domain'
 import type { TaskContextSelection, TaskHistoryEntry, TaskSession } from '../renderer/src/task-library'
 import { RequirementComposer } from '../inputs/RequirementComposer'
 import { EmptyState, Icon } from '../panels/Common'
@@ -24,7 +24,6 @@ export function HomeView({
   onTaskContextChange,
   onTaskSubmitted,
   onOpenExecution,
-  onOpenBoard,
   onSearchChat,
   onExportChat
 }: {
@@ -45,7 +44,6 @@ export function HomeView({
   readonly onTaskContextChange: (context: TaskContextSelection) => void
   readonly onTaskSubmitted: () => void
   readonly onOpenExecution: () => void
-  readonly onOpenBoard: () => void
   readonly onSearchChat: () => void
   readonly onExportChat: () => Promise<boolean>
 }): ReactNode {
@@ -55,8 +53,9 @@ export function HomeView({
   const [chatActionStatus, setChatActionStatus] = useState<string | null>(null)
   const packets = snapshot?.packets ?? []
   const executablePackets = packets.filter((packet) => packet.state !== 'accepted' && packet.state !== 'abandoned')
-  const suspendedPackets = packets.filter((packet) => packet.state === 'blocked' || packet.state === 'pending')
   const counts = packetCounts(packets)
+  const completedPackets = counts.accepted + counts.abandoned
+  const currentStep = packets.length === 0 ? 0 : Math.min(completedPackets + 1, packets.length)
   const currentWorkers = snapshot?.workers.filter((worker) => worker.state === 'running' || worker.state === 'starting' || worker.state === 'waiting') ?? []
   const budget = snapshot?.budget
   const stateDirectoryMissing = snapshot?.warnings.some((warning) => warning.startsWith('[missing] State directory is unavailable:')) ?? false
@@ -109,11 +108,11 @@ export function HomeView({
               <button type="button" role="menuitem" onClick={() => {
                 chatMenuRef.current?.removeAttribute('open')
                 onSearchChat()
-              }}><Icon name="search" size={17} /><span><strong>搜索聊天记录</strong><small>关键词、需求内容和文件名</small></span></button>
+              }}><Icon name="search" size={17} /><span><strong>搜索任务记录</strong><small>关键词、需求内容和文件名</small></span></button>
               <button type="button" role="menuitem" onClick={() => {
                 chatMenuRef.current?.removeAttribute('open')
-                void onExportChat().then((exported) => setChatActionStatus(exported ? '聊天记录已导出' : null)).catch((error: unknown) => setChatActionStatus(error instanceof Error ? error.message : String(error)))
-              }}><Icon name="file" size={17} /><span><strong>导出聊天记录</strong><small>保存为 Markdown 文件</small></span></button>
+                void onExportChat().then((exported) => setChatActionStatus(exported ? '任务记录已导出' : null)).catch((error: unknown) => setChatActionStatus(error instanceof Error ? error.message : String(error)))
+              }}><Icon name="file" size={17} /><span><strong>导出任务记录</strong><small>保存需求、附件和任务元数据</small></span></button>
             </div>
           </details>
         </div>
@@ -125,22 +124,27 @@ export function HomeView({
             ? '尚未选择工作区'
             : `${snapshot.source.label} · ${snapshot.source.kind === 'fixture' ? '演示快照，只读' : handshake.connected ? '引擎已连接' : '状态可读，引擎未连接'}`}
         </p>
-        {suspendedPackets.length === 0 ? null : (
-          <section className="suspended-task-shelf" aria-label="挂起任务">
-            <header><Icon name="pause" size={16} /><strong>挂起任务</strong><span>{suspendedPackets.length}</span></header>
-            <div>
-              {suspendedPackets.slice(0, 4).map((packet) => (
-                <button type="button" key={packet.id} onClick={onOpenBoard}>
-                  <span>{packet.state === 'blocked' ? '受阻' : '等待依赖'}</span>
-                  <strong>{packet.ownsPaths[0] ?? packet.id}</strong>
+        {packets.length === 0 ? null : (
+          <details className="conversation-progress">
+            <summary>
+              <span className={`conversation-progress-wheel${currentWorkers.length > 0 ? ' active' : ''}`} aria-hidden="true" />
+              <strong>第 {currentStep} / {packets.length} 步</strong>
+              <span>{completedPackets === packets.length ? '任务已完成' : currentWorkers.length > 0 ? `${currentWorkers.length} 个 Agent 正在工作` : '等待下一步'}</span>
+              <span className="conversation-progress-more" aria-hidden="true">•••</span>
+            </summary>
+            <div className="conversation-progress-list">
+              {packets.map((packet, index) => (
+                <button type="button" key={packet.id} onClick={onOpenExecution}>
+                  <span className="conversation-progress-index">{index + 1}</span>
+                  <span><strong>{packetTitle(packet)}</strong><small>{roleLabel(packet.role)}</small></span>
+                  <em className={`packet-progress-${packet.state}`}>{PACKET_STATE_LABELS[packet.state]}</em>
                 </button>
               ))}
             </div>
-          </section>
+          </details>
         )}
         <RequirementComposer
           canSubmit={requirementAvailable}
-          canAddFiles={snapshot !== null}
           {...(requirementUnavailableReason === undefined ? {} : { unavailableReason: requirementUnavailableReason })}
           taskId={task.id}
           draftScope={draftScope}
@@ -206,7 +210,7 @@ export function HomeView({
               <small>{currentWorkers.length === 0 ? '没有当前 Worker 投影' : currentWorkers.map((worker) => roleLabel(worker.role)).join('、')}</small>
               <Icon name="chevron" size={18} />
             </button>
-            <button type="button" className="overview-card" onClick={onOpenBoard}>
+            <button type="button" className="overview-card" onClick={onOpenExecution}>
               <span className="overview-icon blue"><Icon name="board" size={22} /></span>
               <div><strong>{packets.length}</strong><span>任务总数</span></div>
               <small>{counts.running} 执行中 · {counts.blocked} 受阻 · {counts.accepted} 已通过</small>

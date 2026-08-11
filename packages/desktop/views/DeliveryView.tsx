@@ -3,10 +3,18 @@ import type { StateSnapshot } from '../shared/protocol'
 import { packetTitle, shortPacketId } from '../renderer/src/domain'
 import { EmptyState, Icon, PacketStateChip, PageHeader } from '../panels/Common'
 
-export function DeliveryView({ snapshot }: { readonly snapshot: StateSnapshot | null }): ReactNode {
+export function DeliveryView({ snapshot, enabled = true }: { readonly snapshot: StateSnapshot | null; readonly enabled?: boolean }): ReactNode {
   const integrationPackets = snapshot?.packets.filter((packet) => packet.role === 'integrator' || packet.kind === 'integrate') ?? []
   const buildEvidence = snapshot?.evidence.filter((item) => item.kind === 'build') ?? []
   const testEvidence = snapshot?.evidence.filter((item) => item.kind === 'test_run' || item.kind === 'gate') ?? []
+  if (!enabled) {
+    return (
+      <div className="page delivery-view delivery-disabled">
+        <PageHeader eyebrow="按需启用" title="集成与验证" description="当前任务没有提出测试、验证、验收或集成要求。提出相关要求后，这里才会展示真实方法、进程与结果。" />
+        <EmptyState title="等待验证需求" detail="该入口不会自动运行测试，也不会用演示结果代替真实验证。" icon="package" />
+      </div>
+    )
+  }
   return (
     <div className="page delivery-view">
       <PageHeader eyebrow="状态源记录" title="集成与验证" description="汇总项目已经写入状态源的集成任务和测试、构建结果。" />

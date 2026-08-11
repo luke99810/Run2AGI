@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { GraphFile, WorkPacket } from '@codentum/contracts'
 import type { CapabilityMap, WorkerProjection } from '../../shared/protocol'
-import { buildDependencyWaves, createOperatorCommand, hasCapability, projectWorkerModules, ROLE_ROSTER, sameProjectPath } from './domain'
+import { buildDependencyWaves, createOperatorCommand, hasCapability, projectWorkerModules, ROLE_ROSTER, sameProjectPath, warningsForDisplay } from './domain'
 
 function packet(id: string, deps: readonly string[] = []): WorkPacket {
   return {
@@ -56,6 +56,22 @@ describe('buildDependencyWaves', () => {
       ownership: { locks: [], version: 1 }
     }
     expect(buildDependencyWaves({ graph, packets })).toEqual({ waves: [], unresolved: ['a', 'b'] })
+  })
+})
+
+describe('warning presentation', () => {
+  it('collapses derivative missing-file warnings for an uninitialized project', () => {
+    const missingDirectory = '[missing] State directory is unavailable: C:\\project\\.codentum'
+    expect(warningsForDisplay([
+      missingDirectory,
+      '[missing] Required state file is missing: graph.json',
+      '[missing] Required state directory is missing: packets/'
+    ])).toEqual([missingDirectory])
+  })
+
+  it('keeps specific missing-state warnings when the state directory exists', () => {
+    const warnings = ['[missing] Required state file is missing: graph.json']
+    expect(warningsForDisplay(warnings)).toEqual(warnings)
   })
 })
 

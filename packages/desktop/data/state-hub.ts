@@ -8,7 +8,7 @@ import { ProjectStateSource } from './project-state-source'
 import type { StateListener, StateSource } from './state-source'
 
 export interface StateHubOptions extends DirectoryStateSourceOptions {
-  readonly fixtureRoot?: string
+  readonly fixtureRoot?: string | null
 }
 
 export class StateHub {
@@ -23,7 +23,7 @@ export class StateHub {
       ...(options.staleAfterMs === undefined ? {} : { staleAfterMs: options.staleAfterMs })
     }
 
-    const fixtureRoot = options.fixtureRoot ?? findFixtureRoot()
+    const fixtureRoot = options.fixtureRoot === null ? undefined : options.fixtureRoot ?? findFixtureRoot()
     if (fixtureRoot !== undefined) {
       for (const fixtureName of discoverFixtures(fixtureRoot)) {
         const source = new FixtureStateSource(fixtureRoot, fixtureName, this.sourceOptions)

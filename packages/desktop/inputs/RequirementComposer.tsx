@@ -80,7 +80,6 @@ function formatFileSize(bytes: number): string {
 
 export function RequirementComposer({
   canSubmit,
-  canAddFiles,
   unavailableReason,
   taskId,
   draftScope,
@@ -100,7 +99,6 @@ export function RequirementComposer({
   discardDraftAttachment
 }: {
   readonly canSubmit: boolean
-  readonly canAddFiles: boolean
   readonly unavailableReason?: string
   readonly taskId: string
   readonly draftScope: string
@@ -234,7 +232,7 @@ export function RequirementComposer({
 
   async function addAttachment(kind: DraftAttachment['kind']): Promise<void> {
     const scope = activeScope.current
-    if (!canAddFiles || scope === null) return
+    if (scope === null) return
     setAttachmentMenuOpen(false)
     setSelectingKind(kind)
     setError(null)
@@ -281,7 +279,7 @@ export function RequirementComposer({
     event.preventDefault()
     const scope = activeScope.current
     const requirement = draft.text.trim()
-    if (!canSubmit || taskContext.connectivityMode === 'online' || scope === null || requirement === '') return
+    if (!canSubmit || scope === null || requirement === '') return
     const submittedDraft = draft
     setSubmitting(true)
     setReceipt(null)
@@ -297,7 +295,6 @@ export function RequirementComposer({
           draftScope: scope,
           attachments: submittedDraft.attachments,
           requestedAccessMode: taskContext.accessMode,
-          connectivityMode: taskContext.connectivityMode,
           pluginIds: taskContext.pluginIds,
           knowledgeIds: taskContext.knowledgeIds,
           skillIds: taskContext.skillIds,
@@ -364,13 +361,13 @@ export function RequirementComposer({
             aria-label="添加附件"
             aria-haspopup="menu"
             aria-expanded={attachmentMenuOpen}
-            disabled={!canAddFiles || loadingDraft || selectingKind !== null || draft.attachments.length >= MAX_DRAFT_ATTACHMENTS}
+            disabled={loadingDraft || selectingKind !== null || draft.attachments.length >= MAX_DRAFT_ATTACHMENTS}
             onClick={() => {
               setAccessMenuOpen(false)
               setContextMenuOpen(false)
               setAttachmentMenuOpen((open) => !open)
             }}
-            title={canAddFiles ? '添加附件' : '草稿尚未就绪'}
+            title="添加附件"
           ><Icon name="plus" size={21} /></button>
           {attachmentMenuOpen ? (
             <div className="attachment-menu" role="menu" aria-label="添加附件">
@@ -418,23 +415,6 @@ export function RequirementComposer({
             </div>
           ) : null}
         </div>
-        <div className="connectivity-switch" role="radiogroup" aria-label="任务运行模式">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={taskContext.connectivityMode === 'local'}
-            className={taskContext.connectivityMode === 'local' ? 'active' : ''}
-            onClick={() => onContextChange({ ...taskContext, connectivityMode: 'local' })}
-          >本地</button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={taskContext.connectivityMode === 'online'}
-            className={taskContext.connectivityMode === 'online' ? 'active' : ''}
-            title="等待 A/B 接入联网工具和权限审计"
-            onClick={() => onContextChange({ ...taskContext, connectivityMode: 'online' })}
-          >联网</button>
-        </div>
         <div className="composer-menu-wrap" ref={contextMenuRef}>
           <button
             className="composer-menu-trigger"
@@ -478,7 +458,7 @@ export function RequirementComposer({
         <button
           className="send-button"
           type="submit"
-          disabled={!canSubmit || taskContext.connectivityMode === 'online' || loadingDraft || submitting || draft.text.trim() === '' || (receipt !== null && receipt.status !== 'rejected')}
+          disabled={!canSubmit || loadingDraft || submitting || draft.text.trim() === '' || (receipt !== null && receipt.status !== 'rejected')}
           aria-label="提交需求"
           title={canSubmit ? '提交需求' : unavailableReason}
         >
@@ -488,8 +468,6 @@ export function RequirementComposer({
       <div className="composer-status" aria-live="polite">
         {error !== null ? (
           <span className="inline-error">操作失败：{error}</span>
-        ) : taskContext.connectivityMode === 'online' ? (
-          <span className="muted-message"><Icon name="warning" size={16} />联网模式等待 A 提供权限审计、B 提供搜索与抓取工具，当前不会提交。</span>
         ) : !canSubmit ? (
           <span className="muted-message"><Icon name="warning" size={16} />草稿已隔离保存，附件直接引用原位置，已准备 {taskHistory.length} 条历史任务索引；{unavailableReason ?? '当前引擎未开放需求接收能力'}。</span>
         ) : receipt !== null ? (

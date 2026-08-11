@@ -4,6 +4,7 @@ import { Icon, PageHeader } from '../panels/Common'
 import {
   KNOWLEDGE_OPTIONS,
   PLUGIN_OPTIONS,
+  searchTaskSessions,
   SKILL_OPTIONS,
   toggleSelection,
   type ResourceOption,
@@ -19,12 +20,7 @@ export function ConversationsView({ tasks, activeTaskId, onSelectTask, onNewTask
   readonly onNewTask: () => void
 }): ReactNode {
   const [query, setQuery] = useState('')
-  const visible = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase('zh-CN')
-    return normalized === '' ? tasks : tasks.filter((task) =>
-      `${task.title} ${task.preview} ${task.attachmentNames.join(' ')}`.toLocaleLowerCase('zh-CN').includes(normalized)
-    )
-  }, [query, tasks])
+  const visible = useMemo(() => searchTaskSessions(tasks, query), [query, tasks])
 
   return (
     <main className="page conversation-page">

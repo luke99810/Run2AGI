@@ -12,7 +12,6 @@ import type {
 export type NavigationKey =
   | 'home'
   | 'execution'
-  | 'board'
   | 'waves'
   | 'dependency'
   | 'cost'
@@ -34,7 +33,6 @@ export interface NavigationItem {
 export const NAVIGATION: readonly NavigationItem[] = [
   { id: 'home', label: '新任务', icon: 'plus' },
   { id: 'execution', label: '执行中心', icon: 'pulse' },
-  { id: 'board', label: '任务看板', icon: 'board' },
   { id: 'conversations', label: '对话', icon: 'chat' },
   { id: 'plugins', label: '插件', icon: 'plug' },
   { id: 'knowledge', label: '知识库', icon: 'book' },
@@ -328,4 +326,15 @@ export function packetCounts(packets: readonly WorkPacket[]): Readonly<Record<Pa
 export function sourceModeLabel(snapshot: StateSnapshot | null): string {
   if (snapshot === null) return '尚未读取'
   return snapshot.source.kind === 'fixture' ? '演示快照' : '本地项目'
+}
+
+const MISSING_STATE_DIRECTORY_PREFIX = '[missing] State directory is unavailable:'
+
+export function warningsForDisplay(warnings: readonly string[]): readonly string[] {
+  const missingStateDirectory = warnings.find((warning) => warning.startsWith(MISSING_STATE_DIRECTORY_PREFIX))
+  if (missingStateDirectory === undefined) return warnings
+  return [
+    missingStateDirectory,
+    ...warnings.filter((warning) => !warning.startsWith('[missing]') && warning !== missingStateDirectory)
+  ]
 }
