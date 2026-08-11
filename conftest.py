@@ -33,6 +33,7 @@ _IMPORT_ROOTS = (
     ROOT / "packages" / "harness",
     ROOT / "packages" / "roles",
     ROOT / "packages" / "delivery",
+    ROOT / "packages" / "engine",
     ROOT / "scripts",
 )
 

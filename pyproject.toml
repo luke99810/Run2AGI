@@ -27,6 +27,7 @@ packages = [
   "codentum_harness",
   "codentum_roles",
   "codentum_delivery",
+  "codentum_engine",
   "codentum_contracts",
 ]
 
@@ -101,9 +102,20 @@ ignore = [
 # boundaries.yaml 只给 tests/contract（生成物）和 tests/e2e（A）登记了 owner，
 # 一个放在 tests/unit 的目录会是「无主路径」。与其单方面改团队契约，
 # 不如让单元测试落在各自包的地盘里：谁的代码谁的测试，边界天然对齐。
+#
+# ⚠️ 2026-08-10 发现：这张表漏了 `packages/delivery/tests`，于是 C 的 15 条
+#    测试**从来没有进过 `make test`**。Makefile 那边特意注释了「不写死路径，
+#    否则新增测试目录会静默不被覆盖」，把收集范围交给这里作为单一来源 ——
+#    但单一来源本身是手维护的，新增包时没人记得更新它。
+#
+#    「没跑过的测试」和「跑过且通过的测试」在终端上长得一模一样。
+#    现在由 `tests/test_testpaths_coverage.py` 盯着：
+#    新增 packages/*/tests 而忘了登记，那条测试会变红。
 testpaths = [
   "tests",
   "packages/control-plane/tests",
   "packages/harness/tests",
   "packages/roles/tests",
+  "packages/delivery/tests",
+  "packages/engine/tests",
 ]
