@@ -33,7 +33,7 @@
 |---|---|
 | `context-broker/` | 可见性矩阵 + 配方 + 预算降级链 + 检索确定性梯度 |
 | `tool-surface/` | 从 RoleSpec 派生工具面。**角色看不见的工具不出现在列表里** |
-| `worker/` | 执行体封装：Git worktree 隔离、卷挂载、生命周期 |
+| `worker/` | 执行体封装：Solo 的 Git worktree 隔离、Team 的 AgentTeams Worker 资源适配、生命周期 |
 | `runner/` | Worker 的真实执行适配器；P0 先提供本地命令 Runner 与 ModelGatewayRunner，后续接百炼 / Hermes / Claude Code |
 | `prompt_bundle/` | 把已强制过的 RoleSpec / SpawnRequest / ContextBundle 稳定渲染成模型输入包 |
 | `checkpoint/` | 执行中断点与恢复 |
@@ -44,14 +44,21 @@
 ## 组装入口
 
 `codentum_harness.runtime` 是产品侧 / 演示脚本的 composition root：
-`LocalWorkerRuntimeConfig` + `RunnerConfig` → `build_local_worker_runtime()`。
-控制平面仍然只拿到冻结的 `WorkerRuntime`，不需要知道 Runner 是空实现、本地命令，还是后续的百炼 / Hermes / Claude Code。
+`LocalWorkerRuntimeConfig` + `RunnerConfig` → `build_local_worker_runtime()`；
+`TeamWorkerRuntimeConfig` → `build_team_worker_runtime()`。
+控制平面仍然只拿到冻结的 `WorkerRuntime`，不需要知道执行体是 Solo 的本地 worktree，还是 Team 的 AgentTeams Worker。
 
 本地命令 Runner 支持 `{prompt_dir}`、`{system_prompt}`、`{user_prompt}`、`{prompt_manifest}`
 等占位符，外部编码 Agent 命令可直接读取已落盘的 Prompt Bundle。
 
 `ModelGatewayRunner` 则读取同一份 Prompt Bundle，经冻结的 `ModelGateway` 发起一次模型调用，
 并把模型响应、usage、tool_calls 与 prompt digest 写入 `model/` 证据目录。
+
+`TeamWorkerRuntime` 目前是 AgentTeams 适配的最小壳：从同一个 `SpawnRequest` 写 manifest /
+checkpoint-0 / Prompt Bundle，再通过官方 `agt` CLI 创建并检查 AgentTeams Worker 资源。
+在任务派发和结果回收接上之前，`settle()` 会返回 `WorkerFailed(runtime_error)`，
+并附上 `file:agentteams/status.json` 或 `file:agentteams/error.json` 证据，避免把“Worker 资源已 Running”
+误报成“Codentum 任务已完成”。
 
 ---
 
