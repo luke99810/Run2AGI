@@ -15,6 +15,7 @@ export type NavigationKey =
   | 'waves'
   | 'dependency'
   | 'cost'
+  | 'evidence'
   | 'roles'
   | 'delivery'
   | 'conversations'
@@ -40,6 +41,7 @@ export const NAVIGATION: readonly NavigationItem[] = [
   { id: 'waves', label: '依赖波次', icon: 'waves' },
   { id: 'dependency', label: '依赖关系', icon: 'graph' },
   { id: 'cost', label: '成本', icon: 'wallet' },
+  { id: 'evidence', label: '证据与审计', icon: 'shield' },
   { id: 'roles', label: '研发团队', icon: 'people' },
   { id: 'delivery', label: '集成与验证', icon: 'package' }
 ] as const

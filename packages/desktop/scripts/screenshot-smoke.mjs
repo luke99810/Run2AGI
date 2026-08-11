@@ -30,7 +30,8 @@ const SCREENSHOTS = [
   { name: '03-validation.png', navigation: '集成与验证', heading: '集成与验证' },
   { name: '04-dependency.png', navigation: '依赖关系', heading: '依赖关系' },
   { name: '05-cost.png', navigation: '成本', heading: '成本' },
-  { name: '06-team.png', navigation: '研发团队', heading: '研发团队' }
+  { name: '06-team.png', navigation: '研发团队', heading: '研发团队' },
+  { name: '07-evidence.png', navigation: '证据与审计', heading: '证据与审计' }
 ]
 
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
@@ -266,6 +267,8 @@ async function clickNavigation(client, label, expectedHeading) {
       const style = getComputedStyle(element)
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
     }
+    const projectViews = document.querySelector('.workspace-nav')
+    if (projectViews instanceof HTMLDetailsElement) projectViews.open = true
     const button = [...document.querySelectorAll('.sidebar button')]
       .find((candidate) => visible(candidate) && normalize(candidate.querySelector(':scope > span')?.textContent) === ${JSON.stringify(label)})
     if (!(button instanceof HTMLButtonElement)) return false
@@ -298,6 +301,45 @@ async function captureScreenshot(client, filename) {
   const file = await stat(path)
   if (file.size < 5_000) throw new Error(`Screenshot ${filename} is unexpectedly small (${file.size} bytes).`)
   process.stdout.write(`captured ${filename} (${file.size} bytes)\n`)
+}
+
+async function verifyViewport(client, width, height, filename) {
+  await client.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    screenWidth: width,
+    screenHeight: height,
+    deviceScaleFactor: 1,
+    mobile: false
+  })
+  await waitFor(client, `window.innerWidth === ${width} && window.innerHeight === ${height}`, `${width}x${height} viewport`)
+  await settleRenderer(client)
+  const layout = await evaluate(client, `(() => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight }
+    const sidebar = document.querySelector('.sidebar')?.getBoundingClientRect()
+    const workspace = document.querySelector('.app-workspace')?.getBoundingClientRect()
+    const composer = document.querySelector('.requirement-composer')?.getBoundingClientRect()
+    const input = document.querySelector('#requirement-input')?.getBoundingClientRect()
+    return {
+      viewport,
+      scrollWidth: document.documentElement.scrollWidth,
+      scrollHeight: document.documentElement.scrollHeight,
+      sidebar: sidebar === undefined ? null : { left: sidebar.left, right: sidebar.right },
+      workspace: workspace === undefined ? null : { left: workspace.left, right: workspace.right },
+      composer: composer === undefined ? null : { left: composer.left, right: composer.right, top: composer.top, bottom: composer.bottom },
+      input: input === undefined ? null : { left: input.left, right: input.right, top: input.top, bottom: input.bottom }
+    }
+  })()`, `inspect ${width}x${height} layout`)
+  if (layout.scrollWidth > width + 1) throw new Error(`Horizontal overflow at ${width}x${height}: ${JSON.stringify(layout)}`)
+  if (layout.sidebar === null || layout.workspace === null || layout.sidebar.right > layout.workspace.left + 1) {
+    throw new Error(`Sidebar overlaps workspace at ${width}x${height}: ${JSON.stringify(layout)}`)
+  }
+  for (const [name, rect] of [['composer', layout.composer], ['input', layout.input]]) {
+    if (rect === null || rect.left < 0 || rect.right > width + 1 || rect.top < 0 || rect.bottom > height + 1) {
+      throw new Error(`${name} is clipped at ${width}x${height}: ${JSON.stringify(layout)}`)
+    }
+  }
+  await captureScreenshot(client, filename)
 }
 
 async function exerciseInteractiveDetails(client, navigation) {
@@ -412,6 +454,16 @@ async function exerciseInteractiveDetails(client, navigation) {
       throw new Error(`Role roster is incomplete: ${JSON.stringify(roster)}`)
     }
   }
+  if (navigation === '证据与审计') {
+    const audit = await evaluate(client, `(() => ({
+      evidence: document.querySelectorAll('.audit-row').length,
+      decisions: document.querySelectorAll('.decision-row').length,
+      disclosed: document.querySelector('.fixture-notice')?.textContent?.includes('不代表当前项目已经执行') ?? false
+    }))()`, 'audit evidence projection')
+    if (audit.evidence < 1 || audit.decisions < 1 || !audit.disclosed) {
+      throw new Error(`Evidence view is incomplete or overclaims fixture state: ${JSON.stringify(audit)}`)
+    }
+  }
 }
 
 async function terminateChild(child) {
@@ -505,6 +557,10 @@ async function main() {
       await monitor.assertClean(screenshot.navigation)
       await captureScreenshot(client, screenshot.name)
     }
+    await clickNavigation(client, '新对话', '要做什么软件？')
+    await verifyViewport(client, 1366, 768, '08-home-1366x768.png')
+    await verifyViewport(client, 1920, 1080, '09-home-1920x1080.png')
+    await client.send('Emulation.clearDeviceMetricsOverride')
     await monitor.assertClean('completed smoke test')
     process.stdout.write(`verified fixture sources: ${FIXTURE_IDS.join(', ')}\n`)
     process.stdout.write(`screenshot smoke passed: ${outputDirectory}\n`)

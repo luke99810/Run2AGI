@@ -60,7 +60,7 @@ export const PLUGIN_OPTIONS: readonly ResourceOption[] = [
 
 export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
   { id: 'project-knowledge', label: '项目知识库', detail: '读取当前项目 .codentum 知识投影', availability: 'available' },
-  { id: 'task-history', label: '历史任务', detail: '把本机任务索引交给中心 Agent 检索', availability: 'available' },
+  { id: 'task-history', label: '本地任务摘要', detail: '随需求附带本机历史任务摘要；当前不是 MemoryIndex 语义检索', availability: 'available' },
   { id: 'team-memory', label: '团队记忆', detail: '等待 A/B 提供 MemoryIndex 查询端点', availability: 'pending_runtime' }
 ]
 

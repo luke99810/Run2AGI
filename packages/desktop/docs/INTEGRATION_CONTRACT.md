@@ -84,13 +84,13 @@ submitting/accepted → timed_out（最终仍以权威状态重新同步）
 ## 工作区绑定与首次初始化
 
 - **警告是什么**：`[missing] State directory is unavailable` 表示所选工作区里没有 `.codentum` 运行状态目录；它不是“文件夹无法打开”或“路径不可读取”。
-- **为什么会有**：桌面端已经绑定并读取了工作区，但 A 的控制平面尚未对这个普通文件夹执行首次项目初始化，因此 `graph.json`、`budget.json`、任务与证据目录都还不存在。
-- **怎么解决**：A 提供并执行真实的首次初始化入口，原子创建完整 `.codentum`；随后 B 的 WorkerRuntime/Claw 在 C 已绑定的工作区运行，C 监听状态并自动刷新。只隐藏警告或由 C 手工伪造 JSON 都不算解决。
+- **为什么会有**：桌面端已经绑定并读取了工作区，但当前桌面会话尚未连接并运行真实 engine，因此这个普通文件夹还没有生成 `graph.json`、`budget.json`、任务与证据目录。
+- **怎么解决**：以当前 canonical 工作区启动 `packages/engine` 的真实 JSONL CLI，并完成握手；引擎在真实 `submit_requirement` 时原子初始化 `.codentum`，C 监听状态并自动刷新。只隐藏警告或由 C 手工伪造 JSON 都不算解决。
 - 打开任意文件或文件夹后，C 规范化真实项目根路径，关闭旧 Sidecar 会话，并以该路径作为新 Sidecar 进程的 `cwd`；同时通过 `CODENTUM_PROJECT_ROOT` 显式传递路径。
 - 真实引擎连接后，握手返回的 canonical `projectRoot` 必须与所选工作区一致，否则 C 立即关闭会话并保持所有执行能力禁用。
 - 工作区不需要预先包含 `.codentum`。目录缺失表示运行状态尚未初始化，不表示文件夹打开失败；此时仍允许编辑需求、添加附件和保存本地任务草稿。
-- `.codentum` 必须由 A 的首次项目初始化流程原子创建，最小完整形状为 `graph.json`、`budget.json`、`decisions.jsonl`、`packets/` 和 `evidence/`。C 不创建或伪造控制平面状态。
-- A 尚未提供真实 `submit_requirement` 和首次初始化入口、B 尚未提供 WorkerRuntime/Claw 工作区执行适配器时，C 只能证明路径已绑定，不能宣称 Agent 已读取或修改普通文件。
+- `.codentum` 必须由真实 engine/控制平面流程原子创建，最小完整形状为 `graph.json`、`budget.json`、`decisions.jsonl`、`packets/` 和 `evidence/`。C 不创建或伪造控制平面状态。
+- 当前真实 `submit_requirement` 已能把需求送至真模型并写入权威状态，但已留存样本的 `tool_calls` 为空、没有项目文件被创建。C 可以证明路径绑定和状态刷新，不能宣称 Agent 已修改普通文件。
 
 ## B 侧能力请求
 
@@ -116,8 +116,9 @@ submitting/accepted → timed_out（最终仍以权威状态重新同步）
   `evidence/<worker>/manifest.json` 与 `events.jsonl`，不把 worktree 内的状态副本当主项目真源。
 - B 当前事件只保证 `started/checkpoint/finished`，没有固定 `moduleId` 序列；C 因此只显示实际出现的模块，
   不补预设动画步骤。
-- C 已提供可打包 sidecar 和外部引擎代理；A/B 当前仍没有 CLI、`--stdio` JSONL composition root、
-  `__main__` 或 `[project.scripts]`，因此仓库内没有可由代理启动的 A/B 引擎产物。
-- A 当前用短生命周期 `asyncio.run()` 分别调用 `spawn/settle`，B 又在 `spawn` 所在 event loop 创建后台
-  task；该 loop 结束会取消任务。A 传入的 workspace 还是仓库根，而 B 明确要求外置 worktree。两处修复前，
-  不能通过 C 侧适配器把它包装成可发布引擎。
+- `packages/engine` 现已提供 `python -m codentum_engine --project-root ...` JSONL composition root，且
+  `SidecarGateway → engine → ReconcileLoop → LocalWorkerRuntime → 真模型` 已有一次真实运行证据。
+- 该真实样本仍是 one-shot 模型调用：`tool_calls` 为空，没有创建项目文件；AgentTeams Team runtime shell
+  与本地 Worker 资源已有 smoke，但尚不能描述为桌面端 Team-mode 完整闭环。
+- engine 尚未构建为随 Windows 安装包分发的独立产物。系统没有 Python、源码和开发依赖时的冷启动
+  仍未验证，因此不能把 Python CLI 的可运行性写成安装交付完成。

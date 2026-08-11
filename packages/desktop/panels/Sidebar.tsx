@@ -5,7 +5,7 @@ import type { TaskSession } from '../renderer/src/task-library'
 import { Icon } from './Common'
 
 const PRIMARY_NAV = new Set<NavigationKey>(['conversations', 'plugins', 'knowledge', 'skills', 'roles', 'delivery'])
-const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'cost'])
+const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'cost', 'evidence'])
 
 export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabled, onNavigate, onSelectWorker, onNewTask, onSelectTask, collapsed, onToggle }: {
   readonly active: NavigationKey

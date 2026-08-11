@@ -48,7 +48,7 @@ export function ConversationsView({ tasks, activeTaskId, onSelectTask, onNewTask
 
 function resourceCopy(kind: 'plugins' | 'knowledge' | 'skills'): { title: string; description: string; icon: 'plug' | 'book' | 'spark'; options: readonly ResourceOption[]; key: 'pluginIds' | 'knowledgeIds' | 'skillIds' } {
   if (kind === 'plugins') return { title: '插件', description: '为当前任务声明可用工具。标记“待接入”的项目会随需求发送，但不会假装已经生效。', icon: 'plug', options: PLUGIN_OPTIONS, key: 'pluginIds' }
-  if (kind === 'knowledge') return { title: '知识库', description: '选择中心 Agent 可以检索的上下文来源，包括当前项目知识和历史任务。', icon: 'book', options: KNOWLEDGE_OPTIONS, key: 'knowledgeIds' }
+  if (kind === 'knowledge') return { title: '知识库', description: '选择随当前需求提交的上下文来源。本地任务摘要会进入请求，但不冒充尚未接入的 MemoryIndex 语义检索。', icon: 'book', options: KNOWLEDGE_OPTIONS, key: 'knowledgeIds' }
   return { title: 'Skills', description: '为当前任务声明需要的专业能力；最终 Skill 加载由 B 的 RoleSpec 与 ToolSurface 决定。', icon: 'spark', options: SKILL_OPTIONS, key: 'skillIds' }
 }
 

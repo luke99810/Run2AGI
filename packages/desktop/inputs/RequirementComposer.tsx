@@ -469,11 +469,11 @@ export function RequirementComposer({
         {error !== null ? (
           <span className="inline-error">操作失败：{error}</span>
         ) : !canSubmit ? (
-          <span className="muted-message"><Icon name="warning" size={16} />草稿已隔离保存，附件直接引用原位置，已准备 {taskHistory.length} 条历史任务索引；{unavailableReason ?? '当前引擎未开放需求接收能力'}。</span>
+          <span className="muted-message"><Icon name="warning" size={16} />草稿已隔离保存，附件直接引用原位置，已准备 {taskHistory.length} 条本地任务摘要；{unavailableReason ?? '当前引擎未开放需求接收能力'}。</span>
         ) : receipt !== null ? (
           <span className={`receipt-message receipt-${receipt.status}`}>{receiptText(receipt)}</span>
         ) : (
-          <span>草稿已隔离保存 · 附件直接引用原位置 · 中心 Agent 可检索 {taskHistory.length} 条历史任务索引</span>
+          <span>草稿已隔离保存 · 附件直接引用原位置 · 提交时附带 {taskHistory.length} 条本地任务摘要</span>
         )}
       </div>
     </form>

@@ -1,7 +1,8 @@
 # desktop —— 桌面控制台
 
-Electron 应用。★ **对系统状态零写权限——状态纯读端。** 本地需求草稿与附件写入 Electron
-`userData` 私有目录，不写项目的 `.codentum`，也不绕过控制平面。
+Electron 应用。★ **对系统状态零写权限——状态纯读端。** 本地需求草稿和附件引用
+manifest 写入 Electron `userData` 私有目录；附件内容保留在用户选择的原位置，不复制到
+应用目录。两者都不写项目的 `.codentum`，也不绕过控制平面。
 
 ---
 

@@ -13,6 +13,7 @@ import { DependencyView } from '../../views/DependencyView'
 import { CostView } from '../../views/CostView'
 import { RolesView } from '../../views/RolesView'
 import { DeliveryView } from '../../views/DeliveryView'
+import { EvidenceView } from '../../views/EvidenceView'
 import { ConversationsView, HelpView, ResourceLibraryView, SettingsView } from '../../views/WorkbenchViews'
 import {
   createTaskSession,
@@ -276,6 +277,9 @@ export function App(): ReactNode {
       break
     case 'cost':
       view = <CostView snapshot={desktop.snapshot} />
+      break
+    case 'evidence':
+      view = <EvidenceView snapshot={desktop.snapshot} />
       break
     case 'roles':
       view = (
