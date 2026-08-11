@@ -12,13 +12,21 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from codentum_contracts.state import (
+    Acceptance,
+    BudgetGrant,
     DependencyGraph,
+    ModelPolicy,
+    ModelRouting,
     PacketId,
+    Provenance,
     RoleId,
     RoleSpec,
+    RoleTransition,
     WorkPacket,
 )
 from codentum_control_plane.admission import (
@@ -61,90 +69,90 @@ def _pkt(
         ownsPaths=ownsPaths,
         readsPaths=readsPaths,
         deps=tuple(PacketId(d) for d in deps),
-        acceptance={
-            "kind": "test",
-            "predicate": acceptance_predicate,
-            "authoredBy": acceptance_authoredBy,
-        },
-        budget={
-            "currency": "CNY",
-            "limitCny": limitCny,
-            "spentCny": 0.0,
-            "degradationChain": degradationChain,
-        },
+        acceptance=Acceptance(
+            kind= "test",
+            predicate= acceptance_predicate,
+            authoredBy=cast(RoleId, acceptance_authoredBy),
+        ),
+        budget=BudgetGrant(
+            currency= "CNY",
+            limitCny= limitCny,
+            spentCny= 0.0,
+            degradationChain= degradationChain,
+        ),
         routing=(
-            {"model": routing_model, "effort": routing_effort}
+            ModelRouting.model_validate({"model": routing_model, "effort": routing_effort})
             if routing_model
             else None
         ),
         attempts=0,
         evidence=(),
-        provenance={
-            "createdBy": "planner",
-            "createdAt": "2026-08-05T00:00:00Z",
-        },
+        provenance=Provenance(
+            createdBy= "planner",
+            createdAt= "2026-08-05T00:00:00Z",
+        ),
     )
 
 
 def _coder_spec() -> RoleSpec:
     """对应 B 的 specs/coder.json"""
     return RoleSpec(
-        id="coder",  # type: ignore[arg-type]
+        id="coder",
         summary="实现 WorkPacket",
         usesModel=True,
         writes=("workspace/**",),
         reads=("packages/contracts/**", "tests/**"),
         tools=("read_file", "write_file", "run_tests"),
         transitions=(
-            {"from": "running", "to": "review", "requiresGate": "self-test"},
-            {"from": "running", "to": "blocked"},
+            RoleTransition.model_validate({"from": "running", "to": "review", "requiresGate": "self-test"}),
+            RoleTransition.model_validate({"from": "running", "to": "blocked"}),
         ),
-        modelPolicy={
-            "defaultModel": "qwen-plus",
-            "defaultEffort": "medium",
-        },
+        modelPolicy=ModelPolicy(
+            defaultModel= "qwen-plus",
+            defaultEffort= "medium",
+        ),
     )
 
 
 def _qa_spec() -> RoleSpec:
     """对应 B 的 specs/qa.json"""
     return RoleSpec(
-        id="qa",  # type: ignore[arg-type]
+        id="qa",
         summary="写验收测试",
         usesModel=True,
         writes=("tests/acceptance/**",),
         reads=("packages/contracts/**",),
         tools=("write_acceptance_tests",),
         transitions=(
-            {"from": "ready", "to": "running"},
-            {"from": "running", "to": "review", "requiresGate": "acceptance"},
+            RoleTransition.model_validate({"from": "ready", "to": "running"}),
+            RoleTransition.model_validate({"from": "running", "to": "review", "requiresGate": "acceptance"}),
         ),
-        modelPolicy={
-            "defaultModel": "qwen-max",
-            "defaultEffort": "high",
-            "mustDifferFrom": ("coder",),
-        },
+        modelPolicy=ModelPolicy(
+            defaultModel= "qwen-max",
+            defaultEffort= "high",
+            mustDifferFrom= ("coder",),
+        ),
     )
 
 
 def _reviewer_spec() -> RoleSpec:
     """对应 B 的 specs/reviewer.json"""
     return RoleSpec(
-        id="reviewer",  # type: ignore[arg-type]
+        id="reviewer",
         summary="对抗评审",
         usesModel=True,
         writes=("evidence/reviews/**",),
         reads=("packages/contracts/**", "tests/**"),
         tools=("read_file", "read_diff", "write_review"),
         transitions=(
-            {"from": "review", "to": "accepted", "requiresGate": "review"},
-            {"from": "review", "to": "rejected", "requiresGate": "review"},
+            RoleTransition.model_validate({"from": "review", "to": "accepted", "requiresGate": "review"}),
+            RoleTransition.model_validate({"from": "review", "to": "rejected", "requiresGate": "review"}),
         ),
-        modelPolicy={
-            "defaultModel": "qwen-max",
-            "defaultEffort": "high",
-            "mustDifferFrom": ("coder",),
-        },
+        modelPolicy=ModelPolicy(
+            defaultModel= "qwen-max",
+            defaultEffort= "high",
+            mustDifferFrom= ("coder",),
+        ),
     )
 
 
@@ -392,7 +400,7 @@ class TestAdmissionChecker:
 
     def test_custom_rules(self) -> None:
         """可以注入自定义规则。"""
-        def always_reject(pkt, **_ctx):
+        def always_reject(pkt: WorkPacket, **_ctx: object) -> Violation | None:
             return Violation(code="I2_SELF_REVIEW", detail="custom")
         checker = AdmissionChecker(rules=(always_reject,))
         verdict = checker.check(_pkt())

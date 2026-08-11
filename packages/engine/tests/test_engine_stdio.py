@@ -21,10 +21,32 @@ from pathlib import Path
 import pytest
 
 from codentum_delivery.gateway import SidecarGateway
-from codentum_delivery.protocol import Request
+from codentum_delivery.protocol import JsonValue, Request
 
 _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS_LLM_API_KEY")
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _obj(value: JsonValue) -> dict[str, JsonValue]:
+    """把 JsonValue 收窄成对象，收窄不了就当场失败。
+
+    ★ 协议响应按契约必须是对象，收窄失败本身就是值得测试红掉的信息。
+    """
+
+    assert isinstance(value, dict), f"期望 JSON 对象，实际是 {type(value).__name__}"
+    return value
+
+
+def _int(value: JsonValue) -> int:
+    assert isinstance(value, int) and not isinstance(value, bool), (
+        f"期望整数，实际是 {type(value).__name__}"
+    )
+    return value
+
+
+def _text(value: JsonValue) -> str:
+    assert isinstance(value, str), f"期望字符串，实际是 {type(value).__name__}"
+    return value
 
 
 @pytest.fixture
@@ -73,7 +95,12 @@ def _engine_command(project: Path) -> list[str]:
     ]
 
 
-def _submit(gateway: SidecarGateway, handshake: dict, project: Path, text: str) -> dict:
+def _submit(
+    gateway: SidecarGateway,
+    handshake: dict[str, JsonValue],
+    project: Path,
+    text: str,
+) -> dict[str, JsonValue]:
     return gateway.dispatch(
         Request(
             request_id="req-1",
@@ -106,10 +133,10 @@ def test_gateway_completes_a_handshake_with_the_real_engine(
     try:
         handshake = gateway.start()
         assert handshake["connected"] is True, handshake.get("unavailableReason")
-        assert handshake["engineVersion"].startswith("codentum-engine/")
-        assert handshake["capabilities"]["requirements"] is True
+        assert _text(handshake["engineVersion"]).startswith("codentum-engine/")
+        assert _obj(handshake["capabilities"])["requirements"] is True
         # ★ 未实现的能力必须报 false，否则桌面端会把按钮显示为可用
-        assert handshake["capabilities"]["forkFromCheckpoint"] is False
+        assert _obj(handshake["capabilities"])["forkFromCheckpoint"] is False
     finally:
         gateway.close()
 
@@ -129,7 +156,7 @@ def test_submitting_a_requirement_creates_a_real_packet_on_disk(
         assert handshake["connected"] is True
         response = _submit(gateway, handshake, project, "做一个可以管理订阅费用的软件")
         assert response["ok"] is True, response
-        receipt = response["result"]
+        receipt = _obj(response["result"])
         # ★ accepted 而不是 applied —— 活还没干完，回执不能替结果说话
         assert receipt["status"] == "accepted", receipt.get("reason")
     finally:
@@ -192,7 +219,7 @@ def test_engine_survives_a_restart_without_regressing_the_revision(
     try:
         reopened = second.start()
         assert reopened["runId"] == run_id, "同一个 .codentum/ 就是同一次 run"
-        assert reopened["stateRevision"] >= handshake["stateRevision"] + 1
+        assert _int(reopened["stateRevision"]) >= _int(handshake["stateRevision"]) + 1
     finally:
         second.close()
 

@@ -49,6 +49,9 @@ owner: A
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 import json
 import sys
 import threading
@@ -64,7 +67,15 @@ for _root in (
     if str(_root) not in sys.path:
         sys.path.insert(0, str(_root))
 
-from codentum_contracts.state import PacketId, WorkPacket, dump_state  # noqa: E402
+from codentum_contracts.state import (
+    Acceptance,
+    BudgetGrant,
+    EvidenceRef,
+    PacketId,
+    Provenance,
+    WorkPacket,
+    dump_state  # noqa: E402,
+)
 from codentum_control_plane.budget import BudgetTracker  # noqa: E402
 from codentum_control_plane.evidence import acceptance_evidence  # noqa: E402
 from codentum_control_plane.gates import (  # noqa: E402
@@ -92,7 +103,14 @@ class _NoLockTable(LockTable):
       这正是对照组要代表的世界。
     """
 
-    def acquire(self, packet_id, paths, *, at, expected_version=None):  # type: ignore[override]
+    def acquire(  # noqa: D102
+        self,
+        packet_id: PacketId,
+        paths: Sequence[str],
+        *,
+        at: str,
+        expected_version: int | None = None,
+    ) -> AcquireResult:
         return AcquireResult(ok=True, version=self.version, acquired=tuple(paths))
 
 
@@ -121,8 +139,8 @@ class _NullMutex:
     def __enter__(self) -> None:
         return None
 
-    def __exit__(self, *_exc: object) -> bool:
-        return False
+    def __exit__(self, *_exc: object) -> None:
+        return None
 
 
 def _legacy_gate_verdict(gate_id: str, packet: WorkPacket) -> GateVerdict:
@@ -161,7 +179,7 @@ def _packet(
     owns: tuple[str, ...] = ("src/x/",),
     attempts: int = 0,
     limit_cny: float = 5.0,
-    evidence: tuple[str, ...] = (),
+    evidence: tuple[EvidenceRef, ...] = (),
     role: str = "coder",
 ) -> WorkPacket:
     return WorkPacket(
@@ -172,20 +190,20 @@ def _packet(
         ownsPaths=owns,
         readsPaths=("tests/",),
         deps=(),
-        acceptance={"kind": "test", "predicate": "pytest", "authoredBy": "qa"},
-        budget={
-            "currency": "CNY",
-            "limitCny": limit_cny,
-            "spentCny": 0.0,
-            "degradationChain": ("drop_semantic",),
-        },
+        acceptance=Acceptance(kind= "test", predicate= "pytest", authoredBy= "qa"),
+        budget=BudgetGrant(
+            currency= "CNY",
+            limitCny= limit_cny,
+            spentCny= 0.0,
+            degradationChain= ("drop_semantic",),
+        ),
         attempts=attempts,
         evidence=evidence,
-        provenance={"createdBy": "planner", "createdAt": "2026-08-05T00:00:00Z"},
+        provenance=Provenance(createdBy= "planner", createdAt= "2026-08-05T00:00:00Z"),
     )
 
 
-def _run(state_dir: Path, packets: list[WorkPacket], **guardrails: object) -> dict:
+def _run(state_dir: Path, packets: list[WorkPacket], **guardrails: object) -> dict[str, Any]:
     """把一批 packet 落盘后跑到稳定，返回终态。
 
     ★ 刻意走磁盘而不是直接塞 `loop._packets` —— 生产路径是
@@ -210,7 +228,7 @@ def _run(state_dir: Path, packets: list[WorkPacket], **guardrails: object) -> di
 
 def _run_with_lock_table(
     state_dir: Path, packets: list[WorkPacket], lock_table: LockTable | None
-) -> dict:
+) -> dict[str, Any]:
     for f in (state_dir / "packets").glob("*.json"):
         f.unlink()
     (state_dir / "packets").mkdir(parents=True, exist_ok=True)
@@ -246,7 +264,7 @@ _OVERLAP_SHAPES: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def measure_lock(state_dir: Path) -> dict:
+def measure_lock(state_dir: Path) -> dict[str, Any]:
     """I1 单写者：两个 packet 声明重叠路径，只应有一个拿到写权限。"""
     on_violations = 0
     off_violations = 0
@@ -280,7 +298,7 @@ def measure_lock(state_dir: Path) -> dict:
     }
 
 
-def measure_guardian(state_dir: Path) -> dict:
+def measure_guardian(state_dir: Path) -> dict[str, Any]:
     """I5 单会话闭合：尝试次数超上限的 packet 不该再被派工。"""
     attempts = (3, 4, 5, 6, 7, 9, 12, 20)
     leaked_on = leaked_off = 0
@@ -309,7 +327,7 @@ def measure_guardian(state_dir: Path) -> dict:
     }
 
 
-def measure_budget(state_dir: Path) -> dict:
+def measure_budget(state_dir: Path) -> dict[str, Any]:
     """全局预算：单个 packet 要的钱超过全局余额时不该开工。"""
     limits = (1.5, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0)
     global_limit = 1.0
@@ -357,7 +375,7 @@ _SYS_ONLY_EVIDENCE: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def measure_gate_fix() -> dict:
+def measure_gate_fix() -> dict[str, Any]:
     """同一批注入，跑修复前的门禁与修复后的门禁。
 
     ★ 这一组不经过 ReconcileLoop，直接对门禁取样 ——
@@ -372,7 +390,11 @@ def measure_gate_fix() -> dict:
     injected = 0
     detail = []
     for name, ev in _SYS_ONLY_EVIDENCE:
-        pkt = _packet("wp-gate0001", state="review", evidence=ev)
+        pkt = _packet(
+            "wp-gate0001",
+            state="review",
+            evidence=tuple(EvidenceRef(x) for x in ev),
+        )
         # 这一批的共同点：没有任何一条**可作为依据**的证据，或带着失败标记
         for gid in gate_ids:
             injected += 1
@@ -403,7 +425,7 @@ def measure_gate_fix() -> dict:
 #  M3 路径锁并发压测
 # ════════════════════════════════════════════════════════════════
 
-def measure_lock_race(rounds: int = 400, threads: int = 5) -> dict:
+def measure_lock_race(rounds: int = 400, threads: int = 5) -> dict[str, Any]:
     """真实线程竞争下，重叠路径的实际冲突次数。
 
     对照组是 `_UnsynchronizedLockTable`：判定逻辑一行不改，只去掉互斥锁。
@@ -433,6 +455,11 @@ def measure_lock_race(rounds: int = 400, threads: int = 5) -> dict:
             def worker(k: int) -> None:
                 nonlocal corrupted
                 barrier.wait()
+                # ★ 先给个明确的 None，而不是依赖 except 分支 return。
+                #   mypy 在这里读不出「except 里 return 了所以后面 r 一定有值」，
+                #   而它这个保守是对的：以后有人在 except 里改成 continue，
+                #   下面那行就会变成 NameError，且只在并发压测里偶发。
+                r = None
                 try:
                     r = table.acquire(
                         PacketId(f"wp-rc{k:04d}"),
@@ -443,7 +470,7 @@ def measure_lock_race(rounds: int = 400, threads: int = 5) -> dict:
                     with lock:
                         corrupted += 1
                     return
-                if r.ok:
+                if r is not None and r.ok:  # type: ignore[redundant-expr]
                     with lock:
                         winners.append(f"wp-rc{k:04d}")
 
@@ -508,7 +535,7 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def render_svg(data: dict) -> str:
+def render_svg(data: dict[str, Any]) -> str:
     groups = [
         (g["invariant"], g["injected"], g["leaked_off"], g["leaked_on"])
         for g in data["ablation"]
@@ -617,7 +644,7 @@ def render_svg(data: dict) -> str:
 #  main
 # ════════════════════════════════════════════════════════════════
 
-def collect(state_dir: Path) -> dict:
+def collect(state_dir: Path) -> dict[str, Any]:
     return {
         "experiment": "guardrail-ablation",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),

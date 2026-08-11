@@ -41,7 +41,7 @@ DEFAULT_FROZEN_PATHS: tuple[str, ...] = (
 
 DEFAULT_MAX_ATTEMPTS = 3
 
-ARCHITECT_ROLE: RoleId = "architect"  # type: ignore[assignment]
+ARCHITECT_ROLE: RoleId = "architect"
 
 
 def _now_iso() -> str:
@@ -55,7 +55,7 @@ class Guardian:
 
     frozen_paths: tuple[str, ...] = DEFAULT_FROZEN_PATHS
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
-    _interceptions: list = field(default_factory=list, init=False, repr=False)
+    _interceptions: list[Interception] = field(default_factory=list, init=False, repr=False)
     _total_intercepted: int = field(default=0, init=False, repr=False)
 
     # ── I3 契约冻结 ──

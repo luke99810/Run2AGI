@@ -10,9 +10,19 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
-from codentum_contracts.state import PacketId, WorkPacket
+from codentum_contracts.state import (
+    Acceptance,
+    BudgetGrant,
+    EvidenceRef,
+    PacketId,
+    Provenance,
+    RoleId,
+    WorkPacket,
+)
 from codentum_control_plane.gates import GateRunner, GateVerdict, register_builtin_gates
 from codentum_control_plane.gates.builtin import (
     evidence_exists_gate,
@@ -38,30 +48,30 @@ def _pkt(
         ownsPaths=("src/test/",),
         readsPaths=(),
         deps=(),
-        acceptance={
-            "kind": "test",
-            "predicate": acceptance_predicate,
-            "authoredBy": acceptance_authoredBy,
-        },
-        budget={
-            "currency": "CNY",
-            "limitCny": 5.0,
-            "spentCny": 0.0,
-            "degradationChain": ("drop_semantic",),
-        },
+        acceptance=Acceptance(
+            kind= "test",
+            predicate= acceptance_predicate,
+            authoredBy=cast(RoleId, acceptance_authoredBy),
+        ),
+        budget=BudgetGrant(
+            currency= "CNY",
+            limitCny= 5.0,
+            spentCny= 0.0,
+            degradationChain= ("drop_semantic",),
+        ),
         attempts=0,
-        evidence=tuple(evidence),
-        provenance={
-            "createdBy": "planner",
-            "createdAt": "2026-08-05T00:00:00Z",
-        },
+        evidence=tuple(EvidenceRef(e) for e in evidence),
+        provenance=Provenance(
+            createdBy= "planner",
+            createdAt= "2026-08-05T00:00:00Z",
+        ),
     )
 
 
 class TestGateRunner:
     def test_register_and_check(self) -> None:
         runner = GateRunner()
-        def my_gate(pkt, **_ctx):
+        def my_gate(pkt: WorkPacket, **_ctx: object) -> GateVerdict:
             return GateVerdict(passed=True, gate_id="my", detail="ok")
         runner.register("my", my_gate)
         v = runner.check("my", _pkt())
@@ -90,7 +100,7 @@ class TestGateRunner:
     def test_gate_exception_returns_failed(self) -> None:
         """门禁抛异常 → 返回 passed=False 而非崩溃。"""
         runner = GateRunner()
-        def broken(pkt, **_ctx):
+        def broken(pkt: WorkPacket, **_ctx: object) -> GateVerdict:
             raise RuntimeError("boom")
         runner.register("broken", broken)
         v = runner.check("broken", _pkt())
@@ -205,7 +215,7 @@ class TestGatesRejectSysBookkeeping:
         runner = GateRunner()
         register_builtin_gates(runner)
         # 只有控制面自己写的锁簿记 —— 正是 08-09 那个缺陷的现场
-        pkt = _pkt(evidence=("sys:lock:wp-gate001:3",))
+        pkt = _pkt(evidence=(EvidenceRef("sys:lock:wp-gate001:3"),))
         for gate_id in runner.registered:
             v = runner.check(gate_id, pkt)
             assert not v.passed, (

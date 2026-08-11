@@ -21,12 +21,24 @@ from pathlib import Path
 
 import pytest
 
-from codentum_contracts.state import EvidenceRef, PacketId, WorkPacket, dump_state
+from codentum_contracts.state import (
+    Acceptance,
+    BudgetGrant,
+    EvidenceRef,
+    PacketId,
+    Provenance,
+    WorkPacket,
+    dump_state,
+)
+from collections.abc import AsyncIterator
+
 from codentum_contracts.interfaces import (
     AbortReason,
     SpawnRequest,
     WorkerAborted,
+    CheckpointRef,
     WorkerCompleted,
+    WorkerEvent,
     WorkerFailed,
     WorkerHandle,
     WorkerOutcome,
@@ -114,23 +126,23 @@ def _make_packet(
         ownsPaths=owns,
         readsPaths=("tests/",),
         deps=tuple(PacketId(d) for d in deps),
-        acceptance={
-            "kind": "test",
-            "predicate": "pytest",
-            "authoredBy": "qa",
-        },
-        budget={
-            "currency": "CNY",
-            "limitCny": 5.0,
-            "spentCny": 0.0,
-            "degradationChain": ("drop_semantic",),
-        },
+        acceptance=Acceptance(
+            kind= "test",
+            predicate= "pytest",
+            authoredBy= "qa",
+        ),
+        budget=BudgetGrant(
+            currency= "CNY",
+            limitCny= 5.0,
+            spentCny= 0.0,
+            degradationChain= ("drop_semantic",),
+        ),
         attempts=0,
         evidence=(),
-        provenance={
-            "createdBy": "planner",
-            "createdAt": "2026-08-05T00:00:00Z",
-        },
+        provenance=Provenance(
+            createdBy= "planner",
+            createdAt= "2026-08-05T00:00:00Z",
+        ),
     )
 
 
@@ -190,7 +202,7 @@ class TestPendingToReady:
         report = empty_loop.tick()
         assert len(report.transitions) == 1
         t = report.transitions[0]
-        assert t.packet_id == "wp-000001"  # type: ignore[comparison-overlap]
+        assert t.packet_id == "wp-000001"
         assert t.from_state == "pending"
         assert t.to_state == "ready"
 
@@ -212,7 +224,7 @@ class TestPendingToReady:
 
         report = empty_loop.tick()
         assert len(report.transitions) >= 1
-        main_transition = [t for t in report.transitions if t.packet_id == "wp-main01"]  # type: ignore[comparison-overlap]
+        main_transition = [t for t in report.transitions if t.packet_id == "wp-main01"]
         assert len(main_transition) == 1
         assert main_transition[0].to_state == "ready"
 
@@ -229,7 +241,7 @@ class TestPendingToReady:
 
         report = empty_loop.tick()
         # dep1 → ready, dep2 → ready, dep3 still running, main stays pending
-        main = [t for t in report.transitions if t.packet_id == "wp-main01"]  # type: ignore[comparison-overlap]
+        main = [t for t in report.transitions if t.packet_id == "wp-main01"]
         assert len(main) == 0
 
 
@@ -245,7 +257,7 @@ class TestReadyToRunning:
 
         report = empty_loop.tick()
         assert len(report.transitions) >= 1
-        t = [x for x in report.transitions if x.packet_id == "wp-000003"][0]  # type: ignore[comparison-overlap]
+        t = [x for x in report.transitions if x.packet_id == "wp-000003"][0]
         assert t.to_state == "running"
 
         # 锁表里应该有这条锁
@@ -265,7 +277,7 @@ class TestReadyToRunning:
         _inject(empty_loop, pkt)
 
         report = empty_loop.tick()
-        transitions_for_pkt = [t for t in report.transitions if t.packet_id == "wp-000004"]  # type: ignore[comparison-overlap]
+        transitions_for_pkt = [t for t in report.transitions if t.packet_id == "wp-000004"]
         assert len(transitions_for_pkt) == 0
         assert empty_loop.packet(PacketId("wp-000004")).state == "ready"
 
@@ -275,7 +287,7 @@ class TestReadyToRunning:
         _inject(empty_loop, pkt)
 
         report = empty_loop.tick()
-        t = [x for x in report.transitions if x.packet_id == "wp-000005"][0]  # type: ignore[comparison-overlap]
+        t = [x for x in report.transitions if x.packet_id == "wp-000005"][0]
         assert t.to_state == "blocked"
 
 
@@ -283,8 +295,15 @@ class TestReadyToRunning:
 #  Tests: running → review（需要 Mock WorkerRuntime）
 # ════════════════════════════════════════════════════════════════
 
-class _MockWorkerRuntime:
-    """Mock WorkerRuntime —— spawn 立即返回，settle 返回预设结果。"""
+class _MockWorkerRuntime(WorkerRuntime):
+    """Mock WorkerRuntime —— spawn 立即返回，settle 返回预设结果。
+
+    ★ 显式继承 Protocol，而不是靠结构化匹配「碰巧像」。
+      结构化匹配的代价是：协议以后加一个方法，这个替身**不会有任何反应** ——
+      它只是悄悄地不再是 WorkerRuntime，而测试照样绿。
+      显式继承之后，协议变了这里立刻红。
+      （实测：补之前它就少了 events / resume / adopt 三个方法。）
+    """
 
     def __init__(self, outcome: WorkerOutcome | None = None) -> None:
         self._outcome = outcome or WorkerCompleted(
@@ -306,11 +325,25 @@ class _MockWorkerRuntime:
         self._handles[req.packet_id] = h
         return h
 
+    def events(self, handle: WorkerHandle, since_seq: int = 0) -> AsyncIterator[WorkerEvent]:
+        """★ 协议要求的第三个方法。以前没实现 —— 于是这个 mock 在类型上
+        根本不是 WorkerRuntime，只是「碰巧有两个同名方法的对象」。
+        补上它不是为了让 mypy 闭嘴：少一个方法就意味着**这条链路从没被这个
+        替身覆盖过**，而测试看起来一直是绿的。"""
+
+        raise NotImplementedError("reconcile 目前不消费事件流；真要用时这里会明确炸")
+
     async def settle(self, handle: WorkerHandle) -> WorkerOutcome:
         return self._outcome
 
     async def abort(self, handle: WorkerHandle, reason: AbortReason) -> None:
         pass
+
+    async def resume(self, ref: CheckpointRef) -> WorkerHandle:
+        raise NotImplementedError("reconcile 目前不走恢复路径；真要用时这里会明确炸")
+
+    async def adopt(self, runtime_ref: str) -> WorkerHandle | None:
+        return None
 
 
 def _completed_outcome() -> WorkerCompleted:
@@ -363,7 +396,7 @@ class TestRunningToReview:
 
         # Tick 2: running → review（settle returns completed）
         r2 = empty_loop.tick()
-        t = [x for x in r2.transitions if x.packet_id == "wp-000006"][0]  # type: ignore[comparison-overlap]
+        t = [x for x in r2.transitions if x.packet_id == "wp-000006"][0]
         assert t.to_state == "review"
         # 锁应该已经释放
         assert empty_loop._lock_table.holder_of("src/test/") is None
@@ -384,7 +417,7 @@ class TestRunningToReview:
 
         empty_loop.tick()  # ready → running
         r2 = empty_loop.tick()  # running → review
-        t = [x for x in r2.transitions if x.packet_id == "wp-000007"][0]  # type: ignore[comparison-overlap]
+        t = [x for x in r2.transitions if x.packet_id == "wp-000007"][0]
         assert t.to_state == "review"
 
     def test_without_worker_skips_running(self, empty_loop: ReconcileLoop) -> None:
@@ -413,7 +446,7 @@ class TestReviewToAccepted:
         _inject(empty_loop, pkt)
 
         report = empty_loop.tick()
-        t = [x for x in report.transitions if x.packet_id == "wp-000009"][0]  # type: ignore[comparison-overlap]
+        t = [x for x in report.transitions if x.packet_id == "wp-000009"][0]
         assert t.to_state == "accepted"
 
     def test_review_without_evidence_stays(self, empty_loop: ReconcileLoop) -> None:
@@ -490,7 +523,7 @@ class TestBlockedToReady:
         _inject(empty_loop, pkt)
 
         report = empty_loop.tick()
-        t = [x for x in report.transitions if x.packet_id == "wp-000011"][0]  # type: ignore[comparison-overlap]
+        t = [x for x in report.transitions if x.packet_id == "wp-000011"][0]
         assert t.to_state == "ready"
 
     def test_stays_blocked_if_dep_not_ready(self, empty_loop: ReconcileLoop) -> None:
@@ -531,7 +564,7 @@ class TestIdempotency:
 
         # 第二次 tick：ready → running
         r2 = empty_loop.tick()
-        running_t = [t for t in r2.transitions if t.packet_id == "wp-000013"]  # type: ignore[comparison-overlap]
+        running_t = [t for t in r2.transitions if t.packet_id == "wp-000013"]
         # 应该有一条（ready→running）
         assert len(running_t) <= 1
 
@@ -548,7 +581,7 @@ class TestEndToEnd:
         _inject(empty_loop, pkt)
 
         report = empty_loop.run_until_stable(max_ticks=10)
-        transitions = {t.packet_id: t for t in report.transitions if t.packet_id == "wp-e2e001"}  # type: ignore[comparison-overlap]
+        transitions = {t.packet_id: t for t in report.transitions if t.packet_id == "wp-e2e001"}
 
         final_state = empty_loop.packet(PacketId("wp-e2e001")).state
         # 无 worker：从 pending → ready → running，停在 running
@@ -558,7 +591,7 @@ class TestEndToEnd:
         states_seen = [
             t.to_state
             for t in report.transitions
-            if t.packet_id == "wp-e2e001"  # type: ignore[comparison-overlap]
+            if t.packet_id == "wp-e2e001"
         ]
         assert "ready" in states_seen
 

@@ -29,7 +29,16 @@ from pathlib import Path
 
 import pytest
 
-from codentum_contracts.state import PacketId, WorkPacket, dump_state
+from codentum_contracts.state import (
+    Acceptance,
+    BudgetGrant,
+    EvidenceRef,
+    ModelRouting,
+    PacketId,
+    Provenance,
+    WorkPacket,
+    dump_state,
+)
 from codentum_engine.service import EngineConfig, EngineService
 
 _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS_LLM_API_KEY")
@@ -46,7 +55,9 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
-def _packet(pid: str, state: str, evidence: tuple[str, ...] = ()) -> WorkPacket:
+def _packet(
+    pid: str, state: str, evidence: tuple[EvidenceRef, ...] = ()
+) -> WorkPacket:
     return WorkPacket(
         id=PacketId(pid),
         kind="impl",
@@ -55,26 +66,26 @@ def _packet(pid: str, state: str, evidence: tuple[str, ...] = ()) -> WorkPacket:
         ownsPaths=("workspace/",),
         readsPaths=(),
         deps=(),
-        acceptance={  # type: ignore[arg-type]
-            "kind": "manual",
-            "predicate": "operator-review: 占位",
-            "threshold": None,
-            "authoredBy": "qa",
-        },
-        budget={  # type: ignore[arg-type]
-            "currency": "CNY",
-            "limitCny": 1.0,
-            "spentCny": 0.0,
-            "degradationChain": ("drop_semantic",),
-        },
-        routing={"model": "qwen-coder-plus-1106", "effort": "medium", "batch": None},  # type: ignore[arg-type]
+        acceptance=Acceptance(
+            kind= "manual",
+            predicate= "operator-review: 占位",
+            threshold= None,
+            authoredBy= "qa",
+        ),
+        budget=BudgetGrant(
+            currency= "CNY",
+            limitCny= 1.0,
+            spentCny= 0.0,
+            degradationChain= ("drop_semantic",),
+        ),
+        routing=ModelRouting(model= "qwen-coder-plus-1106", effort= "medium", batch= None),
         attempts=1,
         evidence=evidence,
-        provenance={  # type: ignore[arg-type]
-            "createdBy": "intake",
-            "createdAt": "2026-08-11T00:00:00Z",
-            "parent": None,
-        },
+        provenance=Provenance(
+            createdBy= "intake",
+            createdAt= "2026-08-11T00:00:00Z",
+            parent= None,
+        ),
     )
 
 

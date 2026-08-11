@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -29,6 +29,7 @@ __all__ = [
     "check_role_exists",
     "check_role_model_isolation",
     "DEFAULT_RULES",
+    "RuleFn",
 ]
 
 
@@ -45,6 +46,10 @@ ViolationCode = Literal[
     "ROLE_AUTHOR_NOT_FOUND",
     "MODEL_ISOLATION",
 ]
+
+
+RuleFn = Callable[..., "Violation | None"]
+"""一条校验规则的签名。★ 与 checker.py 共用同一个别名，两处各写一份迟早漂移。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,7 +240,7 @@ def check_role_model_isolation(
     return None
 
 
-DEFAULT_RULES: tuple = (
+DEFAULT_RULES: tuple[RuleFn, ...] = (
     check_self_review,
     check_owns_paths,
     check_budget_limit,

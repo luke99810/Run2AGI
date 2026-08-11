@@ -30,12 +30,17 @@ from codentum_contracts.interfaces import (
     WorkerRuntime,
 )
 from codentum_contracts.state import (
+    Acceptance,
+    BudgetGrant,
+    DependencyEdge,
     DependencyGraph,
-    ModelRouting,
     EvidenceRef,
+    ModelRouting,
     OwnershipGraph,
     PacketId,
     PacketState,
+    PathLock,
+    Provenance,
     WorkPacket,
     dump_state,
 )
@@ -57,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 
 TERMINAL_STATES: frozenset[PacketState] = frozenset({"accepted", "abandoned"})
+"""终态包不再被 reconcile 处理。"""
 
 BOOKKEEPING_PATH_PREFIX = ".codentum/"
 """工作区里属于**系统自己**的目录 —— 判断「干没干活」时必须排除。
@@ -105,7 +111,6 @@ MUST_TOUCH_FILES_KINDS: frozenset[str] = frozenset({"impl", "test", "fix"})
   真实样本能确认它们的 worker 一定经由 touched_paths 上报；宁可先漏判，
   不要先误判。有样本了再加，加的时候记得先写会红的测试。
 """
-"""终态包不再被 reconcile 处理。"""
 
 
 # ════════════════════════════════════════════════════════════
@@ -163,7 +168,7 @@ class ReconcileLoop:
     _tick_count: int = field(default=0, init=False)
     _dirty: bool = field(default=False, init=False)
 
-    _loop: object = field(default=None, init=False, repr=False)
+    _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False, repr=False)
     """Persistent event loop shared between spawn() and settle() calls.
     
     Must be a single long-lived loop (not asyncio.run() which creates/destroys
@@ -194,17 +199,17 @@ class ReconcileLoop:
             self._dep_graph = DependencyGraph(
                 nodes=tuple(dep_raw.get("nodes", ())),
                 edges=tuple(
-                    {"from": e["from"], "to": e["to"]}
+                    DependencyEdge(**{"from": e["from"], "to": e["to"]})
                     for e in dep_raw.get("edges", ())
                 ),
             )
             ownership = OwnershipGraph(
                 locks=tuple(
-                    {
-                        "pathPrefix": lk["pathPrefix"],
-                        "heldBy": lk["heldBy"],
-                        "acquiredAt": lk["acquiredAt"],
-                    }
+                    PathLock(
+                        pathPrefix=lk["pathPrefix"],
+                        heldBy=lk["heldBy"],
+                        acquiredAt=lk["acquiredAt"],
+                    )
                     for lk in graph_raw.get("ownership", {}).get("locks", ())
                 ),
                 version=graph_raw.get("ownership", {}).get("version", 0),
@@ -228,34 +233,34 @@ class ReconcileLoop:
                     ownsPaths=tuple(raw.get("ownsPaths", ())),
                     readsPaths=tuple(raw.get("readsPaths", ())),
                     deps=tuple(raw.get("deps", ())),
-                    acceptance={
-                        "kind": raw["acceptance"]["kind"],
-                        "predicate": raw["acceptance"]["predicate"],
-                        "threshold": raw["acceptance"].get("threshold"),
-                        "authoredBy": raw["acceptance"]["authoredBy"],
-                    },
-                    budget={
-                        "currency": raw["budget"]["currency"],
-                        "limitCny": raw["budget"]["limitCny"],
-                        "spentCny": raw["budget"]["spentCny"],
-                        "degradationChain": tuple(raw["budget"].get("degradationChain", ())),
-                    },
+                    acceptance=Acceptance(
+                        kind=raw["acceptance"]["kind"],
+                        predicate=raw["acceptance"]["predicate"],
+                        threshold=raw["acceptance"].get("threshold"),
+                        authoredBy=raw["acceptance"]["authoredBy"],
+                    ),
+                    budget=BudgetGrant(
+                        currency=raw["budget"]["currency"],
+                        limitCny=raw["budget"]["limitCny"],
+                        spentCny=raw["budget"]["spentCny"],
+                        degradationChain=tuple(raw["budget"].get("degradationChain", ())),
+                    ),
                     routing=(
-                        {
-                            "model": raw["routing"]["model"],
-                            "effort": raw["routing"]["effort"],
-                            "batch": raw["routing"].get("batch"),
-                        }
+                        ModelRouting(
+                            model=raw["routing"]["model"],
+                            effort=raw["routing"]["effort"],
+                            batch=raw["routing"].get("batch"),
+                        )
                         if raw.get("routing")
                         else None
                     ),
                     attempts=raw.get("attempts", 0),
                     evidence=tuple(raw.get("evidence", ())),
-                    provenance={
-                        "createdBy": raw["provenance"]["createdBy"],
-                        "createdAt": raw["provenance"]["createdAt"],
-                        "parent": raw["provenance"].get("parent"),
-                    },
+                    provenance=Provenance(
+                        createdBy=raw["provenance"]["createdBy"],
+                        createdAt=raw["provenance"]["createdAt"],
+                        parent=raw["provenance"].get("parent"),
+                    ),
                 )
                 self._packets[packet.id] = packet
 
@@ -386,6 +391,23 @@ class ReconcileLoop:
     # ════════════════════════════════════════════════════════════
     #  调和主循环
     # ════════════════════════════════════════════════════════════
+
+    def _event_loop(self) -> asyncio.AbstractEventLoop:
+        """按需拿到那个长期存活的事件循环。
+
+        ★ 原来只在 spawn 分支里 `if self._loop is None: ... new_event_loop()`，
+          settle 分支直接用 `self._loop.run_until_complete(...)`。当下调用顺序保证了
+          settle 之前一定 spawn 过（`_active_workers` 在 load_state 里被清空），
+          所以跑起来没出过事 —— 但那是**调用顺序**给的保证，不是类型给的。
+          哪天有人让 settle 能在别的路径上被触达，那里就是一个 AttributeError，
+          而且只在恢复场景下偶发。
+
+        ★ 不用 `asyncio.get_event_loop()`：必须是同一个长期存活的循环，
+          B 的 LocalWorkerRuntime 在 spawn() 里起的后台任务要活到 settle()。
+        """
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+        return self._loop
 
     def admit(self, packet: WorkPacket) -> None:
         """把一个新 packet 纳入调和范围。**准入校验由调用方负责。**
@@ -575,14 +597,12 @@ class ReconcileLoop:
             # ★ 确保持久 event loop 已创建
             # 不能用 asyncio.run() 因为 B 的 LocalWorkerRuntime 在 spawn() 中创建
             # 后台 task，必须用同一个 loop 在 settle() 中等待
-            if self._loop is None:
-                self._loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self._loop)
+            asyncio.set_event_loop(self._event_loop())
             try:
                 # 异步 spawn —— reconcile 是同步循环，
                 # 这里使用同步适配（由 WorkerRuntime 实现者保证 spawn 立即返回句柄）
                 # 注意：settle() 在 _try_running_to_review 中异步等待。
-                handle = self._loop.run_until_complete(
+                handle = self._event_loop().run_until_complete(
                     self.worker_runtime.spawn(
                         self._build_spawn_request(packet)
                     )
@@ -631,7 +651,7 @@ class ReconcileLoop:
             return None
 
         try:
-            outcome = self._loop.run_until_complete(self.worker_runtime.settle(handle))
+            outcome = self._event_loop().run_until_complete(self.worker_runtime.settle(handle))
         except Exception:
             # Worker 还在跑或出错了 —— 下轮再看
             return None
@@ -748,7 +768,7 @@ class ReconcileLoop:
             # aborted
             return self._apply_transition(
                 packet, target="blocked",
-                detail=f"Worker 被中止: {outcome.reason}",
+                detail=f"Worker 被中止: {getattr(outcome, 'reason', 'unknown')}",
                 evidence_refs=(),
             )
 

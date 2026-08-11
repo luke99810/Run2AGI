@@ -104,14 +104,20 @@ class Emitter:
         self.seen: set[str] = set()
 
     # ── 子类实现 ──────────────────────────────────────────
-    def render_brand(self, name: str, node: Schema) -> str: ...
-    def render_alias(self, name: str, body: str, node: Schema) -> str: ...
-    def render_object(self, name: str, node: Schema, file: str, desc: str | None) -> str: ...
-    def scalar(self, t: str) -> str: ...
-    def array(self, item: str) -> str: ...
-    def record(self, value: str) -> str: ...
-    def literal(self, values: list[Any]) -> str: ...
-
+    def render_brand(self, name: str, node: Schema) -> str:
+        raise NotImplementedError
+    def render_alias(self, name: str, body: str, node: Schema) -> str:
+        raise NotImplementedError
+    def render_object(self, name: str, node: Schema, file: str, desc: str | None) -> str:
+        raise NotImplementedError
+    def scalar(self, t: str) -> str:
+        raise NotImplementedError
+    def array(self, item: str) -> str:
+        raise NotImplementedError
+    def record(self, value: str) -> str:
+        raise NotImplementedError
+    def literal(self, values: list[Any]) -> str:
+        raise NotImplementedError
     # ── 通用 ──────────────────────────────────────────────
     def type_of(self, node: Any, file: str) -> str:
         node, file = self._unwrap(node, file)
@@ -121,14 +127,16 @@ class Emitter:
         if "oneOf" in node:
             return self.union([self.type_of(n, file) for n in node["oneOf"]])
 
-        brand = node.get("x-brand")
+        raw_brand = node.get("x-brand")
+        brand = str(raw_brand) if raw_brand else None
         if brand:
             if brand not in self.seen:
                 self.seen.add(brand)
                 self.decls.append((brand, self.render_brand(brand, node)))
             return brand
 
-        name = node.get("x-typeName")
+        raw_name = node.get("x-typeName")
+        name = str(raw_name) if raw_name else None
         if name:
             if name not in self.seen:
                 self.seen.add(name)
@@ -175,7 +183,8 @@ class Emitter:
     def doc_of(self, node: Any, file: str) -> str | None:
         """外层 description 优先；没有就取 $ref 目标的。"""
         if isinstance(node, dict) and node.get("description"):
-            return node["description"]
+            description = node["description"]
+            return str(description) if description is not None else None
         try:
             target, _ = deref(node, file, schemas)
         except ValueError:
@@ -189,9 +198,10 @@ class Emitter:
             before = len(self.decls)
             root_code = None
             if p["root"]:
-                title = schema.get("title")
-                if not title:
+                raw_title = schema.get("title")
+                if not raw_title:
                     fail(f"{p['file']} 缺 title —— 根类型名从它来")
+                title = str(raw_title)
                 self.seen.add(title)
                 root_code = self._render_named(title, schema, p["file"])
             else:
@@ -205,10 +215,10 @@ class Emitter:
 
     decl_sep = "\n\n"
 
-    def header(self) -> str: ...
-    def banner(self, title: str) -> str: ...
-
-
+    def header(self) -> str:
+        raise NotImplementedError
+    def banner(self, title: str) -> str:
+        raise NotImplementedError
 # ══════════════════════════════════════════════════════════════
 #  Python / Pydantic
 # ══════════════════════════════════════════════════════════════

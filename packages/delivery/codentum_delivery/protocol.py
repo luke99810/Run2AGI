@@ -72,7 +72,9 @@ def unavailable_handshake(reason: str) -> dict[str, JsonValue]:
         "protocolVersion": PROTOCOL_VERSION,
         "engineVersion": "unavailable",
         "stateRevision": 0,
-        "capabilities": empty_capabilities(),
+        # ★ dict[str, bool] 不是 dict[str, JsonValue] 的子类型（不变性），
+        #   显式转一次比在返回类型上放松要安全。
+        "capabilities": dict(empty_capabilities()),
         "unavailableReason": reason,
     }
 
@@ -143,7 +145,7 @@ def validate_handshake(value: object) -> dict[str, JsonValue]:
         "protocolVersion": PROTOCOL_VERSION,
         "engineVersion": engine_version,
         "stateRevision": revision,
-        "capabilities": capabilities,
+        "capabilities": dict(capabilities),
     }
     if connected:
         assert isinstance(run_id, str)

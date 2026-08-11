@@ -9,10 +9,13 @@ from shutil import which
 
 import pytest
 from codentum_contracts import (
+    Acceptance,
+    BudgetGrant,
     BudgetGrantRuntime,
     EvidenceRef,
     ModelRouting,
     PacketId,
+    Provenance,
     RoleSpec,
     SpawnRequest,
     WorkerCompleted,
@@ -171,20 +174,20 @@ def test_spawn_injects_packet_intent_from_workpacket_file(git_repo: Path, tmp_pa
             ownsPaths=("src/app/",),
             readsPaths=("tests/",),
             deps=(),
-            acceptance={
-                "kind": "test",
-                "predicate": "pytest tests/acceptance/test_app.py",
-                "authoredBy": "qa",
-            },
-            budget={
-                "currency": "CNY",
-                "limitCny": 1.0,
-                "spentCny": 0.0,
-                "degradationChain": ("summary",),
-            },
+            acceptance=Acceptance(
+                kind= "test",
+                predicate= "pytest tests/acceptance/test_app.py",
+                authoredBy= "qa",
+            ),
+            budget=BudgetGrant(
+                currency= "CNY",
+                limitCny= 1.0,
+                spentCny= 0.0,
+                degradationChain= ("summary",),
+            ),
             attempts=0,
             evidence=(),
-            provenance={"createdBy": "planner", "createdAt": "2026-08-10T00:00:00Z"},
+            provenance=Provenance(createdBy= "planner", createdAt= "2026-08-10T00:00:00Z"),
         ),
     )
     runtime = LocalWorkerRuntime(repo_root=git_repo, role_specs=(role_spec(),))

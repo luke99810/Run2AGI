@@ -7,8 +7,10 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
-from codentum_contracts.state import EvidenceRef, RoleId, RoleSpec, RoleTransition
+from codentum_contracts.state import EvidenceRef, PacketState, RoleId, RoleSpec, RoleTransition
 from codentum_control_plane.state_machine import (
     TERMINAL_STATES,
     TerminalStateError,
@@ -88,7 +90,7 @@ def test_evidence_requirement_applies_to_every_transition() -> None:
         [spec("manager", [("pending", "ready", None), ("ready", "blocked", None)])]
     )
     for current, target in [("pending", "ready"), ("ready", "blocked")]:
-        assert not table.check(role="manager", current=current, target=target, evidence=()).allowed
+        assert not table.check(role="manager", current=cast(PacketState, current), target=cast(PacketState, target), evidence=()).allowed
 
 
 # ── 角色权限 ─────────────────────────────────────────────────

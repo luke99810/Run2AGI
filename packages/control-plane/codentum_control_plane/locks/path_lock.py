@@ -73,7 +73,7 @@ def normalize_path(raw: str) -> str:
       锁表里的字符串和它实际指向的位置可以不一致，那样任何审计都没法只看
       锁表就判断谁能写哪儿。让它在入口处就不存在，比事后解析更可靠。
     """
-    if not isinstance(raw, str):  # type: ignore[unreachable]  # 运行时来自 JSON，类型可能不可信
+    if not isinstance(raw, str):  # 运行时来自 JSON，类型可能不可信
         raise ValueError(f"路径必须是字符串，收到 {type(raw).__name__}")
 
     text = raw.replace("\\", "/")

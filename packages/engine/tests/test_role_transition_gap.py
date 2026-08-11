@@ -37,7 +37,15 @@ from pathlib import Path
 
 import pytest
 
-from codentum_contracts.state import PacketId, WorkPacket
+from codentum_contracts.state import (
+    EvidenceRef,
+    Acceptance,
+    BudgetGrant,
+    ModelRouting,
+    PacketId,
+    Provenance,
+    WorkPacket,
+)
 from codentum_control_plane.state_machine import TransitionTable
 from codentum_engine.service import EngineConfig, EngineService
 from codentum_roles.loader import load_builtin_role_specs
@@ -62,23 +70,23 @@ def _reviewed_packet(pid: str) -> WorkPacket:
         ownsPaths=("workspace/",),
         readsPaths=(),
         deps=(),
-        acceptance={
-            "kind": "manual",
-            "predicate": "operator-review: 占位",
-            "threshold": None,
-            "authoredBy": "qa",
-        },
-        budget={
-            "currency": "CNY",
-            "limitCny": 1.0,
-            "spentCny": 0.0,
-            "degradationChain": ("drop_semantic",),
-        },
-        routing={"model": "qwen-coder-plus-1106", "effort": "medium", "batch": None},
+        acceptance=Acceptance(
+            kind= "manual",
+            predicate= "operator-review: 占位",
+            threshold= None,
+            authoredBy= "qa",
+        ),
+        budget=BudgetGrant(
+            currency= "CNY",
+            limitCny= 1.0,
+            spentCny= 0.0,
+            degradationChain= ("drop_semantic",),
+        ),
+        routing=ModelRouting(model= "qwen-coder-plus-1106", effort= "medium", batch= None),
         attempts=1,
         # ★ 非 sys: 前缀的真实证据 —— 08-10 修掉的那个洞要求这个
-        evidence=("file:model/result.json",),
-        provenance={"createdBy": "intake", "createdAt": "2026-08-10T00:00:00Z", "parent": None},
+        evidence=(EvidenceRef("file:model/result.json"),),
+        provenance=Provenance(createdBy= "intake", createdAt= "2026-08-10T00:00:00Z", parent= None),
     )
 
 
@@ -112,10 +120,10 @@ def test_the_transition_table_itself_is_right(project: Path) -> None:
 
     table = TransitionTable(load_builtin_role_specs())
     assert not table.check(
-        role="coder", current="review", target="accepted", evidence=("file:x",)
+        role="coder", current="review", target="accepted", evidence=(EvidenceRef("file:x"),)
     ).allowed
     assert table.check(
-        role="reviewer", current="review", target="accepted", evidence=("file:x",)
+        role="reviewer", current="review", target="accepted", evidence=(EvidenceRef("file:x"),)
     ).allowed
 
 

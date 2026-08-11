@@ -71,7 +71,12 @@ class JsonlEngineProxy:
         request_timeout_seconds: float = 8.0,
         cwd: Path | None = None,
     ) -> None:
-        if not command or not all(isinstance(part, str) and part for part in command):
+        # ★ isinstance 在类型上是冗余的（签名已写 Sequence[str]），但这里是
+        #   信任边界：命令来自环境变量 CODENTUM_ENGINE_COMMAND_JSON，
+        #   调用方未必经过类型检查。删掉它等于把「运行时校验」当成「类型已保证」。
+        if not command or not all(
+            isinstance(part, str) and part for part in command  # type: ignore[redundant-expr]
+        ):
             raise ValueError("engine command must be a non-empty argv sequence")
         if request_timeout_seconds <= 0:
             raise ValueError("request timeout must be positive")
@@ -218,8 +223,9 @@ class JsonlEngineProxy:
                     )
                     self._process.terminate()
                     return
+                decoded: object
                 try:
-                    decoded: object = json.loads(line)
+                    decoded = json.loads(line)
                 except json.JSONDecodeError:
                     self._fail_all(ProtocolViolation("invalid_engine_json", "engine emitted invalid JSON"))
                     continue

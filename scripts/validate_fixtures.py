@@ -161,9 +161,9 @@ def main() -> None:
                             err(f'{snap}: ★ I1 违反 —— {a["id"]} 的 "{pa}" 与 {b["id"]} 的 "{pb}" 路径相交')
 
         # ② 验收制衡
-        for p in packets:
-            if p.get("acceptance", {}).get("authoredBy") == p.get("role"):
-                err(f'{snap}/{p["id"]}: ★ acceptance.authoredBy === role ({p["role"]}) —— 自己给自己定验收')
+        for pkt in packets:
+            if pkt.get("acceptance", {}).get("authoredBy") == pkt.get("role"):
+                err(f'{snap}/{pkt["id"]}: ★ acceptance.authoredBy === role ({pkt["role"]}) —— 自己给自己定验收')
 
         gp = c / "graph.json"
         if gp.exists():
@@ -211,10 +211,10 @@ def main() -> None:
 
         # ⑦ 证据引用有效
         ev_refs = {read_json(p)["ref"] for p in list_json(c / "evidence")}
-        for p in packets:
-            for r in p.get("evidence", []):
+        for pkt in packets:
+            for r in pkt.get("evidence", []):
                 if r not in ev_refs:
-                    err(f'{snap}/{p["id"]}: 引用了不存在的证据 "{r}"')
+                    err(f'{snap}/{pkt["id"]}: 引用了不存在的证据 "{r}"')
 
         # ⑧ 无真实凭证
         scan_secrets(c, snap)

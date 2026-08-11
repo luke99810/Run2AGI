@@ -12,7 +12,19 @@ DELIVERY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DELIVERY_ROOT))
 
 from codentum_delivery.gateway import SidecarGateway
-from codentum_delivery.protocol import CAPABILITY_NAMES, parse_request
+from codentum_delivery.protocol import CAPABILITY_NAMES, JsonValue, parse_request
+
+
+def _obj(value: JsonValue) -> dict[str, JsonValue]:
+    """把 JsonValue 收窄成对象，收窄不了就当场失败。
+
+    ★ 不是为了让 mypy 闭嘴：协议响应的 `result` 按契约必须是对象，
+      收窄失败本身就是一条值得测试红掉的信息 —— 比 `# type: ignore`
+      之后在下一行拿到 TypeError 要早，也要具体。
+    """
+
+    assert isinstance(value, dict), f"期望 JSON 对象，实际是 {type(value).__name__}"
+    return value
 
 
 def command(command_id: str = "cmd-1", *, delay_ms: int = 0) -> dict[str, object]:
@@ -33,17 +45,17 @@ class SidecarGatewayTests(unittest.TestCase):
         response = gateway.dispatch(
             parse_request({"id": "h", "method": "handshake", "params": {"protocolVersion": 1}})
         )
-        result = response["result"]
+        result = _obj(response["result"])
         self.assertIsInstance(result, dict)
         assert isinstance(result, dict)
         self.assertFalse(result["connected"])
-        self.assertEqual(set(result["capabilities"]), set(CAPABILITY_NAMES))
-        self.assertFalse(any(result["capabilities"].values()))
+        self.assertEqual(set(_obj(result["capabilities"])), set(CAPABILITY_NAMES))
+        self.assertFalse(any(_obj(result["capabilities"]).values()))
 
         receipt_response = gateway.dispatch(
             parse_request({"id": "c", "method": "command", "params": {"command": command()}})
         )
-        receipt = receipt_response["result"]
+        receipt = _obj(receipt_response["result"])
         self.assertEqual(receipt["status"], "rejected")
         self.assertEqual(receipt["reason"], "engine_unavailable")
 
@@ -53,18 +65,18 @@ class SidecarGatewayTests(unittest.TestCase):
         handshake = gateway.start()
         self.assertTrue(handshake["connected"])
         self.assertEqual(handshake["runId"], "run-1")
-        self.assertTrue(handshake["capabilities"]["stop"])
+        self.assertTrue(_obj(handshake["capabilities"])["stop"])
         deadline = time.monotonic() + 1
         while gateway.engine_stderr_bytes_consumed == 0 and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertGreater(gateway.engine_stderr_bytes_consumed, 0)
 
-        first = gateway.dispatch(
+        first = _obj(gateway.dispatch(
             parse_request({"id": "c1", "method": "command", "params": {"command": command()}})
-        )["result"]
-        second = gateway.dispatch(
+        )["result"])
+        second = _obj(gateway.dispatch(
             parse_request({"id": "c2", "method": "command", "params": {"command": command()}})
-        )["result"]
+        )["result"])
         self.assertEqual(first, second)
         self.assertEqual(first["stateRevision"], 8)
         refreshed = gateway.start()
@@ -72,9 +84,9 @@ class SidecarGatewayTests(unittest.TestCase):
 
         changed = command()
         changed["payload"] = {"different": True}
-        conflict = gateway.dispatch(
+        conflict = _obj(gateway.dispatch(
             parse_request({"id": "c3", "method": "command", "params": {"command": changed}})
-        )["result"]
+        )["result"])
         self.assertEqual(conflict["status"], "rejected")
         self.assertEqual(conflict["reason"], "idempotency_conflict")
         self.assertTrue(gateway.close())
@@ -85,9 +97,9 @@ class SidecarGatewayTests(unittest.TestCase):
         self.assertEqual(gateway.start()["runId"], "run-1")
         mismatched = command("cmd-wrong-run")
         mismatched["runId"] = "fixture:mid-flight"
-        receipt = gateway.dispatch(
+        receipt = _obj(gateway.dispatch(
             parse_request({"id": "wrong-run", "method": "command", "params": {"command": mismatched}})
-        )["result"]
+        )["result"])
         self.assertEqual(receipt["status"], "rejected")
         self.assertEqual(receipt["reason"], "run_mismatch")
         gateway.close()
@@ -98,9 +110,9 @@ class SidecarGatewayTests(unittest.TestCase):
         self.assertTrue(gateway.start()["connected"])
         mismatched = command("cmd-wrong-project")
         mismatched["payload"] = {"projectRoot": str(Path(os.getcwd()).parent)}
-        receipt = gateway.dispatch(
+        receipt = _obj(gateway.dispatch(
             parse_request({"id": "wrong-project", "method": "command", "params": {"command": mismatched}})
-        )["result"]
+        )["result"])
         self.assertEqual(receipt["status"], "rejected")
         self.assertEqual(receipt["reason"], "project_mismatch")
         gateway.close()
@@ -110,12 +122,12 @@ class SidecarGatewayTests(unittest.TestCase):
         gateway = SidecarGateway([sys.executable, "-u", str(fake_engine)], engine_timeout_seconds=0.5)
         self.assertTrue(gateway.start()["connected"])
         delayed = command("cmd-timeout", delay_ms=750)
-        first = gateway.dispatch(
+        first = _obj(gateway.dispatch(
             parse_request({"id": "t1", "method": "command", "params": {"command": delayed}})
-        )["result"]
-        second = gateway.dispatch(
+        )["result"])
+        second = _obj(gateway.dispatch(
             parse_request({"id": "t2", "method": "command", "params": {"command": delayed}})
-        )["result"]
+        )["result"])
         self.assertEqual(first, second)
         self.assertEqual(first["reason"], "engine_timeout_reconcile_authoritative_state")
         gateway.close()
@@ -129,9 +141,9 @@ class SidecarGatewayTests(unittest.TestCase):
             "testRegressRevision": True,
             "projectRoot": os.path.realpath(os.getcwd()),
         }
-        receipt = gateway.dispatch(
+        receipt = _obj(gateway.dispatch(
             parse_request({"id": "regress", "method": "command", "params": {"command": regressing}})
-        )["result"]
+        )["result"])
         self.assertEqual(receipt["status"], "rejected")
         self.assertEqual(receipt["reason"], "non_monotonic_state_revision")
         self.assertEqual(receipt["stateRevision"], 7)

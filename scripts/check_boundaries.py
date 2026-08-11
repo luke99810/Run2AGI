@@ -32,7 +32,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.console import setup_console  # noqa: E402
@@ -51,7 +51,10 @@ def err(m: str) -> None:
     errors.append(m)
 
 
-def fail(msg: str) -> None:
+def fail(msg: str) -> NoReturn:
+    """★ 标注 NoReturn 不只是好看：不标的话 mypy 认为异常分支会继续往下走，
+    于是 `doc` 之类只在 try 里赋值的变量会被判 possibly-undefined —— 
+    真正的控制流信息丢了，报出来的却是别处的假警报。"""
     print(f"\n✗ check-boundaries 失败\n\n  {msg}\n", file=sys.stderr)
     raise SystemExit(1)
 
@@ -250,8 +253,8 @@ def main() -> None:
 
     if errors:
         print(f"\n✗ check-boundaries：{len(errors)} 处问题\n", file=sys.stderr)
-        for e in errors:
-            print(f"  {e}", file=sys.stderr)
+        for message in errors:
+            print(f"  {message}", file=sys.stderr)
         print("", file=sys.stderr)
         raise SystemExit(1)
 

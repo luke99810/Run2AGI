@@ -19,7 +19,7 @@ from codentum_contracts.state import (
     WorkPacket,
 )
 
-from .rules import DEFAULT_RULES, Violation
+from .rules import DEFAULT_RULES, RuleFn, Violation
 
 __all__ = ["AdmissionChecker", "AdmissionVerdict"]
 
@@ -39,8 +39,7 @@ class AdmissionVerdict:
         return self.allowed
 
 
-RuleFn = Callable[..., Violation | None]
-"""一条校验规则的签名。接收 packet + 关键字语境，返回违规或 None。"""
+# ★ RuleFn 定义在 rules.py，这里只引用 —— 同一个签名写两份，改一处忘一处就漂移。
 
 
 @dataclass

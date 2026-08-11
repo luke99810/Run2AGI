@@ -215,12 +215,12 @@ def main() -> None:
 
     if findings:
         print(f"\n✗ secret-scan：发现 {len(findings)} 处疑似凭证\n", file=sys.stderr)
-        for f in findings:
-            print(f"  {f.where}:{f.line}", file=sys.stderr)
-            print(f"    规则：{f.rule}（{f.desc}）", file=sys.stderr)
-            print(f"    命中：{f.preview}", file=sys.stderr)
-            if f.context:
-                print(f"    上下文：{f.context}", file=sys.stderr)
+        for finding in findings:
+            print(f"  {finding.where}:{finding.line}", file=sys.stderr)
+            print(f"    规则：{finding.rule}（{finding.desc}）", file=sys.stderr)
+            print(f"    命中：{finding.preview}", file=sys.stderr)
+            if finding.context:
+                print(f"    上下文：{finding.context}", file=sys.stderr)
             print("", file=sys.stderr)
         print("  ────────────────────────────────────────────────", file=sys.stderr)
         print("  ★ 这道门禁没有跳过开关。\n", file=sys.stderr)

@@ -7,7 +7,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import BinaryIO, Final, IO
 
 MAX_FILE_BYTES: Final = 2 * 1024 * 1024
 SKIP_DIRECTORIES: Final = frozenset(
@@ -191,8 +191,9 @@ def scan_git_history(root: Path) -> tuple[int, tuple[Finding, ...]]:
                 text = content.decode("utf-8")
             except UnicodeDecodeError:
                 continue
-            scanned += 1
-            findings.extend(scan_text(text, source=f"git:{object_id[:12]}", path=path))
+            else:
+                scanned += 1
+                findings.extend(scan_text(text, source=f"git:{object_id[:12]}", path=path))
     except (BrokenPipeError, OSError, ValueError) as exc:
         raise ScanUnavailable("Git history object stream failed") from exc
     finally:
@@ -209,7 +210,7 @@ def scan_git_history(root: Path) -> tuple[int, tuple[Finding, ...]]:
     return scanned, tuple(findings)
 
 
-def _read_batch_header(stream: BinaryIO) -> tuple[str, int]:
+def _read_batch_header(stream: IO[bytes]) -> tuple[str, int]:
     header = stream.readline().decode("ascii", errors="strict").strip()
     parts = header.rsplit(" ", 2)
     if len(parts) != 3 or parts[1] == "missing":

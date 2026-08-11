@@ -90,7 +90,7 @@ class BudgetTracker:
 
         if pct >= HARD_STOP_THRESHOLD_PCT:
             result.append(BudgetAlert(
-                level="hard_stop",  # type: ignore[arg-type]
+                level="hard_stop",
                 at=_now_iso(),
                 message=f"预算已耗尽：${self.spent_cny:.2f} / ${self.limit_cny:.2f}。新 packet 将被准入校验器拒绝。",
             ))
@@ -99,7 +99,7 @@ class BudgetTracker:
         if pct >= CRITICAL_THRESHOLD_PCT and not self._alerted_critical:
             self._alerted_critical = True
             result.append(BudgetAlert(
-                level="warn",  # type: ignore[arg-type]
+                level="warn",
                 at=_now_iso(),
                 message=f"预算严重不足：已用 {pct:.0%}（${self.spent_cny:.2f} / ${self.limit_cny:.2f}）。剩余 ${self.remaining:.2f}。建议停止新 packet 准入。",
             ))
@@ -107,7 +107,7 @@ class BudgetTracker:
         if pct >= WARN_THRESHOLD_PCT and not self._alerted_warn:
             self._alerted_warn = True
             result.append(BudgetAlert(
-                level="warn",  # type: ignore[arg-type]
+                level="warn",
                 at=_now_iso(),
                 message=f"预算告警：已用 {pct:.0%}（${self.spent_cny:.2f} / ${self.limit_cny:.2f}）。剩余 ${self.remaining:.2f}。",
             ))

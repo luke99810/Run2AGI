@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import json
 import re
 from pathlib import Path
@@ -49,7 +51,7 @@ def deref(node: Any, file: str, schemas: dict[str, Schema]) -> tuple[Any, str]:
         target: Any = schemas.get(cur_file)
         if target is None:
             raise ValueError(f"$ref 指向未知文件：{ref}")
-        for seg in filter(None, pointer.split("/")):
+        for seg in [x for x in pointer.split("/") if x]:
             target = target.get(seg) if isinstance(target, dict) else None
             if target is None:
                 raise ValueError(f"$ref 解析失败：{ref}")
@@ -57,7 +59,7 @@ def deref(node: Any, file: str, schemas: dict[str, Schema]) -> tuple[Any, str]:
     raise ValueError(f"$ref 解析层数过深（疑似循环引用）：{node!r}")
 
 
-_TYPE_CHECKS = {
+_TYPE_CHECKS: dict[str, Callable[[Any], bool]] = {
     "string": lambda v: isinstance(v, str),
     "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
     "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),

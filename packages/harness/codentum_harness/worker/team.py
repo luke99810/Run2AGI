@@ -21,7 +21,6 @@ from typing import Protocol
 from codentum_contracts.interfaces import (
     AbortReason,
     CheckpointRef,
-    EvidenceRef,
     FailureCode,
     SpawnRequest,
     WorkerAborted,
@@ -30,7 +29,7 @@ from codentum_contracts.interfaces import (
     WorkerHandle,
     WorkerOutcome,
 )
-from codentum_contracts.state import RoleId, RoleSpec
+from codentum_contracts.state import EvidenceRef, RoleId, RoleSpec
 from codentum_roles import load_builtin_role_specs
 
 from codentum_harness.checkpoint import write_initial_checkpoint
