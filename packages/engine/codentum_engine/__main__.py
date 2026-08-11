@@ -182,6 +182,42 @@ def _resolve_project_root(from_argv: str) -> Path:
     return Path(from_argv).resolve()
 
 
+def _attach_file_log(project_root: Path, level: str) -> None:
+    """把日志同时写进 `<project>/.codentum/engine.log`。
+
+    ════════════════════════════════════════════════════════════
+     ★ 为什么必须落文件：引擎的 stderr 会被上游**有意丢掉**
+    ════════════════════════════════════════════════════════════
+
+    `JsonlEngineProxy._drain_stderr` 的注释写得很清楚：
+    "Count bytes consumed without retaining potentially sensitive stderr text."
+    —— 它只数字节数，不留文本。这个决定本身是对的（stderr 可能带凭证），
+    但代价是：**引擎一旦启动失败，真因当场消失**，桌面端只会显示一句
+    "A/B engine handshake failed"。
+
+    2026-08-11 实机就卡在这里：用户反复看到「引擎未连接」，而
+    sidecar / Electron / 桌面端三层日志里没有任何一层知道为什么 ——
+    唯一知道的那一方（引擎自己）把话说进了一个没人听的管道。
+
+    ★ 落文件而不是回传给桌面端：同样是为了不把可能含凭证的文本
+      顺着协议送出去。文件在用户自己机器上、在项目目录里，
+      查问题的人拿得到，协议通道拿不到。
+    """
+
+    try:
+        log_path = project_root / ".codentum" / "engine.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+        logging.getLogger().addHandler(handler)
+        logger.info("日志同时写入 %s", log_path)
+    except OSError as exc:
+        # ★ 日志写不了不能拖垮引擎本体 —— 但也要在 stderr 上说一声，
+        #   否则「为什么没有 engine.log」又会变成下一个查不到的问题。
+        logger.warning("无法写入 engine.log（%s），仅使用 stderr", exc)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     _force_utf8_streams()
@@ -200,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         #   而不是变成桌面端上一句「引擎不可用」。
         logger.error("project-root 不是目录：%s", project_root)
         return 2
+
+    _attach_file_log(project_root, args.log_level)
 
     service = EngineService(
         EngineConfig(

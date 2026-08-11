@@ -199,7 +199,24 @@ class EngineService:
         self._role_specs = load_builtin_role_specs()
         self._requirements = RequirementStore(state_dir)
         self._key_env = _resolve_key_env(self.config.api_key_env)
-        self._build_loop().ensure_state_dir()
+        # ★ 用一个**光杆** ReconcileLoop 铺目录，不要用 _build_loop()。
+        #
+        #   第一版写的是 `self._build_loop().ensure_state_dir()` —— 为了建几个
+        #   空文件，把整个 WorkerRuntime 也构造了一遍，而那里面有
+        #   `GitWorktreeManager.__init__` → `git rev-parse` 子进程。
+        #
+        #   后果是把「铺目录」这件必然成功的小事，绑上了「项目必须是 git 仓库、
+        #   git 必须在 PATH 上、子进程必须能起来」三个前提。任何一个不成立，
+        #   **引擎在 __post_init__ 里就抛异常、进程直接死**，而 sidecar 那边
+        #   看到的只有一句 "A/B engine handshake failed" ——
+        #   `JsonlEngineProxy._drain_stderr` 是有意丢弃 stderr 文本的
+        #   （只数字节数），真因就此消失。
+        #
+        #   铺目录只需要知道 state_dir。别让它依赖任何可能失败的东西。
+        ReconcileLoop(
+            state_dir=str(state_dir),
+            budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
+        ).ensure_state_dir()
 
     # ══════════════════════════════════════════════════════════
     #  协议方法
