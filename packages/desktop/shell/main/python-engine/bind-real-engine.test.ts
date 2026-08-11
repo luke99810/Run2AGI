@@ -22,8 +22,14 @@ import { SidecarManager } from './SidecarManager'
 
 const REPO = resolve(__dirname, '..', '..', '..', '..', '..')
 
+const PYTHON_CANDIDATES: ReadonlyArray<readonly [string, ...string[]]> = [
+  ['py', '-3.11'],
+  ['python3.11'],
+  ['python']
+]
+
 function pythonAvailable(): boolean {
-  for (const [exe, ...prefix] of [['py', '-3.11'], ['python3.11'], ['python']]) {
+  for (const [exe, ...prefix] of PYTHON_CANDIDATES) {
     try {
       execFileSync(exe, [...prefix, '-c', 'import sys; raise SystemExit(sys.version_info < (3, 11))'], {
         stdio: 'ignore'
