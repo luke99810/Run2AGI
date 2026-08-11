@@ -14,6 +14,7 @@ import { CostView } from '../../views/CostView'
 import { RolesView } from '../../views/RolesView'
 import { DeliveryView } from '../../views/DeliveryView'
 import { EvidenceView } from '../../views/EvidenceView'
+import { McpView } from '../../views/McpView'
 import { ConversationsView, HelpView, ResourceLibraryView, SettingsView } from '../../views/WorkbenchViews'
 import {
   createTaskSession,
@@ -306,6 +307,9 @@ export function App(): ReactNode {
     case 'knowledge':
     case 'skills':
       view = <ResourceLibraryView kind={navigation} task={activeTask} onContextChange={updateActiveContext} />
+      break
+    case 'mcp':
+      view = <McpView services={[]} />
       break
     case 'settings':
       view = <SettingsView preferences={preferences} onChange={setPreferences} />

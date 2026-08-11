@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { GraphFile, WorkPacket } from '@codentum/contracts'
 import type { CapabilityMap, WorkerProjection } from '../../shared/protocol'
-import { buildDependencyWaves, createOperatorCommand, hasCapability, projectWorkerModules, ROLE_ROSTER, sameProjectPath, warningsForDisplay } from './domain'
+import { buildDependencyWaves, createOperatorCommand, hasCapability, NAVIGATION, projectWorkerModules, ROLE_ROSTER, sameProjectPath, warningsForDisplay } from './domain'
 
 function packet(id: string, deps: readonly string[] = []): WorkPacket {
   return {
@@ -137,6 +137,12 @@ describe('role roster', () => {
       'evolver',
       'guardian'
     ])
+  })
+})
+
+describe('management navigation', () => {
+  it('exposes the MCP management module without claiming a runtime connection', () => {
+    expect(NAVIGATION).toContainEqual({ id: 'mcp', label: 'MCP', icon: 'server' })
   })
 })
 
