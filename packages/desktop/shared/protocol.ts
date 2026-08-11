@@ -10,6 +10,7 @@ import type {
 } from '@codentum/contracts'
 
 export type SnapshotSourceKind = 'fixture' | 'project'
+export type ProjectSelectionKind = 'file' | 'folder'
 
 export interface SnapshotSourceDescriptor {
   readonly id: string
@@ -135,14 +136,14 @@ export interface CommandReceipt {
 export interface DesktopBridge {
   listSources(): Promise<readonly SnapshotSourceDescriptor[]>
   readSnapshot(sourceId: string): Promise<StateSnapshot>
-  selectProject(): Promise<SnapshotSourceDescriptor | null>
+  selectProject(kind: ProjectSelectionKind): Promise<SnapshotSourceDescriptor | null>
   selectDraftFiles(scopeId: string): Promise<RequirementDraftSnapshot>
   selectDraftFolders(scopeId: string): Promise<RequirementDraftSnapshot>
   loadRequirementDraft(scopeId: string): Promise<RequirementDraftSnapshot>
   saveRequirementDraft(scopeId: string, draft: RequirementDraftSnapshot): Promise<void>
   moveRequirementDraft(sourceScopeId: string, targetScopeId: string): Promise<RequirementDraftSnapshot>
   discardDraftAttachment(scopeId: string, attachmentId: string): Promise<RequirementDraftSnapshot>
-  exportChatRecord(suggestedName: string, markdown: string): Promise<boolean>
+  exportTaskRecord(suggestedName: string, markdown: string): Promise<boolean>
   watchSource(sourceId: string): Promise<void>
   onSnapshot(listener: (snapshot: StateSnapshot) => void): () => void
   getEngineHandshake(): Promise<EngineHandshake>

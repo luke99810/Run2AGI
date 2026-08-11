@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { resolveSidecarLaunch, SidecarManager } from './SidecarManager'
 
 const originalExecutable = process.env['CODENTUM_SIDECAR_EXECUTABLE']
@@ -71,6 +74,48 @@ describe('resolveSidecarLaunch', () => {
       })).rejects.toThrow('non-monotonic')
     } finally {
       await manager.close()
+    }
+  })
+
+  it('restarts the sidecar in each selected project directory', async () => {
+    const child = `
+      const readline = require('node:readline');
+      const capabilities = Object.fromEntries([
+        'requirements','planConfirmation','pauseAtSafePoint','resume','stop',
+        'keepMemory','forkFromCheckpoint','appendPrompt','insertModule'
+      ].map((key) => [key, false]));
+      const lines = readline.createInterface({ input: process.stdin });
+      const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+      lines.on('line', (line) => {
+        const request = JSON.parse(line);
+        if (request.method === 'handshake') {
+          send({ id: request.id, ok: true, result: {
+            connected: true, protocolVersion: 1, engineVersion: 'cwd-test-engine',
+            stateRevision: 0, runId: process.cwd(), projectRoot: process.cwd(), capabilities
+          }});
+        } else if (request.method === 'shutdown') {
+          send({ id: request.id, ok: true, result: { stopped: true } });
+          setTimeout(() => process.exit(0), 10);
+        }
+      });
+    `
+    process.env['CODENTUM_SIDECAR_EXECUTABLE'] = process.execPath
+    process.env['CODENTUM_SIDECAR_ARGS_JSON'] = JSON.stringify(['-e', child])
+    const first = await mkdtemp(join(tmpdir(), 'codentum-bind-first-'))
+    const second = await mkdtemp(join(tmpdir(), 'codentum-bind-second-'))
+    const manager = new SidecarManager({ isPackaged: false, getAppPath: () => 'unused' })
+    try {
+      const firstHandshake = await manager.bindProject(first)
+      expect(firstHandshake.connected).toBe(true)
+      expect(firstHandshake.projectRoot).toBe(resolve(first))
+
+      const secondHandshake = await manager.bindProject(second)
+      expect(secondHandshake.connected).toBe(true)
+      expect(secondHandshake.projectRoot).toBe(resolve(second))
+      expect(secondHandshake.runId).not.toBe(firstHandshake.runId)
+    } finally {
+      await manager.close()
+      await Promise.all([rm(first, { recursive: true, force: true }), rm(second, { recursive: true, force: true })])
     }
   })
 })
