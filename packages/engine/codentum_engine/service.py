@@ -186,9 +186,20 @@ class EngineService:
         state_dir = self.config.resolved_state_dir()
         state_dir.mkdir(parents=True, exist_ok=True)
         self._session = EngineSession.load_or_create(state_dir)
+        # ★ 启动就把 `.codentum/` 铺完整，不能等到第一次 save_state()。
+        #
+        #   `EngineSession` 为了放 engine-session.json 会先把目录建出来，
+        #   于是在第一次提交需求之前，桌面端看到的是一个**存在但残缺**的
+        #   状态目录 —— 界面上排开五条
+        #   `[missing] Required state file is missing: ...`。
+        #
+        #   ★ 这比「目录根本不存在」更糟：不存在时桌面端显示「尚未初始化」，
+        #     残缺时它显示的是一串错误。2026-08-11 实机第一次打开项目就撞上了，
+        #     而且**是引擎引入的回归** —— 在它之前新项目压根没有 .codentum/。
         self._role_specs = load_builtin_role_specs()
         self._requirements = RequirementStore(state_dir)
         self._key_env = _resolve_key_env(self.config.api_key_env)
+        self._build_loop().ensure_state_dir()
 
     # ══════════════════════════════════════════════════════════
     #  协议方法

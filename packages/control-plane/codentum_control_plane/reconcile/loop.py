@@ -332,7 +332,7 @@ class ReconcileLoop:
         )
 
         self._write_budget(root)
-        self._ensure_state_dir_shape(root)
+        self.ensure_state_dir()
 
         self._dirty = False
 
@@ -368,25 +368,58 @@ class ReconcileLoop:
             "utf-8",
         )
 
-    @staticmethod
-    def _ensure_state_dir_shape(root: Path) -> None:
-        """保证 `.codentum/` 的结构成员都存在。
+    def ensure_state_dir(self) -> None:
+        """把 `.codentum/` 铺成一份**完整且连贯的空状态**。
 
-        ★ `.codentum/` 是 A 与 C 之间唯一的接口，它的完整形状由
-          fixtures/golden-state/ 定义：graph.json · packets/ · budget.json ·
-          decisions.jsonl · evidence/ · knowledge/。
-          A 原来只写前两个，剩下的缺席会让 C 的 parseJsonFile/
-          parseJsonCollection 报 [missing] 并把整个快照置为 incoherent。
+        ★ `.codentum/` 是 A 与 C 之间唯一的接口，完整形状由
+          `fixtures/golden-state/empty` 定义：
+          graph.json · budget.json · decisions.jsonl · packets/ · evidence/ · knowledge/
 
-        ★ 空的 decisions.jsonl 和空的 evidence/ 目录本身就是合法状态
-          （golden-state/empty 就是这样），所以这里只是「确保存在」，
-          不是造数据。已存在的一律不动。
+        ★ 这个方法原来是私有的 `_ensure_state_dir_shape`，而且**没做到自己
+          文档说的事** —— 注释里列了 graph.json 和 budget.json，代码却只建了
+          三个目录和 decisions.jsonl。它又只被 `save_state()` 调用，
+          而 save_state 只在 `_dirty` 时才真的写。
+
+          后果是 2026-08-11 实机撞到的那一幕：引擎启动时为了放
+          `engine-session.json` 建了 `.codentum/`，桌面端于是看到一个
+          **存在但残缺**的状态目录，界面上排开五条
+          `[missing] Required state file is missing: ...`。
+
+          ★ 比「目录不存在」更糟：不存在时桌面端会显示「尚未初始化」，
+          残缺时它显示的是一串错误 —— **半个状态目录比没有状态目录更坏。**
+
+        ★ 已存在的一律不动，只补缺的。空的 decisions.jsonl 与空的
+          evidence/ 本身就是合法状态，这里不是造数据。
         """
+        root = Path(self.state_dir)
+        root.mkdir(parents=True, exist_ok=True)
         for directory in ("evidence", "knowledge", "packets"):
             (root / directory).mkdir(parents=True, exist_ok=True)
+
         decisions = root / "decisions.jsonl"
         if not decisions.exists():
             decisions.write_text("", encoding="utf-8")
+
+        graph = root / "graph.json"
+        if not graph.exists():
+            graph.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "dependency": {"nodes": [], "edges": []},
+                        "ownership": {"locks": [], "version": 0},
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+        # ★ budget.json 仍然遵守「没有 budget_tracker 就不写」——
+        #   凭空造一个预算数字比缺文件更糟，缺文件只是缺，造出来的数字会被当真。
+        #   （`_write_budget` 在这种情况下会打 warning，那是有意的。）
+        self._write_budget(root)
 
     # ════════════════════════════════════════════════════════════
     #  调和主循环

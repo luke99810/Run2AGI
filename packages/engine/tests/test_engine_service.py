@@ -375,3 +375,54 @@ def test_acceptance_author_never_equals_the_packet_role() -> None:
     assert choose_acceptance_author(["coder", "qa"], packet_role="qa") == "coder"
     with pytest.raises(ValueError, match="没有任何可用于署名验收的角色"):
         choose_acceptance_author(["coder"], packet_role="coder")
+
+
+def test_state_dir_is_coherent_from_the_very_first_launch(project: Path, fake_key: None) -> None:
+    """★ 引擎一启动，`.codentum/` 就必须是一份**完整的空状态**。
+
+    2026-08-11 实机撞到的回归：`EngineSession` 为了放 engine-session.json
+    先把 `.codentum/` 建了出来，但完整形状要等第一次 `save_state()` 才铺。
+    于是用户打开项目、还没提交任何需求时，桌面端读到一个残缺目录，
+    界面上排开五条 `[missing] Required state file is missing: ...`。
+
+    ★ 这比「目录根本不存在」更糟 —— 不存在时桌面端显示「尚未初始化」，
+      残缺时它显示的是一串错误。**半个状态目录比没有状态目录更坏。**
+
+    形状以 `fixtures/golden-state/empty` 为准。
+    """
+
+    _service(project)  # 只构造，不发任何命令
+
+    state = project / ".codentum"
+    for member in ("graph.json", "budget.json", "decisions.jsonl"):
+        assert (state / member).is_file(), f"缺 {member}，桌面端会报 [missing]"
+    for directory in ("packets", "evidence", "knowledge"):
+        assert (state / directory).is_dir(), f"缺 {directory}/，桌面端会报 [missing]"
+
+    # ★ graph.json 必须是合法的空图，不能是空文件 —— 桌面端要解析它
+    graph = json.loads((state / "graph.json").read_text("utf-8"))
+    assert graph["dependency"]["nodes"] == []
+    assert graph["ownership"]["locks"] == []
+
+
+def test_ensure_state_dir_never_clobbers_existing_state(project: Path, fake_key: None) -> None:
+    """★ 只补缺的，已存在的一律不动。
+
+    否则引擎重启会把上一轮的 graph.json 覆盖成空图 —— 那是把「恢复」
+    变成「清空」，比不铺形状严重得多。
+    """
+
+    service = _service(project)
+    service.command(
+        _command("submit_requirement", service.run_id, project, requirement="做个东西")
+    )
+    graph_before = (project / ".codentum" / "graph.json").read_text("utf-8")
+    packets_before = sorted(p.name for p in (project / ".codentum" / "packets").glob("*.json"))
+    assert packets_before, "前置条件没满足：没有 packet 落盘"
+
+    _service(project)  # 模拟重启
+
+    assert (project / ".codentum" / "graph.json").read_text("utf-8") == graph_before
+    assert sorted(
+        p.name for p in (project / ".codentum" / "packets").glob("*.json")
+    ) == packets_before
