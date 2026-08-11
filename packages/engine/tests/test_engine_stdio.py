@@ -254,3 +254,50 @@ def test_stdout_carries_only_protocol_lines(project: Path, engine_env: None) -> 
         assert "id" in decoded
     # 日志确实产生了，只是走了 stderr —— 否则这条测试可能只是因为没日志才绿
     assert stderr.strip(), "没有任何 stderr 输出，说明日志根本没开，这条测试是空转的"
+
+
+def test_engine_binds_the_project_the_desktop_selected(
+    project: Path, tmp_path: Path, engine_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 桌面端换项目时靠 `CODENTUM_PROJECT_ROOT` 通知引擎 —— 引擎必须认它。
+
+    `SidecarManager` 的流程：用户选了项目 → **重启 sidecar** 并注入
+    `CODENTUM_PROJECT_ROOT`（SidecarManager.ts:213）→ 校验引擎握手报的
+    `projectRoot` 是否与用户选的一致 → 不一致就抛
+    `Agent engine is bound to a different project`，判引擎不可用。
+
+    而 `--project-root` 是启动时固定在 argv 里的，重启也不变。
+    在补上这段之前，**只要用户打开的不是写死的那个目录，引擎必然「突然断开」**
+    —— 而两边其实都活着，只是在说不同的项目。
+
+    2026-08-11 实机撞到：打开项目、输入需求、点提交，引擎断开。
+    根因是 `CODENTUM_PROJECT_ROOT` 全仓库只有桌面端在写，**Python 侧没人读**。
+    """
+
+    selected = tmp_path / "another-project"
+    selected.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=selected, check=True, capture_output=True)
+    monkeypatch.setenv("CODENTUM_PROJECT_ROOT", str(selected))
+
+    gateway = SidecarGateway(_engine_command(project), engine_timeout_seconds=30.0)
+    try:
+        handshake = gateway.start()
+        assert handshake["connected"] is True, handshake.get("unavailableReason")
+        # ★ argv 给的是 `project`，环境变量给的是 `selected` —— 后者必须赢
+        assert Path(str(handshake["projectRoot"])).resolve() == selected.resolve(), (
+            "引擎没有认桌面端选中的项目，握手会被判 "
+            "'Agent engine is bound to a different project'"
+        )
+    finally:
+        gateway.close()
+
+
+def test_argv_still_wins_when_no_env_is_set(project: Path, engine_env: None) -> None:
+    """★ 对照组：没有环境变量时仍按命令行走，否则上面那条用「永远返回 env」也能绿。"""
+
+    gateway = SidecarGateway(_engine_command(project), engine_timeout_seconds=30.0)
+    try:
+        handshake = gateway.start()
+        assert Path(str(handshake["projectRoot"])).resolve() == project.resolve()
+    finally:
+        gateway.close()

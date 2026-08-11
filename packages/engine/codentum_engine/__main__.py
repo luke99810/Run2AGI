@@ -139,6 +139,49 @@ def _detach_protocol_stdin() -> TextIO:
     return open(protocol_fd, encoding="utf-8", errors="replace", newline="")
 
 
+PROJECT_ROOT_ENV = "CODENTUM_PROJECT_ROOT"
+
+
+def _resolve_project_root(from_argv: str) -> Path:
+    """决定引擎绑定哪个项目：**环境变量优先于命令行**。
+
+    ════════════════════════════════════════════════════════════
+     ★ 这个优先级是被桌面端的握手校验逼出来的，不是随便定的
+    ════════════════════════════════════════════════════════════
+
+    `SidecarManager` 的工作方式是：用户在界面上选了项目之后，它**重启
+    sidecar**，并通过 `CODENTUM_PROJECT_ROOT` 把选中的路径传下来
+    （`SidecarManager.ts:213`）。紧接着它校验引擎握手里报的 `projectRoot`
+    是否与用户选的一致，不一致就抛
+    `Agent engine is bound to a different project`，把引擎判为不可用。
+
+    而引擎的 `--project-root` 是**启动时就固定在 argv 里的**
+    （`CODENTUM_ENGINE_COMMAND_JSON` 里写死），重启也不会变。
+    于是只要用户打开的不是那个写死的目录，握手必然失配 ——
+    现象是「引擎突然断了，无法发送需求」，而且**越用越像是引擎崩了**，
+    实际上两边都活得好好的，只是在说不同的项目。
+
+    ★ 2026-08-11 实机撞到：用户打开自己的项目、输入需求、点提交，引擎断开。
+      根因不在桌面端 —— `CODENTUM_PROJECT_ROOT` 全仓库只有 C 在写，
+      **Python 侧从来没有人读**。这是引擎这一侧漏实现了协议的一半。
+
+    ★ 为什么是环境变量优先而不是命令行优先：命令行是**启动时**的意图，
+      环境变量是**本次重启时**的意图。sidecar 每次绑定新项目都会重启并
+      重新注入环境变量，所以它才是更新的那个。
+    """
+
+    from_env = os.environ.get(PROJECT_ROOT_ENV, "").strip()
+    if from_env:
+        chosen = Path(from_env).resolve()
+        if chosen != Path(from_argv).resolve():
+            logger.info(
+                "项目根以 %s 为准：%s（命令行给的是 %s）",
+                PROJECT_ROOT_ENV, chosen, Path(from_argv).resolve(),
+            )
+        return chosen
+    return Path(from_argv).resolve()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     _force_utf8_streams()
@@ -150,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    project_root = Path(args.project_root).resolve()
+    project_root = _resolve_project_root(args.project_root)
     if not project_root.is_dir():
         # ★ 在握手之前就退出，而不是握手时报 connected=false：
         #   路径打错是配置问题，应该让启动它的人立刻看见，
