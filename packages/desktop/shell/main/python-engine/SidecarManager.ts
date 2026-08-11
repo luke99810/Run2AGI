@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { App } from 'electron'
 import {
@@ -117,6 +117,35 @@ function findDevelopmentPython(): { readonly executable: string; readonly prefix
   return undefined
 }
 
+const SIDECAR_RELATIVE_PATH = ['packages', 'delivery', 'codentum_delivery', 'sidecar.py'] as const
+
+/**
+ * 从 `start` 逐级向上找仓库根 —— 判据是「这一层下面有 packages/delivery/.../sidecar.py」。
+ *
+ * ★ 原来写的是 `resolve(app.getAppPath(), '..', 'delivery', ...)`，
+ *   即硬编码「getAppPath() 一定是 packages/desktop」。这个假设只在
+ *   `electron-vite dev` 下成立；用构建产物启动时 getAppPath() 指向
+ *   `packages/desktop/out`，于是它去找 `packages/desktop/out/delivery/...`，
+ *   必然找不到，握手直接报 unavailable。
+ *
+ * ★ 为什么没人发现：`scripts/screenshot-smoke.mjs` 一直带
+ *   `CODENTUM_ENABLE_FIXTURES=1` 跑 —— **假数据模式根本不需要 sidecar**，
+ *   所以这条路径从来没被真正走过一次。
+ *   （2026-08-11 第一次用真引擎启动构建产物时才撞上。）
+ *
+ * 向上搜索对两种布局给出同一个答案，也不再依赖「桌面端在第几层」这种
+ * 会随打包配置变化的事实。
+ */
+function findRepoRootFrom(start: string): string | undefined {
+  let current = resolve(start)
+  for (;;) {
+    if (existsSync(resolve(current, ...SIDECAR_RELATIVE_PATH))) return current
+    const parent = dirname(current)
+    if (parent === current) return undefined
+    current = parent
+  }
+}
+
 export function resolveSidecarLaunch(app: Pick<App, 'isPackaged' | 'getAppPath'>): ResolvedLaunch {
   const explicit = process.env['CODENTUM_SIDECAR_EXECUTABLE']
   if (explicit !== undefined && explicit.trim() !== '') {
@@ -130,14 +159,20 @@ export function resolveSidecarLaunch(app: Pick<App, 'isPackaged' | 'getAppPath'>
     return { executable, args: [] }
   }
 
-  const script = resolve(app.getAppPath(), '..', 'delivery', 'codentum_delivery', 'sidecar.py')
-  if (!existsSync(script)) throw new Error(`Development sidecar is missing: ${script}`)
+  const repoRoot = findRepoRootFrom(app.getAppPath())
+  if (repoRoot === undefined) {
+    throw new Error(
+      `Development sidecar is missing: 从 ${app.getAppPath()} 逐级向上都没找到 ` +
+        `${SIDECAR_RELATIVE_PATH.join('/')}`
+    )
+  }
+  const script = resolve(repoRoot, ...SIDECAR_RELATIVE_PATH)
   const python = findDevelopmentPython()
   if (python === undefined) throw new Error('Python 3.11+ is required only for development; packaged builds include the sidecar')
   return {
     executable: python.executable,
     args: [...python.prefix, '-X', 'utf8', '-u', script],
-    cwd: resolve(app.getAppPath(), '..', '..')
+    cwd: repoRoot
   }
 }
 
