@@ -25,7 +25,7 @@ export function ConversationsView({ tasks, activeTaskId, onSelectTask, onNewTask
   return (
     <main className="page conversation-page">
       <PageHeader
-        title="对话"
+        title="对话检索与导出"
         description="每个对话使用独立 taskId、草稿和附件区；切换对话不会覆盖其他任务。"
         actions={<button type="button" className="primary-button" onClick={onNewTask}><Icon name="plus" size={18} />新对话</button>}
       />
