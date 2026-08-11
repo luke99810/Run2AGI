@@ -42,7 +42,7 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
     for name in _KEY_ENVS:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-not-a-real-key-for-tests")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "REPLACE_ME_DASHSCOPE_API_KEY_FOR_TESTS")
     return root
 
 

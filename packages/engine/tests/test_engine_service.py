@@ -48,7 +48,7 @@ def no_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def fake_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in _KEY_ENVS:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-not-a-real-key-for-tests")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "REPLACE_ME_DASHSCOPE_API_KEY_FOR_TESTS")
     yield
 
 
