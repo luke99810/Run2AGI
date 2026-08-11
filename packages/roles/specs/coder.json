@@ -2,6 +2,7 @@
   "id": "coder",
   "summary": "实现 WorkPacket，产出 diff、自测结果与证据。",
   "usesModel": true,
+  "promptRef": "coder.md",
   "writes": ["workspace/**"],
   "reads": ["packages/contracts/**", "tests/**", "docs/adr/**"],
   "invisible": ["evidence/**/reasoning.md"],
@@ -13,5 +14,10 @@
   "modelPolicy": {
     "defaultModel": "qwen-coder-plus-1106",
     "defaultEffort": "medium"
+  },
+  "escalation": {
+    "maxSelfRepair": 1,
+    "peerDebugEnabled": true,
+    "escalateTo": "helper"
   }
 }

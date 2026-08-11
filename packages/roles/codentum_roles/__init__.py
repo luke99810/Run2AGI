@@ -29,17 +29,23 @@ owner: B ｜ 评审: A ｜ 详见 ../README.md 与 docs/01-角色详细设计与
 """
 
 from .loader import (
+    RolePromptLoadError,
     RoleSpecLoadError,
+    default_prompts_dir,
     default_specs_dir,
     load_builtin_role_specs,
+    load_role_prompt,
     load_role_spec_file,
     load_role_specs_dir,
 )
 
 __all__ = [
+    "RolePromptLoadError",
     "RoleSpecLoadError",
+    "default_prompts_dir",
     "default_specs_dir",
     "load_builtin_role_specs",
+    "load_role_prompt",
     "load_role_spec_file",
     "load_role_specs_dir",
 ]

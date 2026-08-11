@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,7 +29,14 @@ from codentum_contracts.state import RoleId, RoleSpec
 from codentum_roles import load_builtin_role_specs
 
 from codentum_harness.checkpoint import write_initial_checkpoint
-from codentum_harness.context_broker import ContextBundle, ContextCandidate, assemble_context_bundle
+from codentum_harness.context_broker import (
+    DEFAULT_INTENT_CONTEXT_CHAR_BUDGET,
+    PACKET_INTENT_REF,
+    ContextBundle,
+    ContextCandidate,
+    assemble_context_bundle,
+    packet_intent_candidate,
+)
 from codentum_harness.prepare import PreparedExecution
 from codentum_harness.prompt_bundle import WorkerPromptBundle, write_worker_prompt_bundle
 
@@ -65,7 +72,7 @@ class LocalWorkerRuntime:
         specs = load_builtin_role_specs() if role_specs is None else role_specs
         self._role_specs = {spec.id: spec for spec in specs}
         self._context_loader = context_loader
-        self._context_char_budget = context_char_budget
+        self._context_char_budget = context_char_budget or DEFAULT_INTENT_CONTEXT_CHAR_BUDGET
         self._sessions: dict[str, _Session] = {}
 
     async def spawn(self, req: SpawnRequest) -> WorkerHandle:
@@ -74,21 +81,33 @@ class LocalWorkerRuntime:
 
     def _prepare(self, req: SpawnRequest) -> PreparedExecution:
         spec = self._load_role_spec(req.role)
-        context = None
-        if self._context_loader is not None:
-            assert self._context_char_budget is not None
-            context = assemble_context_bundle(
-                spec,
-                candidates=self._context_loader(req, spec),
-                char_budget=self._context_char_budget,
-            )
+        effective_req = req if req.tools else replace(req, tools=tuple(spec.tools))
+        context_candidates = self._context_candidates(effective_req, spec)
+        context = assemble_context_bundle(
+            spec,
+            candidates=context_candidates,
+            char_budget=self._context_char_budget,
+        )
         return PreparedExecution(
-            request=req,
+            request=effective_req,
             role_spec=spec,
-            tools=tuple(req.tools),
-            mount_paths=tuple(m.mount_path for m in req.mounts),
+            tools=tuple(effective_req.tools),
+            mount_paths=tuple(m.mount_path for m in effective_req.mounts),
             context=context,
         )
+
+    def _context_candidates(
+        self,
+        req: SpawnRequest,
+        spec: RoleSpec,
+    ) -> tuple[ContextCandidate, ...]:
+        packet_intent = packet_intent_candidate(req, repo_root=self._worktrees.repo_root)
+        if self._context_loader is not None:
+            loaded = self._context_loader(req, spec)
+            if any(candidate.ref == PACKET_INTENT_REF for candidate in loaded):
+                return tuple(loaded)
+            return (packet_intent, *loaded)
+        return (packet_intent,)
 
     async def _spawn(self, prepared: PreparedExecution) -> WorkerHandle:
         req = prepared.request

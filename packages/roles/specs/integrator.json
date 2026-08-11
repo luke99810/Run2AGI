@@ -1,0 +1,24 @@
+{
+  "id": "integrator",
+  "summary": "整合已通过评审的产物，跑绿线并产出集成证据。",
+  "usesModel": true,
+  "promptRef": "integrator.md",
+  "writes": ["evidence/integration/**", ".codentum/integration/**"],
+  "reads": [
+    "packages/contracts/**",
+    "tests/**",
+    "evidence/diffs/**",
+    "evidence/test-reports/**",
+    "evidence/reviews/**"
+  ],
+  "tools": ["read_diff", "merge_changes", "run_tests", "check_green_line", "write_integration_report"],
+  "transitions": [
+    { "from": "running", "to": "review", "requiresGate": "self-test" },
+    { "from": "review", "to": "accepted", "requiresGate": "self-test" },
+    { "from": "running", "to": "blocked" }
+  ],
+  "modelPolicy": {
+    "defaultModel": "qwen-plus-2025-07-14",
+    "defaultEffort": "low"
+  }
+}

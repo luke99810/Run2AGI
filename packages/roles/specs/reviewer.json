@@ -2,6 +2,7 @@
   "id": "reviewer",
   "summary": "对抗评审 diff、验收测试与证据，不读取 Coder 推理链。",
   "usesModel": true,
+  "promptRef": "reviewer.md",
   "writes": ["evidence/reviews/**"],
   "reads": ["packages/contracts/**", "tests/**", "evidence/diffs/**", "evidence/test-reports/**"],
   "invisible": ["evidence/coder-reasoning/**"],
