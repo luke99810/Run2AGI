@@ -1,0 +1,39 @@
+{
+  "id": "evolution",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["evolver"],
+  "description": "从失败与评审证据中提炼候选 Skill、规则和改进建议的内置 Skill。",
+  "inputs": {
+    "trace": "失败轨迹",
+    "reviews": "评审证据",
+    "tests": "测试报告"
+  },
+  "outputs": {
+    "skillCandidate": "候选 Skill",
+    "policyProposal": "规则提案",
+    "evolutionReport": "进化报告"
+  },
+  "preconditions": [
+    "同类失败重复出现，或需要沉淀 Skill / Policy / Prompt 改进"
+  ],
+  "failure": {
+    "timeoutSeconds": 240,
+    "onError": "write_evolution_blocker",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R1",
+    "tools": ["read_trace", "cluster_failures", "write_skill_candidate", "write_evolution_report", "propose_rule"],
+    "readPaths": ["evidence/**", "packages/roles/specs/**", "packages/roles/skills/**", "docs/adr/**"],
+    "writePaths": ["packages/roles/skills/**", "evidence/evolution/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": ["review"],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

@@ -2,7 +2,7 @@
   "id": "review",
   "version": "0.1.0",
   "scope": "role",
-  "appliesTo": ["reviewer", "integrator", "guardian"],
+  "appliesTo": ["reviewer", "integrator", "guardian", "evolver"],
   "description": "对 diff、证据链、权限边界和验收结论做对抗评审的内置 Skill。",
   "inputs": {
     "diff": "候选变更",

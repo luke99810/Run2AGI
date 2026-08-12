@@ -143,13 +143,17 @@ def test_prompt_bundle_includes_active_role_skills(tmp_path: Path) -> None:
     assert "## Active Skills" in bundle.system
     assert "### frontend" in bundle.system
     assert "# Frontend Skill" in bundle.system
+    assert "### backend" in bundle.system
+    assert "# Backend Skill" in bundle.system
     assert "### testing" in bundle.system
     assert "# Testing Skill" in bundle.system
+    assert "### debugging" in bundle.system
+    assert "# Debugging Skill" in bundle.system
 
     manifest = json.loads(
         (tmp_path / "evidence" / "prompt" / "manifest.json").read_text(encoding="utf-8")
     )
-    assert manifest["skill_refs"] == ["frontend", "testing"]
+    assert manifest["skill_refs"] == ["frontend", "backend", "testing", "debugging"]
 
 
 def test_prompt_bundle_can_read_active_skills_from_project_shared_space(tmp_path: Path) -> None:

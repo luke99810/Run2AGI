@@ -1,0 +1,39 @@
+{
+  "id": "planning",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["planner", "manager"],
+  "description": "把 brief 拆成 WorkPacket、依赖图和调度决策的内置 Skill。",
+  "inputs": {
+    "brief": "需求 brief",
+    "contracts": "相关契约",
+    "state": "当前项目状态"
+  },
+  "outputs": {
+    "packets": "WorkPacket 集合",
+    "dependencyGraph": "依赖图",
+    "scheduleNotes": "调度说明"
+  },
+  "preconditions": [
+    "需求已经澄清，需要拆分、排依赖、估预算或重排优先级"
+  ],
+  "failure": {
+    "timeoutSeconds": 180,
+    "onError": "write_planning_blocker",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R1",
+    "tools": ["read_brief", "read_contract", "write_packet", "write_dependency_graph", "check_boundaries", "estimate_budget", "read_state", "prioritize_packets", "write_decision"],
+    "readPaths": ["brief/**", "packages/contracts/**", "boundaries.yaml", ".codentum/**"],
+    "writePaths": [".codentum/packets/**", ".codentum/plans/**", ".codentum/decisions/**", "evidence/manager/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

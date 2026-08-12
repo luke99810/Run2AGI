@@ -67,15 +67,33 @@ export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
 ]
 
 export const SKILL_OPTIONS: readonly ResourceOption[] = [
+  { id: 'requirements', label: '需求澄清', detail: '请求 Intake 加载需求澄清技能', availability: 'pending_runtime' },
+  { id: 'architecture', label: '架构边界', detail: '请求 Architect 加载架构边界技能', availability: 'pending_runtime' },
+  { id: 'planning', label: '研发计划', detail: '请求 Planner/Manager 加载计划技能', availability: 'pending_runtime' },
   { id: 'frontend', label: '前端实现', detail: '请求 Coder 加载前端实现技能', availability: 'pending_runtime' },
+  { id: 'backend', label: '后端实现', detail: '请求 Coder/Helper 加载后端实现技能', availability: 'pending_runtime' },
   { id: 'testing', label: '测试验证', detail: '请求 QA/Coder 加载测试技能', availability: 'pending_runtime' },
-  { id: 'review', label: '代码评审', detail: '请求 Reviewer 加载评审技能', availability: 'pending_runtime' }
+  { id: 'debugging', label: '问题诊断', detail: '请求 Helper/Coder 加载诊断技能', availability: 'pending_runtime' },
+  { id: 'review', label: '代码评审', detail: '请求 Reviewer 加载评审技能', availability: 'pending_runtime' },
+  { id: 'security', label: '安全审计', detail: '请求 Guardian/Reviewer 加载安全技能', availability: 'pending_runtime' },
+  { id: 'integration', label: '集成发布', detail: '请求 Integrator 加载集成技能', availability: 'pending_runtime' },
+  { id: 'cost-governance', label: '成本治理', detail: '请求 Manager/Planner 加载成本治理技能', availability: 'pending_runtime' },
+  { id: 'evolution', label: '能力进化', detail: '请求 Evolver 加载能力进化技能', availability: 'pending_runtime' }
 ]
 
 const SKILL_LABELS: Readonly<Record<string, string>> = {
+  requirements: '需求澄清',
+  architecture: '架构边界',
+  planning: '研发计划',
   frontend: '前端实现',
+  backend: '后端实现',
   testing: '测试验证',
-  review: '代码评审'
+  debugging: '问题诊断',
+  review: '代码评审',
+  security: '安全审计',
+  integration: '集成发布',
+  'cost-governance': '成本治理',
+  evolution: '能力进化'
 }
 
 export function skillOptionsFromRoles(roles: readonly RoleSpec[] | undefined): readonly ResourceOption[] {

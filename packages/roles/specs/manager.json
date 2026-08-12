@@ -14,5 +14,9 @@
   "modelPolicy": {
     "defaultModel": "qwen-plus-2025-11-05",
     "defaultEffort": "medium"
-  }
+  },
+  "skills": [
+    { "id": "planning", "scope": "role", "state": "active" },
+    { "id": "cost-governance", "scope": "role", "state": "active" }
+  ]
 }

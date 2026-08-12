@@ -1,0 +1,39 @@
+{
+  "id": "security",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["guardian", "reviewer", "architect"],
+  "description": "审计权限、密钥、命令执行、网络访问和注入风险的内置 Skill。",
+  "inputs": {
+    "roleSpec": "角色权限",
+    "diff": "候选变更",
+    "evidence": "安全扫描或门禁证据"
+  },
+  "outputs": {
+    "findings": "安全问题",
+    "verdict": "pass 或 fail",
+    "invariants": "被检查的不变量"
+  },
+  "preconditions": [
+    "任务涉及权限、凭证、命令执行、网络、路径或边界变更"
+  ],
+  "failure": {
+    "timeoutSeconds": 180,
+    "onError": "fail_closed",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R0",
+    "tools": ["read_file", "read_state", "run_static_analysis", "check_invariants", "check_boundaries", "write_review", "write_guardian_report"],
+    "readPaths": ["packages/**", "tests/**", ".codentum/**", "boundaries.yaml", "docs/adr/**"],
+    "writePaths": ["evidence/reviews/**", "evidence/guardian/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": ["review"],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

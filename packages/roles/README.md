@@ -37,9 +37,18 @@
 
 | Skill | 绑定角色 | 用途 |
 |---|---|---|
+| `requirements` | intake | 需求澄清、假设记录、可验收 brief |
+| `architecture` | architect | 契约、ADR、模块边界与权限面 |
+| `planning` | planner · manager | WorkPacket 拆分、依赖图、调度决策 |
 | `frontend` | coder · helper | React / TypeScript / 桌面端 UI 实现与验证 |
+| `backend` | coder · helper | engine / harness / delivery / control-plane 后端实现 |
 | `testing` | qa · coder · integrator · helper | 验收测试、回归验证、绿线证据 |
-| `review` | reviewer · integrator · guardian | 对抗评审、证据审计、边界检查 |
+| `debugging` | coder · helper · integrator | 失败测试、阻塞 Worker、运行时接缝诊断 |
+| `review` | reviewer · integrator · evolver · guardian | 对抗评审、证据审计、边界检查 |
+| `security` | architect · reviewer · guardian | 权限、密钥、命令执行、网络与注入风险审计 |
+| `integration` | integrator | 已评审变更整合、绿线验证、集成证据 |
+| `cost-governance` | planner · manager | token / 模型成本、预算降级、CNY 归因 |
+| `evolution` | evolver | 从失败与评审证据中沉淀候选 Skill / Policy |
 
 每个 Skill 都有 `manifest.json` 与 `SKILL.md`。RoleSpec 只引用 Skill id、scope、state；
 loader 会校验引用的 Skill manifest 必须存在、id 与目录名一致，且 `SKILL.md` 可读。

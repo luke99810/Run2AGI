@@ -486,9 +486,31 @@ def test_role_skills_are_projected_into_project_shared_space(
     shared_dir = project / ".codentum" / "skills" / "shared"
     projected = sorted(p.name for p in shared_dir.iterdir() if p.is_dir())
 
-    assert projected == ["frontend", "review", "testing"]
+    assert projected == [
+        "architecture",
+        "backend",
+        "cost-governance",
+        "debugging",
+        "evolution",
+        "frontend",
+        "integration",
+        "planning",
+        "requirements",
+        "review",
+        "security",
+        "testing",
+    ]
+    assert "# Architecture Skill" in (shared_dir / "architecture" / "SKILL.md").read_text("utf-8")
+    assert "# Backend Skill" in (shared_dir / "backend" / "SKILL.md").read_text("utf-8")
+    assert "# Cost Governance Skill" in (shared_dir / "cost-governance" / "SKILL.md").read_text("utf-8")
+    assert "# Debugging Skill" in (shared_dir / "debugging" / "SKILL.md").read_text("utf-8")
+    assert "# Evolution Skill" in (shared_dir / "evolution" / "SKILL.md").read_text("utf-8")
     assert "# Frontend Skill" in (shared_dir / "frontend" / "SKILL.md").read_text("utf-8")
+    assert "# Integration Skill" in (shared_dir / "integration" / "SKILL.md").read_text("utf-8")
+    assert "# Planning Skill" in (shared_dir / "planning" / "SKILL.md").read_text("utf-8")
+    assert "# Requirements Skill" in (shared_dir / "requirements" / "SKILL.md").read_text("utf-8")
     assert "# Review Skill" in (shared_dir / "review" / "SKILL.md").read_text("utf-8")
+    assert "# Security Skill" in (shared_dir / "security" / "SKILL.md").read_text("utf-8")
     assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text("utf-8")
 
 
