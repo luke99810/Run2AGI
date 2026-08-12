@@ -28,9 +28,44 @@ import sys
 from pathlib import Path
 from typing import Any, TextIO
 
-from codentum_delivery.protocol import ProtocolViolation, error_response, parse_request, success_response
+# ★ 必须在导入任何 codentum_* 包**之前**引导 sys.path。
+#   直接按绝对路径运行本文件时（python <repo>/packages/engine/codentum_engine/__main__.py），
+#   `codentum_engine` 本身还不是一个已导入的包，相对导入不可用，
+#   所以这里走绝对路径的 importlib 兜底。
+if __package__ in (None, ""):  # 以脚本方式运行（python <绝对路径>/__main__.py）
+    # ★ 不能写 `from codentum_engine._bootstrap import ...`：那会先执行包的
+    #   `__init__.py`，而它 `from .service import ...` 又需要 control-plane /
+    #   harness 等包 —— 也就是「为了把路径挂上去，先得路径已经挂好」。
+    #   用 importlib 直接按文件加载 _bootstrap，绕开包初始化。
+    import importlib.util as _ilu
+    import sys as _sys
+    from pathlib import Path as _Path
 
-from .service import ENGINE_VERSION, EngineConfig, EngineService
+    _spec = _ilu.spec_from_file_location(
+        "_codentum_engine_bootstrap", _Path(__file__).resolve().parent / "_bootstrap.py"
+    )
+    assert _spec is not None and _spec.loader is not None
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _mod.ensure_packages_importable()
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+else:
+    from ._bootstrap import ensure_packages_importable
+
+    ensure_packages_importable()
+
+from codentum_delivery.protocol import (  # noqa: E402
+    ProtocolViolation,
+    error_response,
+    parse_request,
+    success_response,
+)
+
+from codentum_engine.service import (  # noqa: E402
+    ENGINE_VERSION,
+    EngineConfig,
+    EngineService,
+)
 
 logger = logging.getLogger("codentum_engine")
 
