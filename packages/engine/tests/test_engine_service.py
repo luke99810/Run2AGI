@@ -327,11 +327,16 @@ def test_generated_packet_id_matches_the_frozen_pattern() -> None:
         assert re.fullmatch(r"^wp-[0-9a-z]{6,}$", str(new_packet_id()))
 
 
-def test_placeholder_acceptance_is_manual_not_a_fake_test_predicate() -> None:
-    """★ 操作者提交的是一句话，不是 ACCEPTANCE.md。
+def test_default_acceptance_is_executable_not_a_manual_placeholder() -> None:
+    """★ 验收谓词必须是**能被跑一遍**的，不能是 manual 占位。
 
-    塞一条 `kind=test, predicate=pytest` 会让 I2「验收可判定」在纸面上成立，
-    实际上那条 predicate 从来不会被执行 —— 那是把「可判定」写成了装饰。
+    2026-08-12 实测：模型只写了规格要求的两个文件中的一个（第 5 轮自己承认了），
+    packet 仍被判 accepted —— 因为 `kind: manual` 的谓词永远不会被执行，
+    于是「产生了一条真实证据」就等于「验收通过」。
+
+    ★ 为什么默认跑测试：需求是自由文本，机器判不了「做得对不对」；
+      但「你自己写的测试跑不跑得过」是机器能判的，
+      而且它把举证责任推回给了执行者。
     """
 
     packet = build_packet_for_requirement(
@@ -344,10 +349,29 @@ def test_placeholder_acceptance_is_manual_not_a_fake_test_predicate() -> None:
         budget_cny=1.0,
         acceptance_author="qa",
     )
-    assert packet.acceptance.kind == "manual"
+    assert packet.acceptance.kind == "test", "manual 谓词永远不会被执行"
+    assert packet.acceptance.predicate.split(), "谓词必须是可执行命令"
     # authoredBy 不得等于 packet.role —— 自己给自己定验收即作弊，契约强制
     assert packet.acceptance.authoredBy != packet.role
-    assert "占位" in packet.acceptance.predicate
+
+
+def test_manual_placeholder_is_still_available_and_says_it_needs_a_human() -> None:
+    """★ 保留 manual 那条路：确实无法机器判定时，要如实标成需人工判定，
+    而不是塞一条跑不了的假 test 谓词。"""
+
+    packet = build_packet_for_requirement(
+        packet_id=new_packet_id(),
+        requirement="做个东西",
+        owns_paths=("workspace/",),
+        reads_paths=(),
+        model="qwen-coder-plus-1106",
+        effort="medium",
+        budget_cny=1.0,
+        acceptance_author="qa",
+        executable_acceptance=False,
+    )
+    assert packet.acceptance.kind == "manual"
+    assert "人工判定" in packet.acceptance.predicate
 
 
 def test_acceptance_author_prefers_intake_once_the_rolespec_exists() -> None:

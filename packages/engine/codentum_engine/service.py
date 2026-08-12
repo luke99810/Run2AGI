@@ -74,6 +74,7 @@ from codentum_harness.runtime import (
 from codentum_harness.worker import LocalWorkerRuntime
 from codentum_roles.loader import load_builtin_role_specs
 
+from .acceptance import build_executing_acceptance_gate
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
@@ -493,6 +494,21 @@ class EngineService:
 
         gate_runner = GateRunner()
         register_builtin_gates(gate_runner)
+        # ★ 覆盖内置的 acceptance 门禁：内置那个只检查「有没有证据」，
+        #   注释里写的「完整版：实际运行验收测试」一直没写。
+        #   装配点在这里把会真的执行谓词的那个装上去。
+        executing_gate = build_executing_acceptance_gate(self._workers_root())
+        # ★ 必须同时注册到 "review" 上。
+        #
+        #   `_try_review_to_accepted` 在没有 transition_table 时，用的 gate_id
+        #   是 **"review"** 而不是 "acceptance"。只注册 acceptance 的话，
+        #   这个会执行谓词的门禁**永远不会被调用** ——
+        #   2026-08-12 实测：日志写「门禁 'review' 通过」，packet 被 accepted，
+        #   而验收谓词一次都没跑过。
+        #
+        #   ★ 判据装了但没接上，比没装更糟：它让人以为已经在判了。
+        for gate_id in ("acceptance", "review"):
+            gate_runner.register(gate_id, executing_gate)
 
         loop = ReconcileLoop(
             state_dir=str(self.config.resolved_state_dir()),
@@ -503,6 +519,16 @@ class EngineService:
         )
         loop.worker_runtime = self._build_worker_runtime()
         return loop
+
+    def _workers_root(self) -> Path:
+        """worker 工作区的父目录 —— 必须与 `_build_spawn_request` 算出来的一致。
+
+        ★ 控制平面把 workspace 定在 `state_dir.parent.parent / codentum-workers`。
+          这里重算一遍是重复，但**重复优于猜错**：算错的后果是验收永远
+          找不到工作区、于是永远不通过，而那看起来像「模型没干活」。
+        """
+
+        return self.config.resolved_state_dir().parent.parent / "codentum-workers"
 
     def _transition_table(self) -> TransitionTable | None:
         if not self.config.enforce_role_transitions:

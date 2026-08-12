@@ -71,19 +71,23 @@ class AgentRunnerConfig:
     gateway: ModelGateway
     timeout_seconds: float = 600.0
     max_turns: int = DEFAULT_MAX_TURNS
+    acceptance_predicate: str = "python -m pytest workspace -q"
+    """会被门禁真的执行的那条谓词。写进 prompt 是为了让「完成」有唯一定义。"""
 
 
 def build_agent_runner(config: AgentRunnerConfig):  # type: ignore[no-untyped-def]
     """造一个 `WorkerRunner`（`Callable[[SpawnRequest], WorkerOutcome]`）。"""
 
     def run(req: SpawnRequest) -> WorkerOutcome:
-        return _AgentRun(config, req).execute()
+        return _AgentRun(config, req, config.acceptance_predicate).execute()
 
     return run
 
 
 class _AgentRun:
-    def __init__(self, config: AgentRunnerConfig, req: SpawnRequest) -> None:
+    def __init__(
+        self, config: AgentRunnerConfig, req: SpawnRequest, acceptance_predicate: str
+    ) -> None:
         self._config = config
         self._req = req
         self._workspace = Path(req.workspace)
@@ -94,6 +98,7 @@ class _AgentRun:
         self._tools = ToolExecutor(self._workspace)
         self._transcript: list[dict[str, Any]] = []
         self._spent = 0.0
+        self._acceptance_predicate = acceptance_predicate
 
     # ── 入口 ────────────────────────────────────────────────
 
@@ -126,7 +131,9 @@ class _AgentRun:
             )
 
         session: ModelSession | None = None
-        messages: list[ModelMessage] = [ModelMessage(role="user", content=prompt.user)]
+        messages: list[ModelMessage] = [
+            ModelMessage(role="user", content=prompt.user + self._definition_of_done())
+        ]
 
         try:
             session = await self._config.gateway.open(
@@ -190,6 +197,35 @@ class _AgentRun:
         finally:
             if session is not None:
                 await session.close()
+
+    def _definition_of_done(self) -> str:
+        """把「完成」的定义明确告诉模型。
+
+        ★ prompt bundle 里已经带了 acceptance 谓词（B 的 packet-intent 会渲染它），
+          但那是**描述性**的 —— 模型看到「kind: test, predicate: pytest …」
+          并不知道这条会被真的执行。
+
+          2026-08-12 实测：模型写完实现、跑 pytest 发现没有用例，
+          于是**求助**而不是自己补上测试文件 —— 它把「没有测试」当成了
+          环境问题，而不是自己没做完。
+
+        ★ 所以这里说三件它必须知道的事：谓词会被执行 · 只写正文不算交付 ·
+          缺什么就自己补，别把「我还差点东西」当成求助的理由。
+          这不是哄模型，是把隐含契约写明。
+        """
+
+        return (
+            "\n\n---\n"
+            "## 完成的定义（这段由控制平面注入，不是建议）\n\n"
+            "1. **验收谓词会被真的执行一遍**：`"
+            + self._acceptance_predicate
+            + "`。它不通过，这个任务就不算完成。\n"
+            "2. **把代码写在回复正文里不算交付。** 只有 write_file 写进工作区的文件才算。\n"
+            "3. 缺什么就自己补 —— 例如验收要跑测试而工作区里没有测试文件，"
+            "那就是你还没写完，不是环境有问题。\n"
+            "4. request_help 只用于**你无法自行补齐**的情况（例如需求本身自相矛盾）。"
+            "它会立刻终止本次执行并交给人处理，所以不要用它来汇报进度。\n"
+        )
 
     # ── 工具调用 ────────────────────────────────────────────
 
