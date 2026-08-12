@@ -412,6 +412,14 @@ def _int_field_any(obj: object, names: Sequence[str], *, default: int | None = N
 def _json_mapping_field(obj: object, name: str) -> Mapping[str, Any]:
     raw = _required_field(obj, name)
     if isinstance(raw, str):
+        # ★ 空串是 OpenAI 工具调用格式里「这个工具没有参数」的**合法**表示。
+        #   原来这里一律 json.loads，于是模型每调一次无参数工具
+        #   （list_files 之类）就把整轮会话打成 model_error。
+        #   2026-08-12 实测：模型连写两次文件都成功，第三轮想确认文件在不在，
+        #   就挂在这里 —— 一次本该成功的开发，因为解析器过严而判失败。
+        #   ★ 只放行空串；真正畸形的 JSON 仍然抛错，那是应该抛的。
+        if not raw.strip():
+            return {}
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:

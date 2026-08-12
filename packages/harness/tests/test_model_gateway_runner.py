@@ -291,3 +291,25 @@ def _git() -> str:
     if exe is None:
         raise RuntimeError("git executable not found")
     return exe
+
+
+def test_empty_tool_arguments_parse_as_no_arguments() -> None:
+    """★ 空 arguments 是 OpenAI 格式里「这个工具没有参数」的合法表示。
+
+    2026-08-12 实测：模型连写两次文件都成功，第三轮想调 list_files 确认
+    文件在不在，`arguments` 发的是空串 —— 解析器一律 json.loads，
+    于是把**一次本该成功的开发**打成了 model_error。
+
+    ★ 只放行空串；真正畸形的 JSON 仍要抛错，那是应该抛的。
+    """
+
+    from codentum_harness.model_gateway.openai_compatible import _json_mapping_field
+
+    assert _json_mapping_field({"arguments": ""}, "arguments") == {}
+    assert _json_mapping_field({"arguments": "   "}, "arguments") == {}
+    assert _json_mapping_field({"arguments": '{"path": "a.py"}'}, "arguments") == {"path": "a.py"}
+
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="JSON object text"):
+        _json_mapping_field({"arguments": "{不是 JSON"}, "arguments")

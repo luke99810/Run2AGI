@@ -66,6 +66,7 @@ from codentum_delivery.protocol import CAPABILITY_NAMES, PROTOCOL_VERSION, JsonV
 from codentum_harness.context_broker import ContextCandidate
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
+    build_model_gateway,
     ModelGatewayConfig,
     RunnerConfig,
     build_local_worker_runtime,
@@ -73,6 +74,7 @@ from codentum_harness.runtime import (
 from codentum_harness.worker import LocalWorkerRuntime
 from codentum_roles.loader import load_builtin_role_specs
 
+from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
     RequirementRecord,
@@ -144,6 +146,20 @@ class EngineConfig:
     model_timeout_seconds: float = 180.0
 
     context_char_budget: int = 8000
+
+    enable_tool_loop: bool = True
+    """是否使用带工具循环的 runner（模型能真的写文件）。
+
+    ★ 默认 True —— 这是产品要的行为。设成 False 会退回 B 的 one-shot
+      `ModelGatewayRunner`：模型只能把代码写在回复正文里，一个文件都不会创建。
+
+    ★ 两个 runner 都留着，因为它们守的判据不同：
+      one-shot 守「模型能被真实调用、用量能落盘」，
+      工具循环守「模型能真的交付文件」。合并成一个会丢掉前一条。
+    """
+
+    max_tool_turns: int = DEFAULT_MAX_TURNS
+    """工具循环的轮数上限。撞上限时如实报 max_turns_exhausted，不伪装成完成。"""
 
     enforce_role_transitions: bool = False
     """是否把 RoleSpec 派生的 TransitionTable 装进 ReconcileLoop。
@@ -496,20 +512,40 @@ class EngineService:
     def _build_worker_runtime(self) -> LocalWorkerRuntime | None:
         if self._key_env is None:
             return None
+
+        gateway_config = ModelGatewayConfig.bailian(
+            pricing={},
+            api_key_env=self._key_env,
+            # ★ 价格表证据还没落地（待办 7d）。显式放行 unknown pricing，
+            #   代价是**成本数字不能当证据** —— 桌面端 Cost 视图会显示 0，
+            #   那是「不知道」不是「没花钱」。偷偷塞个假价格会让那个 0
+            #   变成一个看起来可信的数。
+            require_pricing=False,
+        )
+
+        if self.config.enable_tool_loop:
+            # ★ 带工具循环的 runner：模型能真的把代码写进文件。
+            #   不走 build_local_worker_runtime 是因为 RunnerConfig 只认
+            #   harness 内置的两种 runner，而这个 runner 属于装配层。
+            return LocalWorkerRuntime(
+                repo_root=self.config.project_root,
+                runner=build_agent_runner(
+                    AgentRunnerConfig(
+                        gateway=build_model_gateway(gateway_config),
+                        timeout_seconds=self.config.model_timeout_seconds,
+                        max_turns=self.config.max_tool_turns,
+                    )
+                ),
+                role_specs=self._role_specs,
+                context_loader=self._context_loader,
+                context_char_budget=self.config.context_char_budget,
+            )
+
         return build_local_worker_runtime(
             LocalWorkerRuntimeConfig(
                 repo_root=self.config.project_root,
                 runner=RunnerConfig.model_gateway(
-                    ModelGatewayConfig.bailian(
-                        pricing={},
-                        api_key_env=self._key_env,
-                        # ★ 价格表证据还没落地（待办 7d）。显式放行 unknown
-                        #   pricing，代价是**成本数字不能当证据** —— 桌面端的
-                        #   Cost 视图会显示 0，那是「不知道」不是「没花钱」。
-                        #   偷偷塞个假价格会让那个 0 变成一个看起来可信的数。
-                        require_pricing=False,
-                    ),
-                    timeout_seconds=self.config.model_timeout_seconds,
+                    gateway_config, timeout_seconds=self.config.model_timeout_seconds
                 ),
                 context_char_budget=self.config.context_char_budget,
             ),
