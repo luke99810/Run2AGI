@@ -13,7 +13,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-
 from codentum_delivery.protocol import CAPABILITY_NAMES, validate_handshake, validate_receipt
 from codentum_engine.intake import (
     build_packet_for_requirement,
@@ -125,7 +124,7 @@ def test_state_revision_survives_a_restart(project: Path, fake_key: None) -> Non
 
     first = _service(project)
     before = first.revision
-    first._session.bump()  # noqa: SLF001
+    first._session.bump()
     bumped = first.revision
     assert bumped == before + 1
 
@@ -209,7 +208,7 @@ def test_requirement_reaches_the_model_context(project: Path, fake_key: None) ->
     request = _Request()
     request.packet_id = packet_id  # type: ignore[attr-defined]
 
-    candidates = service._context_loader(request, service._role_specs[0])  # noqa: SLF001
+    candidates = service._context_loader(request, service._role_specs[0])
     assert len(candidates) == 1
     assert "记账小工具" in candidates[0].text
     # required=True：被 char_budget 裁掉的话，模型又会收到一份没有任务的 prompt
@@ -469,8 +468,28 @@ def test_role_specs_are_projected_into_the_project(project: Path, fake_key: None
     projected = sorted(p.stem for p in roles_dir.glob("*.json"))
 
     assert projected, "roles/ 是空的，桌面端会显示「项目投影 0」"
-    assert projected == sorted(str(spec.id) for spec in service._role_specs)  # noqa: SLF001
+    assert projected == sorted(str(spec.id) for spec in service._role_specs)
     assert len(projected) >= 11, f"只投影了 {len(projected)} 份，B 已经补齐 11 个角色"
+
+
+def test_role_skills_are_projected_into_project_shared_space(
+    project: Path,
+    fake_key: None,
+) -> None:
+    """★ RoleSpec 只说明“要用哪个 Skill”，共享空间才是 Worker 能读的正文副本。
+
+    C 和 Worker 都不该依赖 `packages/roles/skills/` 这个源码目录。引擎启动时
+    投影到 `.codentum/skills/shared/`，才算进入项目级共享空间。
+    """
+
+    _service(project)
+    shared_dir = project / ".codentum" / "skills" / "shared"
+    projected = sorted(p.name for p in shared_dir.iterdir() if p.is_dir())
+
+    assert projected == ["frontend", "review", "testing"]
+    assert "# Frontend Skill" in (shared_dir / "frontend" / "SKILL.md").read_text("utf-8")
+    assert "# Review Skill" in (shared_dir / "review" / "SKILL.md").read_text("utf-8")
+    assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text("utf-8")
 
 
 def test_projection_matches_the_source_spec_field_for_field(

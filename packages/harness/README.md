@@ -52,9 +52,11 @@
 等占位符，外部编码 Agent 命令可直接读取已落盘的 Prompt Bundle。
 
 Prompt Bundle 会从 `RoleSpec.promptRef` 读取角色提示词，并从 `RoleSpec.skills` 读取
-state 为空或 `active` 的 `packages/roles/skills/<id>/SKILL.md`。写出的
-`prompt/manifest.json` 记录 `skill_refs`，便于桌面端和评审只看证据就知道这次 Worker
-实际带了哪些 Skill。
+state 为空或 `active` 的 Skill 正文。运行时优先使用项目共享空间
+`.codentum/skills/shared/<id>/SKILL.md`；共享空间不存在时，才回退到内置
+`packages/roles/skills/<id>/SKILL.md`。写出的 `prompt/manifest.json` 记录
+`skill_refs` 与 `skill_source`，便于桌面端和评审只看证据就知道这次 Worker 实际带了哪些
+Skill，以及这些 Skill 来自项目共享副本还是内置源。
 
 `ModelGatewayRunner` 则读取同一份 Prompt Bundle，经冻结的 `ModelGateway` 发起一次模型调用，
 并把模型响应、usage、tool_calls 与 prompt digest 写入 `model/` 证据目录。

@@ -13,6 +13,7 @@ from codentum_roles import (
     load_role_skill_prompt,
     load_role_spec_file,
     load_role_specs_dir,
+    project_role_skills,
 )
 
 
@@ -56,6 +57,23 @@ def test_builtin_role_skills_have_readable_prompt_body() -> None:
     assert "# Frontend Skill" in load_role_skill_prompt("frontend")
     assert "# Testing Skill" in load_role_skill_prompt("testing")
     assert "# Review Skill" in load_role_skill_prompt("review")
+
+
+def test_project_role_skills_writes_deterministic_shared_skill_space(tmp_path: Path) -> None:
+    shared_dir = tmp_path / ".codentum" / "skills" / "shared"
+
+    written = project_role_skills(["testing", "frontend", "frontend"], shared_dir)
+
+    assert [(path.parent.name, path.name) for path in written] == [
+        ("frontend", "manifest.json"),
+        ("frontend", "SKILL.md"),
+        ("testing", "manifest.json"),
+        ("testing", "SKILL.md"),
+    ]
+    assert (shared_dir / "frontend" / "manifest.json").exists()
+    assert "# Frontend Skill" in (shared_dir / "frontend" / "SKILL.md").read_text(encoding="utf-8")
+    assert (shared_dir / "testing" / "manifest.json").exists()
+    assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_builtin_guardian_is_deterministic() -> None:

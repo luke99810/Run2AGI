@@ -40,6 +40,7 @@ from .loader import (
     load_role_skill_prompt,
     load_role_spec_file,
     load_role_specs_dir,
+    project_role_skills,
 )
 
 __all__ = [
@@ -54,4 +55,5 @@ __all__ = [
     "load_role_skill_prompt",
     "load_role_spec_file",
     "load_role_specs_dir",
+    "project_role_skills",
 ]

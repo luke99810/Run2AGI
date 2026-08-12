@@ -43,8 +43,11 @@
 
 每个 Skill 都有 `manifest.json` 与 `SKILL.md`。RoleSpec 只引用 Skill id、scope、state；
 loader 会校验引用的 Skill manifest 必须存在、id 与目录名一致，且 `SKILL.md` 可读。
-`PromptBundle` 只注入 state 为空或 `active` 的 Skill 正文。这样 C 的 Skills 面板从项目
-RoleSpec 派生选项时，背后有 B 的真源文件和运行时输入链路，而不是静态字符串。
+引擎启动时会把被 RoleSpec 引用的内置 Skill 投影到项目共享空间
+`.codentum/skills/shared/<id>/`，Local/Team Worker 写 PromptBundle 时优先从这个共享目录
+读取 `SKILL.md`；没有共享目录时才回退到内置源。`PromptBundle` 只注入 state 为空或
+`active` 的 Skill 正文。这样 C 的 Skills 面板从项目 RoleSpec 派生选项时，背后有 B 的
+真源文件、项目共享副本和运行时输入链路，而不是静态字符串。
 
 ### RoleSpec 派生四处
 

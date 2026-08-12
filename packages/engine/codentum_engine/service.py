@@ -66,13 +66,13 @@ from codentum_delivery.protocol import CAPABILITY_NAMES, PROTOCOL_VERSION, JsonV
 from codentum_harness.context_broker import ContextCandidate
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
-    build_model_gateway,
     ModelGatewayConfig,
     RunnerConfig,
     build_local_worker_runtime,
+    build_model_gateway,
 )
 from codentum_harness.worker import LocalWorkerRuntime
-from codentum_roles.loader import load_builtin_role_specs
+from codentum_roles.loader import RoleSkillLoadError, load_builtin_role_specs, project_role_skills
 
 from .acceptance import build_executing_acceptance_gate
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
@@ -236,6 +236,7 @@ class EngineService:
             budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
         ).ensure_state_dir()
         self._project_role_specs(state_dir)
+        self._project_shared_skills(state_dir)
 
     def _project_role_specs(self, state_dir: Path) -> None:
         """把 B 的 RoleSpec 投影进 `<project>/.codentum/roles/`。
@@ -274,6 +275,31 @@ class EngineService:
             # ★ 投影失败不该拖垮引擎：桌面端少一块展示，比整个引擎起不来轻得多。
             #   但必须留话 —— 否则「为什么研发团队页是空的」又会变成查不到的问题。
             logger.warning("RoleSpec 投影失败（%s），研发团队页会显示 0 份项目投影", exc)
+
+    def _project_shared_skills(self, state_dir: Path) -> None:
+        """把 B 的内置 Skills 投影进项目级共享空间。
+
+        RoleSpec 里的 `skills` 只是引用关系；Worker 真正执行时需要读到 `SKILL.md`
+        正文。把引用过的内置 Skill 投到 `.codentum/skills/shared/` 后，Local 与
+        Team Worker 都能从同一个项目空间读取，C 的 Skills 面板也不必依赖源码目录。
+        """
+
+        skill_ids = sorted(
+            {
+                skill.id
+                for spec in self._role_specs
+                for skill in (spec.skills or ())
+            }
+        )
+        if not skill_ids:
+            return
+
+        shared_dir = state_dir / "skills" / "shared"
+        try:
+            written = project_role_skills(skill_ids, shared_dir)
+            logger.info("已投影 %d 个共享 Skill 文件到 %s", len(written), shared_dir)
+        except (OSError, RoleSkillLoadError) as exc:
+            logger.warning("Skill 共享空间投影失败（%s），Worker 将回退到内置 Skill 源", exc)
 
     # ══════════════════════════════════════════════════════════
     #  协议方法

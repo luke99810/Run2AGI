@@ -262,7 +262,11 @@ class TeamWorkerRuntime:
         self._sessions[worker_id] = session
         session.write_manifest(workspace, worker_runtime=self._worker_runtime)
         checkpoint = session.write_checkpoint0(prepared.context)
-        session.write_prompt_bundle(prepared.role_spec, prepared.context)
+        session.write_prompt_bundle(
+            prepared.role_spec,
+            prepared.context,
+            skills_dir=self._shared_skills_dir(),
+        )
         session.append(
             "started",
             {
@@ -400,6 +404,10 @@ class TeamWorkerRuntime:
             raise RuntimeError(f"RoleSpec is not loaded for role: {role}")
         return spec
 
+    def _shared_skills_dir(self) -> Path | None:
+        skills_dir = self._repo_root / ".codentum" / "skills" / "shared"
+        return skills_dir if skills_dir.is_dir() else None
+
     def _get(self, handle: WorkerHandle) -> _TeamSession:
         session = self._sessions.get(handle.worker_id)
         if session is None:
@@ -459,12 +467,15 @@ class _TeamSession:
         self,
         role_spec: RoleSpec,
         context: ContextBundle | None,
+        *,
+        skills_dir: Path | str | None = None,
     ) -> WorkerPromptBundle:
         return write_worker_prompt_bundle(
             request=self.request,
             role_spec=role_spec,
             evidence_dir=self.evidence_dir,
             context=context,
+            skills_dir=skills_dir,
         )
 
     def write_status(self, status: AgentTeamsWorkerStatus) -> None:
