@@ -426,3 +426,59 @@ def test_ensure_state_dir_never_clobbers_existing_state(project: Path, fake_key:
     assert sorted(
         p.name for p in (project / ".codentum" / "packets").glob("*.json")
     ) == packets_before
+
+
+def test_role_specs_are_projected_into_the_project(project: Path, fake_key: None) -> None:
+    """★ 引擎启动就把 B 的 RoleSpec 投影进 `<project>/.codentum/roles/`。
+
+    桌面端「研发团队」页读的是**项目内**的 `roles/`，而真源在
+    `packages/roles/specs/`。两者之间原本没有任何人搬运 ——
+    于是界面显示「系统岗位 11、项目投影 0」：名字对得上，
+    但**不代表这 11 个角色真的被系统加载了**。
+
+    这个搬运归装配点：它是唯一同时知道「RoleSpec 从哪来」
+    和「状态目录在哪」的地方。
+    """
+
+    service = _service(project)
+    roles_dir = project / ".codentum" / "roles"
+    projected = sorted(p.stem for p in roles_dir.glob("*.json"))
+
+    assert projected, "roles/ 是空的，桌面端会显示「项目投影 0」"
+    assert projected == sorted(str(spec.id) for spec in service._role_specs)  # noqa: SLF001
+    assert len(projected) >= 11, f"只投影了 {len(projected)} 份，B 已经补齐 11 个角色"
+
+
+def test_projection_matches_the_source_spec_field_for_field(
+    project: Path, fake_key: None
+) -> None:
+    """★ 投影必须与 B 的源文件逐字段一致 —— 它是副本，不是二次加工。
+
+    只断言「文件存在」是不够的：写出一份**结构合法但内容不对**的副本，
+    桌面端照样能读，只是显示的是假事实。
+    """
+
+    _service(project)
+    source_dir = Path(__file__).resolve().parents[3] / "packages" / "roles" / "specs"
+    for source in sorted(source_dir.glob("*.json")):
+        expected = json.loads(source.read_text("utf-8"))
+        actual = json.loads((project / ".codentum" / "roles" / source.name).read_text("utf-8"))
+        assert actual == expected, f"{source.name} 的投影与源文件不一致"
+
+
+def test_projection_is_refreshed_not_merely_created(project: Path, fake_key: None) -> None:
+    """★ 与 `ensure_state_dir()` 的「只补缺不覆盖」相反：投影必须每次重写。
+
+    投影的语义是「真源的副本」。留着旧副本比缺副本更糟 —— B 改了 RoleSpec
+    而项目里还是上一版时，桌面端会显示一份**看起来正确的过时事实**，
+    而没有任何东西会报错。
+    """
+
+    _service(project)
+    stale = project / ".codentum" / "roles" / "coder.json"
+    stale.write_text('{"id": "coder", "usesModel": false}', encoding="utf-8")
+
+    _service(project)  # 重启
+
+    refreshed = json.loads(stale.read_text("utf-8"))
+    assert refreshed["usesModel"] is True, "旧副本没有被刷新，桌面端会显示过时的角色定义"

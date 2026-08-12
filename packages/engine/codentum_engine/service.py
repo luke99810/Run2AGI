@@ -45,6 +45,7 @@ responsibility 也都没写它。
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -54,7 +55,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codentum_contracts.state import RoleSpec, WorkPacket
+from codentum_contracts.state import RoleSpec, WorkPacket, dump_state
 from codentum_control_plane.admission import AdmissionChecker
 from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.gates import GateRunner, register_builtin_gates
@@ -217,6 +218,45 @@ class EngineService:
             state_dir=str(state_dir),
             budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
         ).ensure_state_dir()
+        self._project_role_specs(state_dir)
+
+    def _project_role_specs(self, state_dir: Path) -> None:
+        """把 B 的 RoleSpec 投影进 `<project>/.codentum/roles/`。
+
+        ════════════════════════════════════════════════════════════
+         ★ 桌面端读的是项目里的投影，不是 packages/roles/specs/
+        ════════════════════════════════════════════════════════════
+
+        `directory-state-source.ts:262` 读的是 `roles/` 这个**项目内目录**，
+        而 B 的真源在 `packages/roles/specs/*.json`。两者之间原本没有任何人搬运，
+        于是桌面端「研发团队」页显示的是 C 自己维护的一份静态岗位清单 ——
+        名字对得上，但**不代表这 11 个角色真的被系统加载了**
+        （截图上「系统岗位 11、项目投影 0」说的就是这件事）。
+
+        ★ 这个搬运归装配点：它是唯一同时知道「RoleSpec 从哪来」
+          和「状态目录在哪」的地方。控制平面不接触 RoleSpec，
+          桌面端不该去读别的包的源码目录。
+
+        ★ 与 `ensure_state_dir()` 的「只补缺不覆盖」不同，这里**每次启动都重写**：
+          投影的语义是「真源的副本」，留着旧副本比缺副本更糟 ——
+          B 改了 RoleSpec 而项目里还是上一版，桌面端会显示一份**看起来正确的
+          过时事实**，而没有任何东西会报错。
+        """
+
+        roles_dir = state_dir / "roles"
+        try:
+            roles_dir.mkdir(parents=True, exist_ok=True)
+            for spec in self._role_specs:
+                payload = dump_state(spec)
+                (roles_dir / f"{spec.id}.json").write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+            logger.info("已投影 %d 份 RoleSpec 到 %s", len(self._role_specs), roles_dir)
+        except OSError as exc:
+            # ★ 投影失败不该拖垮引擎：桌面端少一块展示，比整个引擎起不来轻得多。
+            #   但必须留话 —— 否则「为什么研发团队页是空的」又会变成查不到的问题。
+            logger.warning("RoleSpec 投影失败（%s），研发团队页会显示 0 份项目投影", exc)
 
     # ══════════════════════════════════════════════════════════
     #  协议方法
