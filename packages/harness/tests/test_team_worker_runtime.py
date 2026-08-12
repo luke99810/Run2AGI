@@ -58,6 +58,21 @@ def test_team_spawn_creates_agentteams_worker_and_prompt_bundle(tmp_path: Path) 
 
     events = asyncio.run(_collect_events(runtime, handle))
     assert [event.kind for event in events] == ["started", "checkpoint", "progress"]
+    assert events[2].payload == {
+        "runtime_mode": "agentteams",
+        "moduleId": "agentteams.worker",
+        "moduleLabel": "AgentTeams Worker",
+        "moduleState": "running",
+        "agentteams_worker": "codentum-coder-wp-abcdef-a1",
+        "phase": "Running",
+        "model": "qwen3.6-plus",
+        "runtime": "copaw",
+        "status_ref": "file:agentteams/status.json",
+        "container_state": "running",
+        "matrix_user_id": "@codentum-coder-wp-abcdef-a1:matrix-local.agentteams.io:18080",
+        "room_id": "!room:matrix-local.agentteams.io:18080",
+        "message": "backend=docker status=running",
+    }
 
 
 def test_team_settle_fails_closed_until_dispatch_is_implemented(tmp_path: Path) -> None:
@@ -74,7 +89,11 @@ def test_team_settle_fails_closed_until_dispatch_is_implemented(tmp_path: Path) 
     assert tuple(outcome.evidence) == ("file:agentteams/status.json",)
 
     events = asyncio.run(_collect_events(runtime, handle))
-    assert [event.kind for event in events] == ["started", "checkpoint", "progress", "finished"]
+    assert [event.kind for event in events] == ["started", "checkpoint", "progress", "progress", "finished"]
+    assert events[3].payload["status_ref"] == "file:agentteams/status.json"
+    assert events[3].payload["moduleId"] == "agentteams.worker"
+    assert events[4].payload["reason"] == "team_dispatch_missing"
+    assert events[4].payload["moduleState"] == "failed"
 
 
 def test_team_spawn_records_agentteams_error_as_failed_outcome(tmp_path: Path) -> None:
@@ -91,6 +110,10 @@ def test_team_spawn_records_agentteams_error_as_failed_outcome(tmp_path: Path) -
     evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
     error = json.loads((evidence_dir / "agentteams" / "error.json").read_text(encoding="utf-8"))
     assert error["error_type"] == "RuntimeError"
+    events = asyncio.run(_collect_events(runtime, handle))
+    assert events[-1].payload["moduleId"] == "agentteams.worker"
+    assert events[-1].payload["moduleState"] == "failed"
+    assert events[-1].payload["error_ref"] == "file:agentteams/error.json"
 
 
 def test_build_team_worker_runtime_wires_injected_client(tmp_path: Path) -> None:
