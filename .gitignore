@@ -46,8 +46,10 @@ credentials/
 /.codentum/budget.json
 /.codentum/decisions.jsonl
 /.codentum/engine-session.json
+/.codentum/engine.log
 /.codentum/graph.json
 /.codentum/locks.json
+/.codentum/mcp/
 /.codentum/roles/
 /.codentum/skills/
 *.local

@@ -312,7 +312,7 @@ export function App(): ReactNode {
       view = <ResourceLibraryView kind={navigation} task={activeTask} skillOptions={skillOptions} onContextChange={updateActiveContext} />
       break
     case 'mcp':
-      view = <McpView services={[]} />
+      view = <McpView services={desktop.snapshot?.mcpServices ?? []} />
       break
     case 'settings':
       view = <SettingsView preferences={preferences} onChange={setPreferences} />

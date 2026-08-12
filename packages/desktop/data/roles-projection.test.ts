@@ -24,6 +24,7 @@ import { ProjectStateSource } from './index'
 
 const REPO = resolve(__dirname, '..', '..', '..')
 const SPECS = resolve(REPO, 'packages', 'roles', 'specs')
+const MCP = resolve(REPO, 'packages', 'roles', 'mcp')
 const EMPTY_FIXTURE = resolve(REPO, 'fixtures', 'golden-state', 'empty', '.codentum')
 
 describe('RoleSpec 项目投影', () => {
@@ -94,6 +95,45 @@ describe('RoleSpec 项目投影', () => {
       const snapshot = await source.read()
       expect(snapshot.roles).toEqual([])
       expect(snapshot.warnings.length, '形状不对却一声不吭').toBeGreaterThan(0)
+    } finally {
+      source.close()
+    }
+  })
+
+  it('B 的 MCP 清单原样放进 .codentum/mcp/ 后，桌面端必须读成运行时投影', async () => {
+    const project = await mkdtemp(join(tmpdir(), 'codentum-mcp-'))
+    created.push(project)
+    const state = join(project, '.codentum')
+    await mkdir(join(state, 'mcp'), { recursive: true })
+
+    for (const member of ['graph.json', 'budget.json', 'decisions.jsonl']) {
+      await copyFile(join(EMPTY_FIXTURE, member), join(state, member))
+    }
+    for (const directory of ['packets', 'evidence', 'knowledge', 'roles']) {
+      await mkdir(join(state, directory), { recursive: true })
+    }
+
+    const services = (await readdir(MCP)).filter((name) => name.endsWith('.json'))
+    for (const name of services) {
+      await copyFile(join(MCP, name), join(state, 'mcp', name))
+    }
+
+    const source = await ProjectStateSource.create(project, {})
+    try {
+      const snapshot = await source.read()
+      expect(snapshot.warnings).toEqual([])
+      expect(snapshot.mcpServices.map((service) => service.id).sort()).toEqual([
+        'agentteams',
+        'browser',
+        'filesystem',
+        'git'
+      ])
+      expect(snapshot.mcpServices.find((service) => service.id === 'filesystem')?.tools).toEqual([
+        'read_file',
+        'write_file',
+        'list_directory'
+      ])
+      expect(snapshot.mcpServices.find((service) => service.id === 'agentteams')?.authentication).toBe('missing')
     } finally {
       source.close()
     }

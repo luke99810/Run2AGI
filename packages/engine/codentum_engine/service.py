@@ -72,7 +72,13 @@ from codentum_harness.runtime import (
     build_model_gateway,
 )
 from codentum_harness.worker import LocalWorkerRuntime
-from codentum_roles.loader import RoleSkillLoadError, load_builtin_role_specs, project_role_skills
+from codentum_roles.loader import (
+    RoleMcpLoadError,
+    RoleSkillLoadError,
+    load_builtin_role_specs,
+    project_mcp_services,
+    project_role_skills,
+)
 
 from .acceptance import build_executing_acceptance_gate
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
@@ -237,6 +243,7 @@ class EngineService:
         ).ensure_state_dir()
         self._project_role_specs(state_dir)
         self._project_shared_skills(state_dir)
+        self._project_mcp_services(state_dir)
 
     def _project_role_specs(self, state_dir: Path) -> None:
         """把 B 的 RoleSpec 投影进 `<project>/.codentum/roles/`。
@@ -300,6 +307,21 @@ class EngineService:
             logger.info("已投影 %d 个共享 Skill 文件到 %s", len(written), shared_dir)
         except (OSError, RoleSkillLoadError) as exc:
             logger.warning("Skill 共享空间投影失败（%s），Worker 将回退到内置 Skill 源", exc)
+
+    def _project_mcp_services(self, state_dir: Path) -> None:
+        """把 B 的 MCP 服务清单投影进项目状态。
+
+        这里投影的是“运行时知道哪些 MCP 服务/工具入口”，不是“所有工具都已可调用”。
+        每个服务自己的 status/authentication/error 必须说真话，桌面端只展示这份
+        投影，不自行猜连接状态。
+        """
+
+        mcp_dir = state_dir / "mcp"
+        try:
+            written = project_mcp_services(mcp_dir)
+            logger.info("已投影 %d 个 MCP 服务文件到 %s", len(written), mcp_dir)
+        except (OSError, RoleMcpLoadError) as exc:
+            logger.warning("MCP 服务投影失败（%s），MCP 页面会显示未接入", exc)
 
     # ══════════════════════════════════════════════════════════
     #  协议方法

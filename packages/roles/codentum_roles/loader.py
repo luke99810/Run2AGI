@@ -14,17 +14,21 @@ from codentum_contracts.state import RoleId, RoleSpec
 from pydantic import ValidationError
 
 __all__ = [
+    "RoleMcpLoadError",
     "RolePromptLoadError",
     "RoleSkillLoadError",
     "RoleSpecLoadError",
+    "default_mcp_dir",
     "default_prompts_dir",
     "default_skills_dir",
     "default_specs_dir",
+    "load_builtin_mcp_services",
     "load_builtin_role_specs",
     "load_role_prompt",
     "load_role_skill_prompt",
     "load_role_spec_file",
     "load_role_specs_dir",
+    "project_mcp_services",
     "project_role_skills",
 ]
 
@@ -41,6 +45,10 @@ class RoleSkillLoadError(ValueError):
     """RoleSpec.skills 无法解析或读取。"""
 
 
+class RoleMcpLoadError(ValueError):
+    """MCP 服务投影无法解析或读取。"""
+
+
 def default_specs_dir() -> Path:
     """仓库内置 RoleSpec 目录。"""
     return Path(__file__).resolve().parents[1] / "specs"
@@ -54,6 +62,53 @@ def default_prompts_dir() -> Path:
 def default_skills_dir() -> Path:
     """仓库内置 Skill 目录。"""
     return Path(__file__).resolve().parents[1] / "skills"
+
+
+def default_mcp_dir() -> Path:
+    """仓库内置 MCP 服务投影目录。"""
+    return Path(__file__).resolve().parents[1] / "mcp"
+
+
+def load_builtin_mcp_services(mcp_dir: Path | str | None = None) -> tuple[dict[str, object], ...]:
+    """加载内置 MCP 服务投影。
+
+    这里的 MCP 清单是运行时展示与权限收敛的输入，不等于已经启动外部 MCP
+    server。每个服务必须显式给出连接状态和错误原因，避免 UI 把路线图说成
+    已接入能力。
+    """
+
+    root = Path(mcp_dir or default_mcp_dir())
+    services = tuple(_load_mcp_service_file(path) for path in sorted(root.glob("*.json")))
+    _reject_duplicate_mcp_services(services)
+    return services
+
+
+def project_mcp_services(
+    target_dir: Path | str,
+    *,
+    mcp_dir: Path | str | None = None,
+) -> tuple[Path, ...]:
+    """把内置 MCP 服务清单投影到项目状态目录。
+
+    `packages/roles/mcp/*.json` 是 B 侧真源；`.codentum/mcp/*.json` 是 C
+    和运行时读取的项目副本。投影只搬运通过校验的服务，不做前端推断。
+    """
+
+    target_root = Path(target_dir)
+    written: list[Path] = []
+    for service in load_builtin_mcp_services(mcp_dir):
+        service_id = str(service["id"])
+        target_root.mkdir(parents=True, exist_ok=True)
+        target_path = target_root / f"{service_id}.json"
+        try:
+            target_path.write_text(
+                json.dumps(service, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            raise RoleMcpLoadError(f"无法投影 MCP 服务[{service_id}]: {target_path}") from exc
+        written.append(target_path)
+    return tuple(written)
 
 
 def load_role_prompt(spec: RoleSpec, prompts_dir: Path | str | None = None) -> str | None:
@@ -178,6 +233,15 @@ def _reject_duplicate_roles(specs: tuple[RoleSpec, ...]) -> None:
         seen.add(spec.id)
 
 
+def _reject_duplicate_mcp_services(services: tuple[dict[str, object], ...]) -> None:
+    seen: set[str] = set()
+    for service in services:
+        service_id = str(service["id"])
+        if service_id in seen:
+            raise RoleMcpLoadError(f"MCP 服务重复定义: {service_id}")
+        seen.add(service_id)
+
+
 def _validate_skill_refs(specs: tuple[RoleSpec, ...], skills_dir: Path) -> None:
     for spec in specs:
         if spec.skills is None:
@@ -204,6 +268,44 @@ def _load_skill_manifest(skills_dir: Path, skill_id: str) -> dict[str, object]:
     if raw.get("id") != skill_id:
         raise RoleSkillLoadError(f"Skill manifest id 与目录名不一致: {path}")
     return raw
+
+
+def _load_mcp_service_file(path: Path) -> dict[str, object]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RoleMcpLoadError(f"无法读取 MCP 服务清单: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RoleMcpLoadError(f"MCP 服务清单不是合法 JSON: {path}") from exc
+    if not isinstance(raw, dict):
+        raise RoleMcpLoadError(f"MCP 服务清单必须是对象: {path}")
+    _validate_mcp_service(raw, path)
+    return raw
+
+
+def _validate_mcp_service(raw: dict[str, object], path: Path) -> None:
+    service_id = raw.get("id")
+    if not isinstance(service_id, str) or not service_id:
+        raise RoleMcpLoadError(f"MCP 服务 id 不能为空: {path}")
+    if Path(service_id).parts != (service_id,) or service_id in {".", ".."}:
+        raise RoleMcpLoadError(f"MCP 服务 id 不允许路径片段: {path}")
+    if raw.get("schemaVersion") != 1:
+        raise RoleMcpLoadError(f"MCP 服务 schemaVersion 必须为 1: {path}")
+    if raw.get("transport") not in {"stdio", "http", "sse"}:
+        raise RoleMcpLoadError(f"MCP 服务 transport 非法: {path}")
+    if raw.get("status") not in {"connected", "connecting", "disconnected", "error"}:
+        raise RoleMcpLoadError(f"MCP 服务 status 非法: {path}")
+    if raw.get("authentication") not in {"not_required", "configured", "missing", "unknown"}:
+        raise RoleMcpLoadError(f"MCP 服务 authentication 非法: {path}")
+    if not isinstance(raw.get("name"), str) or not raw["name"]:
+        raise RoleMcpLoadError(f"MCP 服务 name 不能为空: {path}")
+    tools = raw.get("tools")
+    if not isinstance(tools, list) or not all(isinstance(tool, str) and tool for tool in tools):
+        raise RoleMcpLoadError(f"MCP 服务 tools 必须是非空字符串数组: {path}")
+    if "error" in raw and not isinstance(raw["error"], str):
+        raise RoleMcpLoadError(f"MCP 服务 error 必须是字符串: {path}")
+    if "configSource" in raw and not isinstance(raw["configSource"], str):
+        raise RoleMcpLoadError(f"MCP 服务 configSource 必须是字符串: {path}")
 
 
 def _resolve_skill_dir(skill_id: str, skills_dir: Path | str) -> Path:

@@ -9,10 +9,12 @@ from codentum_roles import (
     RoleSkillLoadError,
     RoleSpecLoadError,
     load_builtin_role_specs,
+    load_builtin_mcp_services,
     load_role_prompt,
     load_role_skill_prompt,
     load_role_spec_file,
     load_role_specs_dir,
+    project_mcp_services,
     project_role_skills,
 )
 
@@ -82,6 +84,33 @@ def test_builtin_skill_manifests_cover_rolespec_bindings() -> None:
         for skill in spec.skills or ():
             manifest = json.loads((skills_dir / skill.id / "manifest.json").read_text(encoding="utf-8"))
             assert spec.id in manifest["appliesTo"]
+
+
+def test_builtin_mcp_services_load_and_say_connection_truth() -> None:
+    services = load_builtin_mcp_services()
+    by_id = {str(service["id"]): service for service in services}
+
+    assert sorted(by_id) == ["agentteams", "browser", "filesystem", "git"]
+    assert by_id["filesystem"]["status"] == "connected"
+    assert by_id["git"]["status"] == "connected"
+    assert by_id["browser"]["status"] == "disconnected"
+    assert by_id["agentteams"]["authentication"] == "missing"
+    assert "error" in by_id["agentteams"]
+
+
+def test_project_mcp_services_writes_deterministic_project_projection(tmp_path: Path) -> None:
+    target_dir = tmp_path / ".codentum" / "mcp"
+
+    written = project_mcp_services(target_dir)
+
+    assert [path.name for path in written] == [
+        "agentteams.json",
+        "browser.json",
+        "filesystem.json",
+        "git.json",
+    ]
+    projected = json.loads((target_dir / "filesystem.json").read_text(encoding="utf-8"))
+    assert projected["tools"] == ["read_file", "write_file", "list_directory"]
 
 
 def test_project_role_skills_writes_deterministic_shared_skill_space(tmp_path: Path) -> None:

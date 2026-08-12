@@ -514,6 +514,24 @@ def test_role_skills_are_projected_into_project_shared_space(
     assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text("utf-8")
 
 
+def test_mcp_services_are_projected_into_project_state(
+    project: Path,
+    fake_key: None,
+) -> None:
+    _service(project)
+    mcp_dir = project / ".codentum" / "mcp"
+    projected = sorted(p.name for p in mcp_dir.glob("*.json"))
+
+    assert projected == ["agentteams.json", "browser.json", "filesystem.json", "git.json"]
+    filesystem = json.loads((mcp_dir / "filesystem.json").read_text("utf-8"))
+    agentteams = json.loads((mcp_dir / "agentteams.json").read_text("utf-8"))
+    assert filesystem["status"] == "connected"
+    assert filesystem["tools"] == ["read_file", "write_file", "list_directory"]
+    assert agentteams["status"] == "disconnected"
+    assert agentteams["authentication"] == "missing"
+    assert "error" in agentteams
+
+
 def test_projection_matches_the_source_spec_field_for_field(
     project: Path, fake_key: None
 ) -> None:

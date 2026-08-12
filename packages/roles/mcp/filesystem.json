@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "filesystem",
+  "name": "项目文件系统",
+  "transport": "stdio",
+  "status": "connected",
+  "authentication": "not_required",
+  "tools": ["read_file", "write_file", "list_directory"],
+  "configSource": "packages/roles/mcp/filesystem.json"
+}

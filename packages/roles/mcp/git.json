@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "git",
+  "name": "Git 工作区",
+  "transport": "stdio",
+  "status": "connected",
+  "authentication": "not_required",
+  "tools": ["read_diff", "create_diff", "merge_changes"],
+  "configSource": "packages/roles/mcp/git.json"
+}
