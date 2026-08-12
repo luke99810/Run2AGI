@@ -48,12 +48,23 @@ class TokenPricingConfig:
     input_per_million_cny: float
     output_per_million_cny: float
     cached_input_per_million_cny: float | None = None
+    max_input_tokens: int | None = None
+
+    @classmethod
+    def from_pricing(cls, pricing: TokenPricing) -> TokenPricingConfig:
+        return cls(
+            input_per_million_cny=pricing.input_per_million_cny,
+            output_per_million_cny=pricing.output_per_million_cny,
+            cached_input_per_million_cny=pricing.cached_input_per_million_cny,
+            max_input_tokens=pricing.max_input_tokens,
+        )
 
     def to_pricing(self) -> TokenPricing:
         return TokenPricing(
             input_per_million_cny=self.input_per_million_cny,
             output_per_million_cny=self.output_per_million_cny,
             cached_input_per_million_cny=self.cached_input_per_million_cny,
+            max_input_tokens=self.max_input_tokens,
         )
 
 

@@ -79,11 +79,20 @@ ModelGateway.open(role, routing, grant_cny)
 - Anthropic 作为第二实现时，其价格表需在 Provider 适配层折算成 CNY 后再进账本，
   折算参数必须显式配置、可审计——不许在代码里写死
 
-**风险（🔴 尚未关闭）**
-- **价格表证据缺失。** 当前 `TokenPricingConfig` 仍按 unknown pricing 运行，
-  真实 smoke 只能证明模型连通性，**不能证明成本数字准确**。
-  在补上百炼官方价格表并写成可审计配置之前，任何成本展示都不应被当作依据。
-  这一条不属于本 ADR 的决策，但属于本 ADR 的未完成后果，故记在此处。
+**08-12 补记**
+- B 已补百炼官方价格证据与可审计配置，见
+  [bailian-pricing-cny.md](../evidence/bailian-pricing-cny.md) 与
+  `codentum_harness.model_gateway.bailian_pricing`。
+- 当前覆盖 Codentum 已实测/已路由的百炼模型：`qwen-coder-plus-1106`、
+  `qwen-plus-2025-11-05`、`qwen-plus-2025-07-14`，以及 AgentTeams smoke 使用的
+  `qwen3.6-plus`。
+- 缺价格或超出已审计阶梯时仍 fail-closed；免费额度、Batch 半价、上下文缓存折扣不进入
+  本轮账本，避免把平台账单抵扣误写成模型毛成本。
+
+**剩余风险**
+- 新增模型前必须先补官方价格证据。
+- Anthropic 等非 CNY Provider 若重新启用，需要显式给出 CNY 折算依据，不能在 Provider
+  里写死汇率。
 
 ---
 

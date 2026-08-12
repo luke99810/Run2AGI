@@ -92,10 +92,12 @@ import pytest
 from codentum_contracts.state import PacketId, WorkPacket, dump_state
 from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.reconcile import ReconcileLoop
+from codentum_harness.model_gateway import audited_bailian_pricing
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
     ModelGatewayConfig,
     RunnerConfig,
+    TokenPricingConfig,
     build_local_worker_runtime,
 )
 
@@ -109,6 +111,13 @@ _KEY_ENVS = (
 
 #: RoleSpec `coder` 的默认模型（08-09 按账号实测改成的可调固定版本）
 _CODER_MODEL = "qwen-coder-plus-1106"
+
+
+def _audited_pricing_config() -> dict[str, TokenPricingConfig]:
+    return {
+        model: TokenPricingConfig.from_pricing(price)
+        for model, price in audited_bailian_pricing().items()
+    }
 
 
 def _key_env() -> str | None:
@@ -208,12 +217,8 @@ def test_real_model_completes_a_packet(project: Path) -> None:
             repo_root=project,
             runner=RunnerConfig.model_gateway(
                 ModelGatewayConfig.bailian(
-                    pricing={},
+                    pricing=_audited_pricing_config(),
                     api_key_env=_key_env(),
-                    # ★ 价格表证据尚未落地（待办 7d）。这里显式放行 unknown pricing，
-                    #   代价是**成本数字不能当证据** —— 下面只断言"记了账"，
-                    #   不断言"金额对"。把它写成 False 而不是偷偷传个假价格。
-                    require_pricing=False,
                 ),
                 timeout_seconds=180.0,
             ),
@@ -250,8 +255,8 @@ def test_real_model_completes_a_packet(project: Path) -> None:
     assert usage.get("input_tokens", 0) > 0, f"input_tokens 不是正数：{usage}"
     assert usage.get("output_tokens", 0) > 0, f"output_tokens 不是正数：{usage}"
 
-    # 4) 记账字段在（金额本身不作为证据 —— 价格表未落地，见待办 7d）
-    assert "cost_cny" in usage, f"用量里没有 cost_cny 字段：{usage}"
+    # 4) 成本按百炼官方 CNY 价格表归因，不能再是 unknown pricing 的 0。
+    assert usage.get("cost_cny", 0) > 0, f"cost_cny 没有按价格表归因：{usage}"
     assert "spent_cny" in result, f"result.json 没有记账字段：{sorted(result)}"
 
     # 5) 用的是路由表指定的模型，不是某个默认值
@@ -284,7 +289,7 @@ def test_model_response_is_not_empty(project: Path) -> None:
             repo_root=project,
             runner=RunnerConfig.model_gateway(
                 ModelGatewayConfig.bailian(
-                    pricing={}, api_key_env=_key_env(), require_pricing=False
+                    pricing=_audited_pricing_config(), api_key_env=_key_env()
                 ),
                 timeout_seconds=180.0,
             ),
@@ -318,7 +323,7 @@ def test_blocker_report_should_not_be_accepted(project: Path) -> None:
             repo_root=project,
             runner=RunnerConfig.model_gateway(
                 ModelGatewayConfig.bailian(
-                    pricing={}, api_key_env=_key_env(), require_pricing=False
+                    pricing=_audited_pricing_config(), api_key_env=_key_env()
                 ),
                 timeout_seconds=180.0,
             ),
