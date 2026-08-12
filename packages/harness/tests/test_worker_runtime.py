@@ -8,6 +8,7 @@ from pathlib import Path
 from shutil import which
 
 import pytest
+from codentum_contracts.state import RoleSkill
 from codentum_contracts import (
     Acceptance,
     BudgetGrant,
@@ -315,7 +316,7 @@ def role_spec_with_frontend_skill() -> RoleSpec:
         reads=("packages/contracts/**",),
         tools=("read_file", "write_file"),
         transitions=(),
-        skills=({"id": "frontend", "scope": "role", "state": "active"},),
+        skills=(RoleSkill(id="frontend", scope="role", state="active"),),
     )
 
 

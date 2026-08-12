@@ -46,7 +46,12 @@ from codentum_contracts.state import EvidenceRef, WorkPacket
 from codentum_control_plane.evidence import acceptance_evidence, worker_failure_markers
 from codentum_control_plane.gates import GateVerdict
 
-__all__ = ["ACCEPTANCE_TIMEOUT_SECONDS", "build_executing_acceptance_gate"]
+__all__ = [
+    "ACCEPTANCE_TIMEOUT_SECONDS",
+    "build_executing_acceptance_gate",
+    "split_command",
+    "vacuity_check",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +118,7 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
                 detail=f"验收未通过：找不到 {packet.id} 的工作区，无法运行验收谓词。",
             )
 
-        command = _split_command(predicate)
+        command = split_command(predicate)
         if not command:
             return GateVerdict(
                 passed=False,
@@ -155,7 +160,7 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
             )
 
         # ── 第五层：验收测试本身不能是空的 ────────────────
-        vacuous = _vacuity_check(workspace, command)
+        vacuous = vacuity_check(workspace, command)
         if vacuous is not None:
             return GateVerdict(passed=False, gate_id="acceptance", detail=vacuous)
 
@@ -169,7 +174,7 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
     return gate
 
 
-def _vacuity_check(workspace: Path, command: list[str]) -> str | None:
+def vacuity_check(workspace: Path, command: list[str]) -> str | None:
     """★ 把实现移走，再跑一遍验收 —— **它必须变红**。
 
     这是本项目那句口号的可执行版本：
@@ -243,10 +248,25 @@ def _vacuity_check(workspace: Path, command: list[str]) -> str | None:
             return None
 
         names = "、".join(path.name for path in impl_files)
+        # ★ 把**谓词作用域内实际存在的测试文件**列出来。
+        #
+        #   2026-08-12 实测：模型收到「测试是空的」之后确实去写了真测试 ——
+        #   但写到了 `tests/` 下，而谓词只看 `workspace/`。于是空测试原地不动、
+        #   它却以为自己修好了，剩下三轮全耗在 `git diff` 上。
+        #
+        #   只说「是空的」不够，得说清**哪个文件是空的、该改哪个**。
+        test_files = [
+            path.relative_to(workspace).as_posix()
+            for path in sorted(workspace.rglob("test_*.py"))
+            if ".codentum" not in path.parts and ".git" not in path.parts
+        ]
+        scope = "、".join(test_files) if test_files else "（作用域内没有任何测试文件）"
         return (
             "验收未通过：**验收测试是空的**。\n"
             f"把实现（{names}）移走之后，验收谓词仍然退出码 0 —— "
             "说明这些测试根本没有验证实现。\n\n"
+            f"★ 验收谓词只会看这些文件：{scope}\n"
+            "**请直接改写上面列出的文件**，不要在别的目录新建测试 —— 谓词看不到那里。\n\n"
             "★ 判据是「如果它坏了，哪条测试会变红」。现在的答案是：一条都不会。"
         )
     finally:
@@ -265,7 +285,7 @@ def _as_refs(refs: tuple[str, ...]) -> tuple[EvidenceRef, ...]:
     return tuple(EvidenceRef(ref) for ref in refs)
 
 
-def _split_command(predicate: str) -> list[str]:
+def split_command(predicate: str) -> list[str]:
     r"""把谓词切成 argv。**Windows 上必须 posix=False。**
 
     ★ `shlex.split(s)` 默认 posix=True，会把反斜杠当转义符 ——

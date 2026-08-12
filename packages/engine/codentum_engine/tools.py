@@ -266,8 +266,23 @@ class ToolExecutor:
         except FileNotFoundError:
             return ToolResult(False, f"找不到可执行文件：{command[0]}")
         tail = (proc.stdout + proc.stderr)[-4000:]
+        if proc.returncode == 0:
+            return ToolResult(True, f"退出码 0\n{tail}")
+
+        # ★ 失败时**附上工作区实际有什么**。
+        #
+        #   2026-08-12 实测：模型把测试写在 workspace/ 下，却用
+        #   `pytest test_subscriptions.py` 去跑（当前工作目录是工作区根），
+        #   于是「file or directory not found」。它接下来花了 **10 轮**
+        #   猜文件在哪 —— 移目录、重写实现、再猜 —— 最后把本来写对的东西改坏了。
+        #
+        #   一次目录列表就能了结的事，不该让它猜。
+        #   这与本项目「遇到现象先取证，不要先猜」是同一条。
+        listing = self._tool_list_files({}).content
         return ToolResult(
-            proc.returncode == 0, f"退出码 {proc.returncode}\n{tail}"
+            False,
+            f"退出码 {proc.returncode}\n{tail}\n\n"
+            f"[工作区实际文件清单 —— 当前工作目录是工作区根 `.`]\n{listing}",
         )
 
     def _tool_request_help(self, args: dict[str, Any]) -> ToolResult:

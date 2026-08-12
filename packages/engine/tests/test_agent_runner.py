@@ -407,3 +407,91 @@ def test_transient_model_errors_are_retried_but_permanent_ones_are_not(prepared:
     assert _is_transient(RuntimeError("Error code: 503")) is True
     assert _is_transient(RuntimeError("Error code: 400 - invalid_request")) is False
     assert _is_transient(RuntimeError("Error code: 401 - unauthorized")) is False
+
+
+def test_self_verification_uses_the_same_criterion_as_the_gate(prepared: Path) -> None:
+    """★ 自验必须用**和门禁一样的判据**，否则模型在对着更弱的标准优化。
+
+    2026-08-12 实测：模型被推回去补测试后写了一句 `assert True`，
+    谓词退出码 0、自验放行 —— 而门禁的空测试检查会拒绝它。
+    模型于是永远差一层：它以为做完了，门禁说没有。
+
+    **判据不一致比判据宽松更糟：它让模型以为自己做完了。**
+    """
+
+    gateway = _FakeGateway(
+        [
+            # 先写实现 + 一个空测试
+            ModelResponse(
+                text="",
+                tool_calls=(
+                    ToolCall(id="1", name="write_file", input={"path": "impl.py", "content": "def f():\n    return 1\n"}),
+                    ToolCall(id="2", name="write_file", input={"path": "test_impl.py", "content": "def test_x():\n    assert True\n"}),
+                ),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="做完了", tool_calls=(), stop_reason="end", usage=_usage()),
+            # 被推回去之后写真测试
+            ModelResponse(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="3",
+                        name="write_file",
+                        input={"path": "test_impl.py", "content": "from impl import f\n\n\ndef test_x():\n    assert f() == 1\n"},
+                    ),
+                ),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="这次真做完了", tool_calls=(), stop_reason="end", usage=_usage()),
+        ]
+    )
+    runner = build_agent_runner(
+        AgentRunnerConfig(
+            gateway=gateway,  # type: ignore[arg-type]
+            acceptance_predicate=f'"{sys.executable}" -m pytest . -q',
+        )
+    )
+    outcome = runner(_spawn(prepared))
+
+    assert outcome.status == "completed", getattr(outcome, "detail", "")
+    # ★ 关键：空测试那一轮**没有**被放行
+    assert len(gateway.session.seen) == 4, f"只跑了 {len(gateway.session.seen)} 轮"
+    joined = "\n".join(m.content for m in gateway.session.seen[2].messages)
+    assert "验收测试是空的" in joined
+
+
+def test_truncated_tool_arguments_are_recoverable_not_fatal(prepared: Path) -> None:
+    """★ 工具调用参数被截断（输出超长）时，告诉模型重写，而不是直接判失败。
+
+    2026-08-12 实测：模型写较大的测试文件时，arguments 在
+    `result = add_subscription(` 处断掉 —— JSON 真的不完整，救不回来。
+    但模型自己能修，只要告诉它「上次被截断了，写小一点」。
+
+    **把一个可恢复的情况当成终局，是在浪费一次本来能成的运行。**
+    """
+
+    class _TruncatingSession(_FakeSession):
+        async def invoke(self, req: ModelRequest) -> ModelResponse:
+            self.seen.append(req)
+            if len(self.seen) == 1:
+                raise ValueError("response field 'arguments' must be JSON object text; got '{\"content\": \"…")
+            return ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="1", name="write_file", input={"path": "a.py", "content": "x=1"}),)
+                if len(self.seen) == 2
+                else (),
+                stop_reason="tool_use" if len(self.seen) == 2 else "end",
+                usage=_usage(),
+            )
+
+    gateway = _FakeGateway([])
+    gateway.session = _TruncatingSession(script=[], seen=[])
+    runner = build_agent_runner(AgentRunnerConfig(gateway=gateway))  # type: ignore[arg-type]
+    outcome = runner(_spawn(prepared))
+
+    assert outcome.status == "completed", getattr(outcome, "detail", "")
+    joined = "\n".join(m.content for m in gateway.session.seen[1].messages)
+    assert "参数被截断" in joined
