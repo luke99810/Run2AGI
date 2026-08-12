@@ -37,6 +37,65 @@ export interface ManagedResourcePatch {
   readonly roleId?: string
 }
 
+export type ConnectorProvider = 'custom'
+
+export interface ConnectorConfiguration {
+  readonly id: string
+  readonly provider: ConnectorProvider
+  readonly name: string
+  readonly accountLabel: string
+  readonly enabled: boolean
+  readonly credentialConfigured: boolean
+  readonly updatedAt: string
+}
+
+export interface ConnectorConfigurationInput {
+  readonly id?: string
+  readonly provider: ConnectorProvider
+  readonly name: string
+  readonly accountLabel: string
+  readonly enabled: boolean
+  readonly credential?: string
+  readonly clearCredential?: boolean
+}
+
+export interface AgentConfiguration {
+  readonly roleId: string
+  readonly name?: string
+  readonly custom?: boolean
+  readonly systemPrompt: string
+  readonly systemDocumentName?: string
+  readonly apiKeyConfigured: boolean
+  readonly updatedAt: string
+}
+
+export interface AgentConfigurationPatch {
+  readonly name?: string
+  readonly systemPrompt?: string
+  readonly apiKey?: string
+  readonly clearApiKey?: boolean
+}
+
+export interface McpConfiguration {
+  readonly id: string
+  readonly name: string
+  readonly transport: 'stdio' | 'http' | 'sse'
+  readonly endpoint: string
+  readonly enabled: boolean
+  readonly credentialConfigured: boolean
+  readonly updatedAt: string
+}
+
+export interface McpConfigurationInput {
+  readonly id?: string
+  readonly name: string
+  readonly transport: 'stdio' | 'http' | 'sse'
+  readonly endpoint: string
+  readonly enabled: boolean
+  readonly credential?: string
+  readonly clearCredential?: boolean
+}
+
 /**
  * C sends this stable request shape through A's submit_requirement payload.
  * A archives it today; B can consume it when resolving RoleSpec/ToolSurface.
@@ -202,6 +261,17 @@ export interface DesktopBridge {
   addManagedResourceUrl(kind: ManagedResourceKind, url: string): Promise<ManagedResource>
   updateManagedResource(id: string, patch: ManagedResourcePatch): Promise<ManagedResource>
   removeManagedResource(id: string): Promise<boolean>
+  listConnectors(): Promise<readonly ConnectorConfiguration[]>
+  saveConnector(input: ConnectorConfigurationInput): Promise<ConnectorConfiguration>
+  removeConnector(id: string): Promise<boolean>
+  listAgentConfigurations(): Promise<readonly AgentConfiguration[]>
+  saveAgentConfiguration(roleId: string, patch: AgentConfigurationPatch): Promise<AgentConfiguration>
+  removeAgentConfiguration(roleId: string): Promise<boolean>
+  selectAgentSystemDocument(roleId: string): Promise<AgentConfiguration>
+  clearAgentSystemDocument(roleId: string): Promise<AgentConfiguration>
+  listMcpConfigurations(): Promise<readonly McpConfiguration[]>
+  saveMcpConfiguration(input: McpConfigurationInput): Promise<McpConfiguration>
+  removeMcpConfiguration(id: string): Promise<boolean>
   watchSource(sourceId: string): Promise<void>
   onSnapshot(listener: (snapshot: StateSnapshot) => void): () => void
   getEngineHandshake(): Promise<EngineHandshake>

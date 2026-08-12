@@ -17,6 +17,7 @@ interface ActionDefinition {
 const DIRECT_ACTIONS: readonly ActionDefinition[] = [
   { action: 'pause_at_safe_point', label: '到安全点暂停', icon: 'pause', workerStates: ['starting', 'running'] },
   { action: 'resume', label: '继续执行', icon: 'pulse', workerStates: ['waiting'] },
+  { action: 'fork_from_checkpoint', label: '返回最近检查点', icon: 'back', workerStates: ['starting', 'running', 'waiting'], requiresConfirmation: true },
   { action: 'stop_keep_memory', label: '停止并保留记忆', icon: 'package', tone: 'danger', workerStates: ['starting', 'running', 'waiting'], requiresConfirmation: true },
   { action: 'stop', label: '停止任务', icon: 'stop', tone: 'danger', workerStates: ['starting', 'running', 'waiting'], requiresConfirmation: true }
 ] as const
@@ -26,6 +27,17 @@ function latestWorkerStatus(worker: WorkerProjection): string | undefined {
     for (const key of ['state', 'status'] as const) {
       const value = event.payload[key]
       if (typeof value === 'string' && value.trim() !== '') return value.toLowerCase()
+    }
+  }
+  return undefined
+}
+
+export function latestCheckpointRef(worker: WorkerProjection): string | undefined {
+  for (const event of [...worker.events].sort((left, right) => right.seq - left.seq)) {
+    if (event.kind.toLowerCase() !== 'checkpoint') continue
+    for (const key of ['checkpointRef', 'checkpoint_ref', 'path', 'ref'] as const) {
+      const value = event.payload[key]
+      if (typeof value === 'string' && value.trim() !== '') return value
     }
   }
   return undefined
@@ -52,12 +64,14 @@ export function CommandPanel({ worker, selectedModuleId, handshake, commandsAllo
   const [error, setError] = useState<string | null>(null)
   const modules = projectWorkerModules(worker)
   const selectedModule = modules.find((module) => module.id === selectedModuleId)
+  const checkpointRef = latestCheckpointRef(worker)
   const commandTargetAvailable = commandsAllowed && handshake.connected && handshake.runId !== undefined
   const workerAcceptsChanges = worker.state === 'starting' || worker.state === 'running' || worker.state === 'waiting'
   const actions = commandTargetAvailable ? DIRECT_ACTIONS.filter((definition) => (
     hasCapability(handshake.capabilities, definition.action)
     && (definition.workerStates?.includes(worker.state) ?? true)
     && (definition.action !== 'resume' || latestWorkerStatus(worker) === 'paused')
+    && (definition.action !== 'fork_from_checkpoint' || checkpointRef !== undefined)
   )) : []
   const inlineCommandsAvailable = commandTargetAvailable && workerAcceptsChanges
   const confirmation = DIRECT_ACTIONS.find((definition) => definition.action === confirmingAction)
@@ -105,7 +119,7 @@ export function CommandPanel({ worker, selectedModuleId, handshake, commandsAllo
       <section className="selected-module-card">
         <span>操作目标</span>
         <strong>{selectedModule?.label ?? '整个 Worker'}</strong>
-        <small>{selectedModule === undefined ? '未选中具体模块' : `模块状态：${selectedModule.state}`}</small>
+        <small>{selectedModule === undefined ? '未选中模块时按引擎默认顺序执行' : `模块状态：${selectedModule.state} · 新模块可插入到此模块前`}</small>
       </section>
 
       {!commandsAllowed ? (
@@ -129,7 +143,7 @@ export function CommandPanel({ worker, selectedModuleId, handshake, commandsAllo
               disabled={pendingAction !== null}
               onClick={() => {
                 if (definition.requiresConfirmation) setConfirmingAction(definition.action)
-                else void issue(definition.action)
+                else void issue(definition.action, definition.action === 'fork_from_checkpoint' && checkpointRef !== undefined ? { checkpointRef } : {})
               }}
             >
               <Icon name={definition.icon} size={18} />
@@ -143,10 +157,14 @@ export function CommandPanel({ worker, selectedModuleId, handshake, commandsAllo
       {confirmation === undefined ? null : (
         <section className="command-confirmation" role="alertdialog" aria-modal="true" aria-label={`确认${confirmation.label}`}>
           <strong>{confirmation.label}？</strong>
-          <p>{confirmation.action === 'stop_keep_memory' ? '只有引擎确认 checkpoint 已持久化后，界面才会显示任务已停止。' : '当前执行尝试将停止；已有事件和证据不会被删除。'}</p>
+          <p>{confirmation.action === 'stop_keep_memory'
+            ? '只有引擎确认 checkpoint 已持久化后，界面才会显示任务已停止。'
+            : confirmation.action === 'fork_from_checkpoint'
+              ? `将从引擎提供的检查点 ${checkpointRef ?? ''} 派生新的执行尝试；历史记录不会被删除。`
+              : '当前执行尝试将停止；已有事件和证据不会被删除。'}</p>
           <div>
             <button type="button" className="secondary-button" onClick={() => setConfirmingAction(null)}>取消</button>
-            <button type="button" className="danger-button" onClick={() => void issue(confirmation.action)}>确认停止</button>
+            <button type="button" className={confirmation.action === 'fork_from_checkpoint' ? 'primary-button' : 'danger-button'} onClick={() => void issue(confirmation.action, confirmation.action === 'fork_from_checkpoint' && checkpointRef !== undefined ? { checkpointRef } : {})}>{confirmation.action === 'fork_from_checkpoint' ? '确认返回' : '确认停止'}</button>
           </div>
         </section>
       )}
@@ -181,7 +199,7 @@ export function CommandPanel({ worker, selectedModuleId, handshake, commandsAllo
         {receipt !== null ? <span className={`receipt-${receipt.status}`}><Icon name={receipt.status === 'rejected' ? 'warning' : receipt.status === 'applied' ? 'check' : 'clock'} size={17} />{receiptCopy(receipt)}</span> : null}
         {error !== null ? <span className="inline-error"><Icon name="warning" size={17} />命令发送失败：{error}</span> : null}
       </div>
-      <p className="command-footnote">按钮只发送命令。界面不会在收到引擎回执前把任务标成已暂停、已停止或已回退。</p>
+      <p className="command-footnote">点击模块只选择命令目标；不点击时按引擎默认顺序执行。按钮只发送命令，收到引擎回执前不会把任务标成已暂停、已停止或已回退。</p>
     </aside>
   )
 }

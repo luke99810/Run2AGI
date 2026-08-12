@@ -4,7 +4,7 @@ import { NAVIGATION, type NavigationKey, roleLabel } from '../renderer/src/domai
 import type { TaskSession } from '../renderer/src/task-library'
 import { Icon } from './Common'
 
-const PRIMARY_NAV = new Set<NavigationKey>(['conversations', 'plugins', 'knowledge', 'skills', 'mcp', 'cost', 'roles', 'delivery'])
+const PRIMARY_NAV = new Set<NavigationKey>(['conversations', 'plugins', 'knowledge', 'skills', 'cost', 'roles', 'delivery'])
 const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'evidence'])
 
 export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabled, onNavigate, onSelectWorker, onNewTask, onSelectTask, collapsed, onToggle }: {
@@ -109,7 +109,7 @@ export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabl
       </section>
 
       <nav className="sidebar-utility-nav" aria-label="设置与帮助">
-        <button type="button" className={active === 'settings' ? 'active' : ''} onClick={() => onNavigate('settings')} title={collapsed ? '设置' : undefined}><Icon name="settings" size={19} /><span>设置</span></button>
+        <button type="button" className={active === 'settings' || active === 'mcp' ? 'active' : ''} onClick={() => onNavigate('settings')} title={collapsed ? '设置' : undefined}><Icon name="settings" size={19} /><span>设置</span></button>
         <button type="button" className={active === 'help' ? 'active' : ''} onClick={() => onNavigate('help')} title={collapsed ? '帮助' : undefined}><Icon name="help" size={19} /><span>帮助</span></button>
       </nav>
       <div className="sidebar-footer">

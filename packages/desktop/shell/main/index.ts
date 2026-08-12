@@ -21,6 +21,9 @@ import {
   type ManagedResourceKind,
   type ManagedResourcePatch,
   type ManagedResourceSourceKind,
+  type AgentConfigurationPatch,
+  type ConnectorConfigurationInput,
+  type McpConfigurationInput,
   type OperatorAction,
   type OperatorCommand,
   type ProjectSelectionKind
@@ -28,6 +31,7 @@ import {
 import { SidecarManager } from './python-engine/SidecarManager'
 import { ManagedResourceStore } from './managed-resource-store'
 import { RequirementDraftStore } from './requirement-draft-store'
+import { WorkspaceConfigurationStore } from './workspace-configuration-store'
 
 const ALLOWED_ACTIONS = new Set<OperatorAction>([
   'submit_requirement',
@@ -47,6 +51,7 @@ let stateHub: StateHub | undefined
 let sidecar: SidecarManager | undefined
 let draftStore: RequirementDraftStore | undefined
 let resourceStore: ManagedResourceStore | undefined
+let configurationStore: WorkspaceConfigurationStore | undefined
 let shutdownStarted = false
 let shutdownComplete = false
 const watchers = new Map<number, () => void>()
@@ -299,6 +304,69 @@ function registerIpc(): void {
     if (resourceStore === undefined) throw new Error('Managed resource store is unavailable')
     return resourceStore.remove(id)
   })
+  ipcMain.handle(IPC_CHANNELS.listConnectors, (event) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.listConnectors()
+  })
+  ipcMain.handle(IPC_CHANNELS.saveConnector, async (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.saveConnector(input as ConnectorConfigurationInput)
+  })
+  ipcMain.handle(IPC_CHANNELS.removeConnector, async (event, id: unknown) => {
+    assertTrustedSender(event)
+    if (typeof id !== 'string') throw new TypeError('Invalid connector id')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.removeConnector(id)
+  })
+  ipcMain.handle(IPC_CHANNELS.listAgentConfigurations, (event) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.listAgents()
+  })
+  ipcMain.handle(IPC_CHANNELS.saveAgentConfiguration, async (event, roleId: unknown, patch: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string' || typeof patch !== 'object' || patch === null || Array.isArray(patch)) throw new TypeError('Invalid Agent configuration')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.saveAgent(roleId, patch as AgentConfigurationPatch)
+  })
+  ipcMain.handle(IPC_CHANNELS.removeAgentConfiguration, async (event, roleId: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string') throw new TypeError('Invalid Agent id')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.removeAgent(roleId)
+  })
+  ipcMain.handle(IPC_CHANNELS.selectAgentSystemDocument, async (event, roleId: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string') throw new TypeError('Invalid Agent role')
+    if (configurationStore === undefined || mainWindow === undefined) throw new Error('Configuration store is unavailable')
+    const result = await dialog.showOpenDialog(mainWindow, { title: '选择 Agent 系统文档', buttonLabel: '添加 Markdown', properties: ['openFile', 'dontAddToRecent'], filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }] })
+    if (result.canceled || result.filePaths[0] === undefined) return configurationStore.saveAgent(roleId, {})
+    return configurationStore.setAgentDocument(roleId, result.filePaths[0])
+  })
+  ipcMain.handle(IPC_CHANNELS.clearAgentSystemDocument, async (event, roleId: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string') throw new TypeError('Invalid Agent role')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.setAgentDocument(roleId)
+  })
+  ipcMain.handle(IPC_CHANNELS.listMcpConfigurations, (event) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.listMcp()
+  })
+  ipcMain.handle(IPC_CHANNELS.saveMcpConfiguration, async (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.saveMcp(input as McpConfigurationInput)
+  })
+  ipcMain.handle(IPC_CHANNELS.removeMcpConfiguration, async (event, id: unknown) => {
+    assertTrustedSender(event)
+    if (typeof id !== 'string') throw new TypeError('Invalid MCP id')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.removeMcp(id)
+  })
   ipcMain.handle(IPC_CHANNELS.watchSource, async (event, sourceId: unknown) => {
     assertTrustedSender(event)
     assertSourceId(sourceId)
@@ -415,6 +483,8 @@ void app.whenReady().then(async () => {
   await draftStore.initialize()
   resourceStore = new ManagedResourceStore(resolve(app.getPath('userData'), 'managed-resources'))
   await resourceStore.initialize()
+  configurationStore = new WorkspaceConfigurationStore(resolve(app.getPath('userData'), 'workspace-configurations'))
+  await configurationStore.initialize()
   sidecar = new SidecarManager(app)
   registerIpc()
   createApplicationMenu()

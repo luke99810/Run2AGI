@@ -18,6 +18,17 @@ const bridge: DesktopBridge = {
   addManagedResourceUrl: (kind, url) => ipcRenderer.invoke(IPC_CHANNELS.addManagedResourceUrl, kind, url),
   updateManagedResource: (id, patch) => ipcRenderer.invoke(IPC_CHANNELS.updateManagedResource, id, patch),
   removeManagedResource: (id) => ipcRenderer.invoke(IPC_CHANNELS.removeManagedResource, id),
+  listConnectors: () => ipcRenderer.invoke(IPC_CHANNELS.listConnectors),
+  saveConnector: (input) => ipcRenderer.invoke(IPC_CHANNELS.saveConnector, input),
+  removeConnector: (id) => ipcRenderer.invoke(IPC_CHANNELS.removeConnector, id),
+  listAgentConfigurations: () => ipcRenderer.invoke(IPC_CHANNELS.listAgentConfigurations),
+  saveAgentConfiguration: (roleId, patch) => ipcRenderer.invoke(IPC_CHANNELS.saveAgentConfiguration, roleId, patch),
+  removeAgentConfiguration: (roleId) => ipcRenderer.invoke(IPC_CHANNELS.removeAgentConfiguration, roleId),
+  selectAgentSystemDocument: (roleId) => ipcRenderer.invoke(IPC_CHANNELS.selectAgentSystemDocument, roleId),
+  clearAgentSystemDocument: (roleId) => ipcRenderer.invoke(IPC_CHANNELS.clearAgentSystemDocument, roleId),
+  listMcpConfigurations: () => ipcRenderer.invoke(IPC_CHANNELS.listMcpConfigurations),
+  saveMcpConfiguration: (input) => ipcRenderer.invoke(IPC_CHANNELS.saveMcpConfiguration, input),
+  removeMcpConfiguration: (id) => ipcRenderer.invoke(IPC_CHANNELS.removeMcpConfiguration, id),
   watchSource: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.watchSource, sourceId),
   onSnapshot: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: StateSnapshot): void => listener(snapshot)

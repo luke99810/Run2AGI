@@ -170,7 +170,7 @@ export function ExecutionView({ snapshot, handshake, dispatch, focusedWorkerId, 
             ) : (
               <>
                 <section className="detail-card module-card">
-                  <div className="card-heading"><div><span>执行模块</span><h2>{roleLabel(selectedWorker.role)}</h2></div><small>模块状态来自 Worker 事件</small></div>
+                  <div className="card-heading"><div><span>执行模块</span><h2>{roleLabel(selectedWorker.role)}</h2></div><small>点击模块选择调控目标；不点按引擎默认顺序</small></div>
                   <ModuleSequence worker={selectedWorker} selectedModuleId={selectedModuleId} onSelectModule={setSelectedModuleId} />
                 </section>
                 <section className="detail-card">

@@ -1,5 +1,4 @@
 import type { RoleSpec } from '@codentum/contracts'
-import type { McpServiceProjection } from '../../shared/protocol'
 
 export type TaskSessionStatus = 'draft' | 'submitted'
 export type AccessMode = 'read_only' | 'workspace_write' | 'full_access'
@@ -55,11 +54,7 @@ export interface ResourceOption {
   readonly availability: 'available' | 'pending_runtime'
 }
 
-export const PLUGIN_OPTIONS: readonly ResourceOption[] = [
-  { id: 'local-files', label: '本地文件', detail: '直接引用原始位置，提交前校验内容', availability: 'available' },
-  { id: 'git', label: 'Git', detail: '由 WorkerRuntime 在隔离 worktree 中使用', availability: 'available' },
-  { id: 'browser', label: '浏览器', detail: '浏览器 MCP 服务尚未连接；不会假装工具已可调用', availability: 'pending_runtime' }
-]
+export const PLUGIN_OPTIONS: readonly ResourceOption[] = []
 
 export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
   { id: 'project-knowledge', label: '项目知识库', detail: '读取当前项目 .codentum 知识投影', availability: 'available' },
@@ -97,50 +92,6 @@ const SKILL_LABELS: Readonly<Record<string, string>> = {
   evolution: '能力进化'
 }
 
-const MCP_PLUGIN_ORDER = ['filesystem', 'git', 'browser'] as const
-const MCP_PLUGIN_IDS: Readonly<Record<(typeof MCP_PLUGIN_ORDER)[number], string>> = {
-  filesystem: 'local-files',
-  git: 'git',
-  browser: 'browser'
-}
-const MCP_PLUGIN_LABELS: Readonly<Record<(typeof MCP_PLUGIN_ORDER)[number], string>> = {
-  filesystem: '本地文件',
-  git: 'Git',
-  browser: '浏览器'
-}
-
-function mcpPluginDetail(service: McpServiceProjection): string {
-  if (service.status === 'connected') {
-    const toolSummary = service.tools.length === 0 ? '暂无工具' : `${service.tools.length} 个工具`
-    return `${service.name} MCP 已投影：${toolSummary}；实际权限仍由 RoleSpec、ToolSurface 与 Guardian 收紧`
-  }
-  if (service.error !== undefined && service.error.trim() !== '') return service.error
-  if (service.authentication === 'missing') return `${service.name} MCP 缺少凭据，工具暂不可调用`
-  return `${service.name} MCP 当前${service.status === 'connecting' ? '连接中' : service.status === 'error' ? '连接错误' : '未连接'}，工具暂不可调用`
-}
-
-export function pluginOptionsFromMcpServices(services: readonly McpServiceProjection[] | undefined): readonly ResourceOption[] {
-  if (services === undefined || services.length === 0) return PLUGIN_OPTIONS
-  const projected = new Map(services.map((service) => [service.id, service]))
-  return MCP_PLUGIN_ORDER.map((serviceId) => {
-    const service = projected.get(serviceId)
-    if (service === undefined) {
-      return {
-        id: MCP_PLUGIN_IDS[serviceId],
-        label: MCP_PLUGIN_LABELS[serviceId],
-        detail: `${MCP_PLUGIN_LABELS[serviceId]} MCP 未出现在当前项目投影中，工具暂不可调用`,
-        availability: 'pending_runtime' as const
-      }
-    }
-    return {
-      id: MCP_PLUGIN_IDS[serviceId],
-      label: MCP_PLUGIN_LABELS[serviceId],
-      detail: mcpPluginDetail(service),
-      availability: service.status === 'connected' ? 'available' as const : 'pending_runtime' as const
-    }
-  })
-}
-
 export function skillOptionsFromRoles(roles: readonly RoleSpec[] | undefined): readonly ResourceOption[] {
   const projected = new Map<string, { roles: Set<string>; active: boolean }>()
   for (const role of roles ?? []) {
@@ -166,7 +117,7 @@ const TASK_STORAGE_KEY = 'codentum.desktop.task-sessions.v1'
 const PREFERENCE_STORAGE_KEY = 'codentum.desktop.workbench-preferences.v1'
 const DEFAULT_CONTEXT: TaskContextSelection = {
   accessMode: 'workspace_write',
-  pluginIds: ['local-files', 'git'],
+  pluginIds: [],
   knowledgeIds: ['project-knowledge', 'task-history'],
   skillIds: [],
   relatedTaskIds: []

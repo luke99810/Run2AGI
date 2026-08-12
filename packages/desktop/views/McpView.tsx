@@ -1,80 +1,35 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { EmptyState, Icon, PageHeader } from '../panels/Common'
-import type { McpServiceProjection, McpServiceStatus } from '../shared/protocol'
+import type { McpConfiguration, McpConfigurationInput, McpServiceProjection, McpServiceStatus } from '../shared/protocol'
 
-const STATUS_LABELS: Readonly<Record<McpServiceStatus, string>> = {
-  connected: '已连接',
-  connecting: '连接中',
-  disconnected: '未连接',
-  error: '连接错误'
-}
+const STATUS_LABELS: Readonly<Record<McpServiceStatus, string>> = { connected: '已连接', connecting: '连接中', disconnected: '未连接', error: '连接错误' }
+const EMPTY: McpConfigurationInput = { name: '', transport: 'stdio', endpoint: '', enabled: true }
 
-const AUTH_LABELS: Readonly<Record<McpServiceProjection['authentication'], string>> = {
-  not_required: '无需鉴权',
-  configured: '已配置',
-  missing: '缺少凭据',
-  unknown: '未知'
-}
-
-export function McpView({ services }: { readonly services: readonly McpServiceProjection[] }): ReactNode {
+export function McpView({ services, listConfigurations, saveConfiguration, removeConfiguration }: {
+  readonly services: readonly McpServiceProjection[]
+  readonly listConfigurations: () => Promise<readonly McpConfiguration[]>
+  readonly saveConfiguration: (input: McpConfigurationInput) => Promise<McpConfiguration>
+  readonly removeConfiguration: (id: string) => Promise<boolean>
+}): ReactNode {
+  const [configs, setConfigs] = useState<readonly McpConfiguration[]>([])
+  const [editing, setEditing] = useState<McpConfigurationInput | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => { void listConfigurations().then(setConfigs).catch((reason: unknown) => setError(String(reason))) }, [listConfigurations])
   const connectedCount = services.filter((service) => service.status === 'connected').length
-  const toolCount = services
-    .filter((service) => service.status === 'connected')
-    .reduce((total, service) => total + service.tools.length, 0)
-  const configSources = new Set(services.map((service) => service.configSource).filter((source) => source !== undefined))
-  const runtimeLabel = services.length === 0 ? '运行时未提供 MCP 投影' : '运行时已返回 MCP 投影'
-  const configLabel = configSources.size === 0 ? '尚未接入' : `${configSources.size} 个来源`
+  const toolCount = services.filter((service) => service.status === 'connected').reduce((total, service) => total + service.tools.length, 0)
 
-  return (
-    <main className="page mcp-page">
-      <PageHeader
-        eyebrow="管理模块"
-        title="MCP 服务"
-        description="查看 Agent 可用的 MCP 服务、工具、鉴权状态和连接错误。"
-      />
+  async function submit(event: FormEvent): Promise<void> {
+    event.preventDefault(); if (editing === null) return
+    try { const saved = await saveConfiguration(editing); setConfigs((current) => [...current.filter((item) => item.id !== saved.id), saved]); setEditing(null); setError(null) } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+  }
 
-      <section className="mcp-summary" aria-label="MCP 概览">
-        <div><span>服务</span><strong>{services.length}</strong></div>
-        <div><span>已连接</span><strong>{connectedCount}</strong></div>
-        <div><span>可用工具</span><strong>{toolCount}</strong></div>
-        <div><span>配置来源</span><strong>{configLabel}</strong></div>
-      </section>
-
-      <section className="mcp-service-section" aria-labelledby="mcp-service-heading">
-        <header>
-          <div>
-            <span className="section-icon"><Icon name="server" size={19} /></span>
-            <div><h2 id="mcp-service-heading">服务</h2><p>状态只来自运行时投影，不由前端推断。</p></div>
-          </div>
-          <span className="mcp-runtime-state">{runtimeLabel}</span>
-        </header>
-
-        {services.length === 0 ? (
-          <EmptyState
-            icon="server"
-            title="尚未配置 MCP 服务"
-            detail="当前引擎没有返回 MCP 服务清单；连接和配置操作保持不可用。"
-          />
-        ) : (
-          <div className="mcp-service-list">
-            <div className="mcp-service-columns" aria-hidden="true">
-              <span>服务</span><span>传输</span><span>状态</span><span>鉴权</span><span>工具</span>
-            </div>
-            {services.map((service) => (
-              <article className="mcp-service-row" key={service.id}>
-                <div><strong>{service.name}</strong><small>{service.id}</small></div>
-                <code>{service.transport}</code>
-                <span className={`mcp-status mcp-status-${service.status}`}>{STATUS_LABELS[service.status]}</span>
-                <span>{AUTH_LABELS[service.authentication]}</span>
-                <span>{service.tools.length}</span>
-                {service.error === undefined ? null : <p role="alert">{service.error}</p>}
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <p className="mcp-boundary"><Icon name="shield" size={16} />MCP 只提供工具入口；每个 Agent 的实际权限仍由 RoleSpec、ToolSurface 与 Guardian 收紧。</p>
-    </main>
-  )
+  return <main className="page mcp-page">
+    <PageHeader eyebrow="Agent 工具服务" title="MCP" description="配置 MCP Server，并查看 A/B 运行时投影的连接状态与工具。MCP 工具服务与第三方应用连接器分开管理。" />
+    {error === null ? null : <div className="resource-error" role="alert"><Icon name="warning" size={17} />{error}</div>}
+    {editing === null ? null : <form className="configuration-form" onSubmit={(event) => void submit(event)}><div className="form-heading"><div><strong>{editing.id === undefined ? '新增 MCP Server' : '编辑 MCP Server'}</strong><span>配置保存后等待 A/B MCP runtime 消费。</span></div><button className="icon-button" type="button" onClick={() => setEditing(null)} aria-label="关闭"><Icon name="close" size={18} /></button></div><label><span>名称</span><input required value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></label><label><span>传输</span><select value={editing.transport} onChange={(event) => setEditing({ ...editing, transport: event.target.value as McpConfigurationInput['transport'] })}><option value="stdio">stdio</option><option value="http">HTTP</option><option value="sse">SSE</option></select></label><label><span>{editing.transport === 'stdio' ? '命令' : 'Endpoint'}</span><input required value={editing.endpoint} onChange={(event) => setEditing({ ...editing, endpoint: event.target.value })} placeholder={editing.transport === 'stdio' ? 'npx -y @example/mcp-server' : 'https://mcp.example.com'} /></label><label><span>访问凭据</span><input type="password" value={editing.credential ?? ''} onChange={(event) => setEditing({ ...editing, credential: event.target.value })} placeholder={editing.id === undefined ? '可选' : '留空保留原凭据'} /></label><label className="inline-check"><input type="checkbox" checked={editing.enabled} onChange={(event) => setEditing({ ...editing, enabled: event.target.checked })} />启用配置</label><div className="form-actions"><button type="button" className="secondary-button" onClick={() => setEditing(null)}>取消</button><button type="submit" className="primary-button">保存配置</button></div></form>}
+    <section className="mcp-summary" aria-label="MCP 概览"><div><span>运行时服务</span><strong>{services.length}</strong></div><div><span>已连接</span><strong>{connectedCount}</strong></div><div><span>可用工具</span><strong>{toolCount}</strong></div><div><span>本地配置</span><strong>{configs.length}</strong></div></section>
+    <section className="mcp-service-section"><header><div><span className="section-icon"><Icon name="settings" size={19} /></span><div><h2>本地配置</h2><p>点击加号后选择服务类型；已有配置从省略号菜单管理。</p></div></div><div className="section-actions"><span className="mcp-runtime-state">等待运行时接入</span><details className="round-action-menu"><summary className="round-add-button" aria-label="新建 MCP 配置" title="新建 MCP 配置"><Icon name="plus" size={21} /></summary><div>{(['stdio', 'http', 'sse'] as const).map((transport) => <button type="button" key={transport} onClick={() => setEditing({ ...EMPTY, transport })}><Icon name="plus" size={16} />新建 {transport === 'stdio' ? 'stdio' : transport.toUpperCase()} 配置</button>)}</div></details></div></header>{configs.length === 0 ? <EmptyState icon="server" title="尚未新增 MCP Server" detail="使用右上角加号添加 stdio、HTTP 或 SSE 服务配置。" /> : <div className="config-list">{configs.map((item) => <article key={item.id}><div><strong>{item.name}</strong><small>{item.transport} · {item.endpoint} · {item.credentialConfigured ? '凭据已保存' : '无凭据'}</small></div><span className={`config-state ${item.enabled ? 'enabled' : ''}`}>{item.enabled ? '已启用' : '已停用'}</span><details className="row-action-menu"><summary className="icon-button" aria-label={`管理 ${item.name}`} title="管理配置"><Icon name="menu" size={17} /></summary><div><button type="button" onClick={() => setEditing({ ...item })}><Icon name="settings" size={16} />编辑配置</button><button type="button" onClick={() => void removeConfiguration(item.id).then(() => setConfigs((current) => current.filter((entry) => entry.id !== item.id)))}><Icon name="close" size={16} />删除配置</button></div></details></article>)}</div>}</section>
+    <section className="mcp-service-section"><header><div><span className="section-icon"><Icon name="server" size={19} /></span><div><h2>运行时投影</h2><p>状态只来自 A/B 运行时，不由 C 推断。</p></div></div></header>{services.length === 0 ? <EmptyState icon="server" title="运行时尚未返回 MCP 服务" detail="本地配置仍可编辑，但不能显示成已连接。" /> : <div className="mcp-service-list"><div className="mcp-service-columns" aria-hidden="true"><span>服务</span><span>传输</span><span>状态</span><span>鉴权</span><span>工具</span></div>{services.map((service) => <article className="mcp-service-row" key={service.id}><div><strong>{service.name}</strong><small>{service.id}</small></div><code>{service.transport}</code><span className={`mcp-status mcp-status-${service.status}`}>{STATUS_LABELS[service.status]}</span><span>{service.authentication === 'configured' ? '已配置' : service.authentication === 'missing' ? '缺少凭据' : service.authentication === 'not_required' ? '无需鉴权' : '未知'}</span><span>{service.tools.length}</span>{service.error === undefined ? null : <p role="alert">{service.error}</p>}</article>)}</div>}</section>
+    <p className="mcp-boundary"><Icon name="shield" size={16} />Agent 实际权限仍由 RoleSpec、ToolSurface 与 Guardian 收紧。</p>
+  </main>
 }
