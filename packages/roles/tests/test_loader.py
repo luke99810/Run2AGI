@@ -13,6 +13,7 @@ from codentum_roles import (
     load_role_skill_prompt,
     load_role_spec_file,
     load_role_specs_dir,
+    project_role_skills,
 )
 
 
@@ -45,17 +46,59 @@ def test_builtin_rolespecs_reference_existing_skills() -> None:
     specs = load_builtin_role_specs()
     skills_by_role = {spec.id: tuple(skill.id for skill in spec.skills or ()) for spec in specs}
 
-    assert skills_by_role["coder"] == ("frontend", "testing")
+    assert skills_by_role["intake"] == ("requirements",)
+    assert skills_by_role["architect"] == ("architecture", "security")
+    assert skills_by_role["planner"] == ("planning", "cost-governance")
+    assert skills_by_role["coder"] == ("frontend", "backend", "testing", "debugging")
+    assert skills_by_role["helper"] == ("frontend", "backend", "testing", "debugging")
     assert skills_by_role["qa"] == ("testing",)
-    assert skills_by_role["reviewer"] == ("review",)
-    assert skills_by_role["integrator"] == ("testing", "review")
-    assert skills_by_role["guardian"] == ("review",)
+    assert skills_by_role["reviewer"] == ("review", "security")
+    assert skills_by_role["integrator"] == ("integration", "testing", "review", "debugging")
+    assert skills_by_role["manager"] == ("planning", "cost-governance")
+    assert skills_by_role["evolver"] == ("evolution", "review")
+    assert skills_by_role["guardian"] == ("review", "security")
 
 
 def test_builtin_role_skills_have_readable_prompt_body() -> None:
+    assert "# Requirements Skill" in load_role_skill_prompt("requirements")
+    assert "# Architecture Skill" in load_role_skill_prompt("architecture")
+    assert "# Planning Skill" in load_role_skill_prompt("planning")
     assert "# Frontend Skill" in load_role_skill_prompt("frontend")
+    assert "# Backend Skill" in load_role_skill_prompt("backend")
     assert "# Testing Skill" in load_role_skill_prompt("testing")
+    assert "# Debugging Skill" in load_role_skill_prompt("debugging")
     assert "# Review Skill" in load_role_skill_prompt("review")
+    assert "# Security Skill" in load_role_skill_prompt("security")
+    assert "# Integration Skill" in load_role_skill_prompt("integration")
+    assert "# Cost Governance Skill" in load_role_skill_prompt("cost-governance")
+    assert "# Evolution Skill" in load_role_skill_prompt("evolution")
+
+
+def test_builtin_skill_manifests_cover_rolespec_bindings() -> None:
+    specs = load_builtin_role_specs()
+    skills_dir = Path(__file__).resolve().parents[1] / "skills"
+
+    for spec in specs:
+        for skill in spec.skills or ():
+            manifest = json.loads((skills_dir / skill.id / "manifest.json").read_text(encoding="utf-8"))
+            assert spec.id in manifest["appliesTo"]
+
+
+def test_project_role_skills_writes_deterministic_shared_skill_space(tmp_path: Path) -> None:
+    shared_dir = tmp_path / ".codentum" / "skills" / "shared"
+
+    written = project_role_skills(["testing", "frontend", "frontend"], shared_dir)
+
+    assert [(path.parent.name, path.name) for path in written] == [
+        ("frontend", "manifest.json"),
+        ("frontend", "SKILL.md"),
+        ("testing", "manifest.json"),
+        ("testing", "SKILL.md"),
+    ]
+    assert (shared_dir / "frontend" / "manifest.json").exists()
+    assert "# Frontend Skill" in (shared_dir / "frontend" / "SKILL.md").read_text(encoding="utf-8")
+    assert (shared_dir / "testing" / "manifest.json").exists()
+    assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_builtin_guardian_is_deterministic() -> None:

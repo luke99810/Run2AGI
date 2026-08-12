@@ -1,0 +1,39 @@
+{
+  "id": "architecture",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["architect"],
+  "description": "定义契约、ADR、模块边界和权限面的内置 Skill。",
+  "inputs": {
+    "brief": "需求 brief",
+    "contracts": "现有契约",
+    "boundaries": "模块边界"
+  },
+  "outputs": {
+    "adr": "架构决策记录",
+    "contractChange": "契约变更",
+    "boundaryUpdate": "边界说明"
+  },
+  "preconditions": [
+    "需求会改变模块边界、契约、状态语义或角色权限"
+  ],
+  "failure": {
+    "timeoutSeconds": 240,
+    "onError": "write_architecture_blocker",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R2",
+    "tools": ["read_brief", "write_contract", "write_adr", "schema_validate", "probe_feasibility", "update_boundaries"],
+    "readPaths": ["brief/**", "docs/**", "packages/contracts/**", "boundaries.yaml"],
+    "writePaths": ["packages/contracts/**", "docs/adr/**", "boundaries.yaml"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

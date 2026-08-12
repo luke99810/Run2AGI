@@ -167,7 +167,7 @@ C 在初赛前的目标不是完成安装交付，而是提供可核验的桌面
 | C-UI-01 | 原设计的状态看板与 WIP 上限 | Home 只有总数和折叠步骤，没有按 PacketState 分列，也没有 `当前数/WIP 上限` | 读取权威 WIP 数据，按状态渲染并显示超限；缺契约字段时不得推算 |
 | C-UI-02 | 真正的甘特图 | 当前是依赖波次，不含计划/实际时间、关键路径、拆分与返工 | A 提供 Schedule 投影后，展示计划/实际双条、依赖箭头、关键路径、split/rework |
 | C-UI-03 | 完整 Agent 状态板 | 现有研发团队页能显示角色、Worker 和部分预算，但缺 heartbeat、成功率、单 Agent 预算条 | A/B 提供权威投影后，按原完成定义补齐并加失联/过期状态 |
-| C-UI-04 | Skills 管理模块 | B 已提供 `frontend` / `testing` / `review` 三个内置 Skill，当前任务级勾选器和上下文菜单已能从项目 RoleSpec 动态派生可用项；B 的 PromptBundle 已注入 active Skill 正文并记录 `skill_refs`；仍缺完整管理信息 | 展示已安装 Skill、版本、作用域、状态、权限、失败信息和启停结果；不能把选择意图当生效 |
+| C-UI-04 | Skills 管理模块 | B 已提供 12 个内置共享 Skill：`requirements` / `architecture` / `planning` / `frontend` / `backend` / `testing` / `debugging` / `review` / `security` / `integration` / `cost-governance` / `evolution`；当前任务级勾选器和上下文菜单已能从项目 RoleSpec 动态派生可用项；引擎会把被引用 Skill 投影到 `.codentum/skills/shared/`，B 的 PromptBundle 优先从项目共享空间注入 active Skill 正文并记录 `skill_refs` / `skill_source`；仍缺完整管理信息 | 展示已安装 Skill、版本、作用域、状态、权限、失败信息和启停结果；不能把选择意图当生效 |
 | C-UI-05 | MCP 管理模块 | 没有独立 MCP 页面或服务状态模型 | 展示 MCP 服务、连接状态、工具清单、鉴权状态和错误；无 MCP 时显示等价契约 |
 | C-UI-06 | 连接器管理模块 | 没有连接器页面；Provisioning 连通性固定 `not_available` | 展示连接器配置、真实探测结果和错误，不伪造成功 |
 | C-UI-07 | 审批与批量决策界面 | 能确认已有计划、控制单个 Worker，但没有待审批队列和批量通过/拒绝 | 读取权威审批项，所有决定经正式命令提交并等待权威回执 |

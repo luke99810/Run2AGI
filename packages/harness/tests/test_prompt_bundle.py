@@ -144,13 +144,47 @@ def test_prompt_bundle_includes_active_role_skills(tmp_path: Path) -> None:
     assert "## Active Skills" in bundle.system
     assert "### frontend" in bundle.system
     assert "# Frontend Skill" in bundle.system
+    assert "### backend" in bundle.system
+    assert "# Backend Skill" in bundle.system
     assert "### testing" in bundle.system
     assert "# Testing Skill" in bundle.system
+    assert "### debugging" in bundle.system
+    assert "# Debugging Skill" in bundle.system
 
     manifest = json.loads(
         (tmp_path / "evidence" / "prompt" / "manifest.json").read_text(encoding="utf-8")
     )
-    assert manifest["skill_refs"] == ["frontend", "testing"]
+    assert manifest["skill_refs"] == ["frontend", "backend", "testing", "debugging"]
+
+
+def test_prompt_bundle_can_read_active_skills_from_project_shared_space(tmp_path: Path) -> None:
+    shared_dir = tmp_path / ".codentum" / "skills" / "shared"
+    _write_shared_skill(shared_dir, "frontend", "# Shared Frontend Skill\n\nUse project rules.")
+    spec = RoleSpec(
+        id="coder",
+        summary="write code",
+        usesModel=True,
+        writes=("workspace/**",),
+        reads=("packages/contracts/**",),
+        tools=("read_file", "write_file"),
+        transitions=(),
+        skills=({"id": "frontend", "scope": "role", "state": "active"},),
+    )
+
+    bundle = write_worker_prompt_bundle(
+        request=request(tmp_path / "worker", role="coder"),
+        role_spec=spec,
+        evidence_dir=tmp_path / "evidence",
+        skills_dir=shared_dir,
+    )
+
+    assert "# Shared Frontend Skill" in bundle.system
+    assert "# Frontend Skill" not in bundle.system
+    manifest = json.loads(
+        (tmp_path / "evidence" / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["skill_refs"] == ["frontend"]
+    assert manifest["skill_source"] == "project_shared"
 
 
 def test_prompt_bundle_excludes_inactive_role_skills(tmp_path: Path) -> None:
@@ -188,3 +222,13 @@ def test_prompt_bundle_loader_rejects_digest_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(PromptBundleError, match="digest mismatch"):
         load_worker_prompt_bundle(tmp_path / "evidence")
+
+
+def _write_shared_skill(root: Path, skill_id: str, body: str) -> None:
+    skill_dir = root / skill_id
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "manifest.json").write_text(
+        json.dumps({"id": skill_id, "version": "0.0.0"}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(body + "\n", encoding="utf-8")

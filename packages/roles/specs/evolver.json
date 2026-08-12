@@ -20,5 +20,9 @@
     "defaultModel": "qwen-plus-2025-11-05",
     "defaultEffort": "high",
     "batchEligible": true
-  }
+  },
+  "skills": [
+    { "id": "evolution", "scope": "role", "state": "active" },
+    { "id": "review", "scope": "role", "state": "active" }
+  ]
 }

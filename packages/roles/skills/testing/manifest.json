@@ -2,7 +2,7 @@
   "id": "testing",
   "version": "0.1.0",
   "scope": "role",
-  "appliesTo": ["qa", "coder", "integrator"],
+  "appliesTo": ["qa", "coder", "integrator", "helper"],
   "description": "为 WorkPacket 设计、运行和归因测试证据的内置 Skill。",
   "inputs": {
     "task": "WorkPacket 或需求上下文",

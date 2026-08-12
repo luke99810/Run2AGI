@@ -96,6 +96,33 @@ def test_team_settle_fails_closed_until_dispatch_is_implemented(tmp_path: Path) 
     assert events[4].payload["moduleState"] == "failed"
 
 
+def test_team_spawn_reads_active_skill_prompt_from_project_shared_space(tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    _write_shared_skill(
+        tmp_path / ".codentum" / "skills" / "shared",
+        "frontend",
+        "# Shared Frontend Skill\n\nUse the project shared copy.",
+    )
+    client = FakeAgentTeamsClient()
+    runtime = TeamWorkerRuntime(
+        repo_root=tmp_path,
+        client=client,
+        role_specs=(role_spec_with_frontend_skill(),),
+    )
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    prompt_manifest = json.loads(
+        (evidence_dir / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
+    system_prompt = (evidence_dir / "prompt" / "system.md").read_text(encoding="utf-8")
+
+    assert prompt_manifest["skill_refs"] == ["frontend"]
+    assert prompt_manifest["skill_source"] == "project_shared"
+    assert "# Shared Frontend Skill" in system_prompt
+    assert "# Frontend Skill" not in system_prompt
+
+
 def test_team_spawn_records_agentteams_error_as_failed_outcome(tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     client = FakeAgentTeamsClient(create_error=RuntimeError("docker daemon unavailable"))
@@ -140,6 +167,28 @@ def role_spec() -> RoleSpec:
         tools=("read_file", "write_file"),
         transitions=(),
     )
+
+
+def role_spec_with_frontend_skill() -> RoleSpec:
+    return RoleSpec(
+        id="coder",
+        usesModel=True,
+        writes=("workspace/src/**",),
+        reads=("packages/contracts/**",),
+        tools=("read_file", "write_file"),
+        transitions=(),
+        skills=({"id": "frontend", "scope": "role", "state": "active"},),
+    )
+
+
+def _write_shared_skill(root: Path, skill_id: str, body: str) -> None:
+    skill_dir = root / skill_id
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "manifest.json").write_text(
+        json.dumps({"id": skill_id, "version": "0.0.0"}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(body + "\n", encoding="utf-8")
 
 
 class FakeAgentTeamsClient:

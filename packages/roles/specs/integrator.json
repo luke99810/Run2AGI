@@ -22,7 +22,9 @@
     "defaultEffort": "low"
   },
   "skills": [
+    { "id": "integration", "scope": "role", "state": "active" },
     { "id": "testing", "scope": "role", "state": "active" },
-    { "id": "review", "scope": "role", "state": "active" }
+    { "id": "review", "scope": "role", "state": "active" },
+    { "id": "debugging", "scope": "role", "state": "active" }
   ]
 }

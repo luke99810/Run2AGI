@@ -404,3 +404,17 @@ describe('StateHub.projectRoot 必须认得草稿作用域', () => {
     hub.close()
   })
 })
+
+describe('StateHub 可以注册引擎握手里的项目根', () => {
+  it('selectProject(projectRoot) 后 listSources 立即出现项目来源', async () => {
+    const project = await copyFixtureProject('empty')
+    const hub = new StateHub({ fixtureRoot: null })
+
+    const descriptor = await hub.selectProject(project)
+
+    expect(hub.listSources()).toEqual([descriptor])
+    expect(descriptor.kind).toBe('project')
+    expect(descriptor.rootPath).toBe(await realpath(project))
+    hub.close()
+  })
+})

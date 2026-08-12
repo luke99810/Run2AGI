@@ -1,0 +1,39 @@
+{
+  "id": "integration",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["integrator"],
+  "description": "整合已评审变更、跑绿线并产出集成证据的内置 Skill。",
+  "inputs": {
+    "diffs": "待整合变更",
+    "reviews": "评审证据",
+    "tests": "测试证据"
+  },
+  "outputs": {
+    "integrationReport": "集成报告",
+    "greenLine": "绿线验证结果",
+    "mergedState": "整合后状态"
+  },
+  "preconditions": [
+    "多个变更需要合入、验证或跨模块检查"
+  ],
+  "failure": {
+    "timeoutSeconds": 300,
+    "onError": "write_integration_blocker",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R2",
+    "tools": ["read_diff", "merge_changes", "run_tests", "check_green_line", "write_integration_report"],
+    "readPaths": ["packages/**", "tests/**", "evidence/**", ".codentum/**"],
+    "writePaths": ["evidence/integration/**", ".codentum/integration/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": ["testing", "review"],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

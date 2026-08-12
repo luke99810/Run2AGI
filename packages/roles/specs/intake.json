@@ -13,5 +13,8 @@
   "modelPolicy": {
     "defaultModel": "qwen-plus-2025-11-05",
     "defaultEffort": "medium"
-  }
+  },
+  "skills": [
+    { "id": "requirements", "scope": "role", "state": "active" }
+  ]
 }

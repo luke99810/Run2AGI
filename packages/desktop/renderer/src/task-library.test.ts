@@ -63,6 +63,7 @@ describe('task library', () => {
         transitions: [],
         skills: [
           { id: 'frontend', scope: 'role', state: 'active' },
+          { id: 'backend', scope: 'role', state: 'active' },
           { id: 'testing', scope: 'role', state: 'active' }
         ]
       },
@@ -73,11 +74,16 @@ describe('task library', () => {
         reads: [],
         tools: [],
         transitions: [],
-        skills: [{ id: 'review', scope: 'role', state: 'active' }]
+        skills: [
+          { id: 'review', scope: 'role', state: 'active' },
+          { id: 'security', scope: 'role', state: 'active' }
+        ]
       }
     ])).toEqual([
+      expect.objectContaining({ id: 'backend', label: '后端实现', availability: 'available', detail: 'B RoleSpec 已绑定：coder' }),
       expect.objectContaining({ id: 'frontend', availability: 'available', detail: 'B RoleSpec 已绑定：coder' }),
       expect.objectContaining({ id: 'review', availability: 'available', detail: 'B RoleSpec 已绑定：reviewer' }),
+      expect.objectContaining({ id: 'security', label: '安全审计', availability: 'available', detail: 'B RoleSpec 已绑定：reviewer' }),
       expect.objectContaining({ id: 'testing', availability: 'available', detail: 'B RoleSpec 已绑定：coder' })
     ])
   })

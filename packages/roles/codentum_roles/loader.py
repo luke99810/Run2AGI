@@ -7,6 +7,7 @@ RoleSpec 是角色的真身; 本模块只负责把磁盘上的 spec 变成经过
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
 
 from codentum_contracts.state import RoleId, RoleSpec
@@ -24,6 +25,7 @@ __all__ = [
     "load_role_skill_prompt",
     "load_role_spec_file",
     "load_role_specs_dir",
+    "project_role_skills",
 ]
 
 
@@ -84,6 +86,42 @@ def load_role_skill_prompt(skill_id: str, skills_dir: Path | str | None = None) 
         return skill_prompt_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RoleSkillLoadError(f"无法读取 Skill[{skill_id}] 正文: {skill_prompt_path}") from exc
+
+
+def project_role_skills(
+    skill_ids: Iterable[str],
+    target_dir: Path | str,
+    *,
+    skills_dir: Path | str | None = None,
+) -> tuple[Path, ...]:
+    """把内置 Skill 稳定投影到项目共享 Skill 目录。
+
+    `packages/roles/skills/` 是 Git 内的真源; `.codentum/skills/shared/`
+    是运行时共享副本。投影前先走同一套 manifest / SKILL.md 校验, 避免把
+    一个 UI 可见但 Worker 不可用的 Skill 放进项目状态。
+    """
+
+    source_root = Path(skills_dir or default_skills_dir())
+    target_root = Path(target_dir)
+    written: list[Path] = []
+    for skill_id in sorted(set(skill_ids)):
+        source_skill_dir = _resolve_skill_dir(skill_id, source_root)
+        _load_skill_manifest(source_root, skill_id)
+        load_role_skill_prompt(skill_id, source_root)
+
+        target_skill_dir = target_root / skill_id
+        target_skill_dir.mkdir(parents=True, exist_ok=True)
+        for filename in ("manifest.json", "SKILL.md"):
+            source_path = source_skill_dir / filename
+            target_path = target_skill_dir / filename
+            try:
+                target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError as exc:
+                raise RoleSkillLoadError(
+                    f"无法投影 Skill[{skill_id}] 到共享空间: {target_path}"
+                ) from exc
+            written.append(target_path)
+    return tuple(written)
 
 
 def load_role_spec_file(path: Path | str) -> RoleSpec:

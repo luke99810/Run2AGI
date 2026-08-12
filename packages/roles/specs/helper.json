@@ -18,6 +18,8 @@
   },
   "skills": [
     { "id": "frontend", "scope": "role", "state": "active" },
-    { "id": "testing", "scope": "role", "state": "active" }
+    { "id": "backend", "scope": "role", "state": "active" },
+    { "id": "testing", "scope": "role", "state": "active" },
+    { "id": "debugging", "scope": "role", "state": "active" }
   ]
 }
