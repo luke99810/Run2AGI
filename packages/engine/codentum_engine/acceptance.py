@@ -42,7 +42,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from codentum_contracts.state import WorkPacket
+from codentum_contracts.state import EvidenceRef, WorkPacket
 from codentum_control_plane.evidence import acceptance_evidence, worker_failure_markers
 from codentum_control_plane.gates import GateVerdict
 
@@ -102,7 +102,7 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
                     f"验收证据齐全，但 kind={kind} 的谓词**未被执行**"
                     f"（只有 kind=test 能自动判定）：{predicate[:120]}"
                 ),
-                evidence_refs=acceptance_evidence(packet.evidence),
+                evidence_refs=_as_refs(acceptance_evidence(packet.evidence)),
             )
 
         workspace = _latest_workspace(root, packet)
@@ -154,14 +154,115 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
                 detail=f"验收未通过：`{predicate}` 退出码 {proc.returncode}\n{tail}",
             )
 
+        # ── 第五层：验收测试本身不能是空的 ────────────────
+        vacuous = _vacuity_check(workspace, command)
+        if vacuous is not None:
+            return GateVerdict(passed=False, gate_id="acceptance", detail=vacuous)
+
         return GateVerdict(
             passed=True,
             gate_id="acceptance",
-            detail=f"验收通过：`{predicate}` 退出码 0\n{tail[-400:]}",
-            evidence_refs=acceptance_evidence(packet.evidence),
+            detail=f"验收通过：`{predicate}` 退出码 0（且实现被移走后确实变红）\n{tail[-400:]}",
+            evidence_refs=_as_refs(acceptance_evidence(packet.evidence)),
         )
 
     return gate
+
+
+def _vacuity_check(workspace: Path, command: list[str]) -> str | None:
+    """★ 把实现移走，再跑一遍验收 —— **它必须变红**。
+
+    这是本项目那句口号的可执行版本：
+
+        「如果它坏了，哪条测试会变红？」
+
+    2026-08-12 实测：模型写出了正确的实现，测试文件却只有一句 `assert True`。
+    验收谓词 `pytest workspace -q` 返回 1 passed、退出码 0，packet 被 accepted ——
+    **验收标准达到了，而验收标准本身什么都没验证。**
+
+    这是那条线的第五层：
+
+      08-09  拿控制面自己的簿记当证据
+      08-10  门禁层同一个洞
+      08-11  说完成了但一个文件没改
+      08-12  改了文件，但没达到验收标准
+      **本层：达到了验收标准，但验收标准是空的**
+
+    ★ 为什么用「移走实现」而不是查测试内容：
+      查内容是模式匹配 —— `assert True` 能查出来，`import x; assert True`
+      就查不出来，而且模型总能绕过。移走实现是**因果检验**：
+      测试若真的在验证实现，实现没了它必然红。这一条绕不过去。
+
+    ★ 局限（必须说清楚）：只在实现与测试**分文件**时有效。
+      两者写在同一个文件里时这一层不生效 —— 那需要 QA 独立出题才能解决，
+      而 QA 目前还没有独立的 packet。**这个缺口记在案，不假装它不存在。**
+
+    返回 None 表示通过；返回字符串表示「验收是空的」及其说明。
+    """
+
+    impl_files = [
+        path
+        for path in sorted(workspace.rglob("*.py"))
+        if ".codentum" not in path.parts
+        and ".git" not in path.parts
+        and not path.name.startswith("test_")
+        and not path.name.endswith("_test.py")
+        and "conftest" not in path.name
+    ]
+    if not impl_files:
+        # 没有可移走的实现文件 —— 这一层不适用，交给别的判据
+        return None
+
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for path in impl_files:
+            hidden = path.with_suffix(path.suffix + ".vacuity-check")
+            path.rename(hidden)
+            moved.append((path, hidden))
+
+        still_green = False
+        try:
+            proc = subprocess.run(  # noqa: S603 - argv 明确，shell=False
+                command,
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=ACCEPTANCE_TIMEOUT_SECONDS,
+                stdin=subprocess.DEVNULL,
+                shell=False,
+            )
+            still_green = proc.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # ★ 检不了就别拦 —— 但也别谎称检过了。
+            return None
+
+        if not still_green:
+            # 实现被移走后确实变红 —— 这些测试真的在验证实现
+            return None
+
+        names = "、".join(path.name for path in impl_files)
+        return (
+            "验收未通过：**验收测试是空的**。\n"
+            f"把实现（{names}）移走之后，验收谓词仍然退出码 0 —— "
+            "说明这些测试根本没有验证实现。\n\n"
+            "★ 判据是「如果它坏了，哪条测试会变红」。现在的答案是：一条都不会。"
+        )
+    finally:
+        # ★ 无论如何都要还原。这里失败会把工作区留在残破状态，
+        #   而那比验收判错严重得多。
+        for original, hidden in moved:
+            if hidden.exists():
+                hidden.rename(original)
+
+
+def _as_refs(refs: tuple[str, ...]) -> tuple[EvidenceRef, ...]:
+    """`acceptance_evidence` 返回 `tuple[str, ...]`，而 `GateVerdict` 要
+    `tuple[EvidenceRef, ...]` —— EvidenceRef 是 NewType，运行时同一个 str，
+    但类型层面要显式转，否则 mypy 会（正确地）拦下来。"""
+
+    return tuple(EvidenceRef(ref) for ref in refs)
 
 
 def _split_command(predicate: str) -> list[str]:

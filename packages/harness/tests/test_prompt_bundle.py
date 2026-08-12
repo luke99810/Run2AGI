@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from codentum_contracts import BudgetGrantRuntime, ModelRouting, PacketId, RoleId, RoleSpec, SpawnRequest
+from codentum_contracts.state import RoleSkill
 from codentum_harness.context_broker import ContextCandidate, assemble_context_bundle
 from codentum_harness.prompt_bundle import (
     PromptBundleError,
@@ -162,8 +163,10 @@ def test_prompt_bundle_excludes_inactive_role_skills(tmp_path: Path) -> None:
         tools=("read_file", "write_file"),
         transitions=(),
         skills=(
-            {"id": "frontend", "scope": "role", "state": "candidate"},
-            {"id": "testing", "scope": "role", "state": "active"},
+            # ★ 用契约类型而不是裸 dict：RoleSpec.skills 声明的是
+            #   tuple[RoleSkill, ...]，裸 dict 运行时能过、mypy 会拦。
+            RoleSkill(id="frontend", scope="role", state="candidate"),
+            RoleSkill(id="testing", scope="role", state="active"),
         ),
     )
 

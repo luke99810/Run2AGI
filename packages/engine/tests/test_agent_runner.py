@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -295,5 +296,114 @@ def test_request_help_ends_the_loop_instead_of_burning_turns(prepared: Path) -> 
     assert outcome.status == "failed"
     assert "请求人工介入" in outcome.detail
     assert "验收标准不明确" in outcome.detail
-    # ★ 关键：只该发生一轮，不该把 10 轮烧完
-    assert len(gateway.session.seen) == 1, f"求助后仍继续循环了 {len(gateway.session.seen)} 轮"
+    # ★ 关键：**最多两轮**（第一次求助给一次事实性回推，再求助即终止），
+    #   而不是把 10 轮全烧完。
+    assert len(gateway.session.seen) <= 2, f"求助后仍继续循环了 {len(gateway.session.seen)} 轮"
+
+
+def test_model_cannot_finish_while_the_acceptance_predicate_fails(prepared: Path) -> None:
+    """★ 模型说「我做完了」不算数 —— 验收谓词不过就把它推回去继续。
+
+    验收谓词就是「完成」的定义。让模型在谓词不过时收尾，
+    等于让它自己宣布达标 —— 那正是本项目一路在拆的那个病。
+
+    2026-08-12 实测：模型写完实现就停手（或求助），测试文件从来没写过。
+    把**真实的失败输出**喂回去之后，它才知道自己还没做完。
+    """
+
+    gateway = _FakeGateway(
+        [
+            # 第 1 轮：写个文件就想收工
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="1", name="write_file", input={"path": "a.py", "content": "x=1"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="我做完了", tool_calls=(), stop_reason="end", usage=_usage()),
+            # 被推回去之后才补上第二个文件
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="2", name="write_file", input={"path": "b.py", "content": "y=2"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="这次真做完了", tool_calls=(), stop_reason="end", usage=_usage()),
+        ]
+    )
+    # 谓词：b.py 存在才算通过
+    predicate = (
+        f'"{sys.executable}" -c "import pathlib,sys; '
+        "sys.exit(0 if pathlib.Path('b.py').exists() else 1)\""
+    )
+    runner = build_agent_runner(
+        AgentRunnerConfig(gateway=gateway, acceptance_predicate=predicate)  # type: ignore[arg-type]
+    )
+    outcome = runner(_spawn(prepared))
+
+    assert outcome.status == "completed", getattr(outcome, "detail", "")
+    # ★ 关键：它被推回去了 —— 不是两轮就结束
+    assert len(gateway.session.seen) == 4, f"只跑了 {len(gateway.session.seen)} 轮，没有被推回去"
+    joined = "\n".join(m.content for m in gateway.session.seen[2].messages)
+    assert "你还不能收尾" in joined
+
+
+def test_first_help_request_gets_one_factual_pushback(prepared: Path) -> None:
+    """★ 第一次求助先给一次**事实性**回推，再求助才终止。
+
+    2026-08-12 实测：模型写完实现就求助「需要具体的验收条件」——
+    而验收条件一直在 prompt 里，它只是没把「谓词跑不过」当成自己的事。
+    把谓词的**真实输出**摆给它看，比重复一遍要求有效得多。
+
+    只回推一次：再求助就是真的卡住了，那就交给人。
+    """
+
+    gateway = _FakeGateway(
+        [
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="h", name="request_help", input={"reason": "不知道要测什么"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            # 回推之后自己补上文件
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="w", name="write_file", input={"path": "b.py", "content": "y=2"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="做完了", tool_calls=(), stop_reason="end", usage=_usage()),
+        ]
+    )
+    predicate = (
+        f'"{sys.executable}" -c "import pathlib,sys; '
+        "sys.exit(0 if pathlib.Path('b.py').exists() else 1)\""
+    )
+    runner = build_agent_runner(
+        AgentRunnerConfig(gateway=gateway, acceptance_predicate=predicate)  # type: ignore[arg-type]
+    )
+    outcome = runner(_spawn(prepared))
+
+    # ★ 回推奏效：本来会以 help_requested 失败，现在真的做完了
+    assert outcome.status == "completed", getattr(outcome, "detail", "")
+    joined = "\n".join(m.content for m in gateway.session.seen[1].messages)
+    assert "你还不能收尾" in joined
+
+
+def test_transient_model_errors_are_retried_but_permanent_ones_are_not(prepared: Path) -> None:
+    """★ 瞬时 5xx 重试；4xx 立刻失败。
+
+    2026-08-12 实测：百炼在多轮工具会话里约 40% 的运行返回一次
+    `500 internal_error`，同样的请求下一次就成功。
+
+    ★ 但 4xx 不能重试 —— 那是我们自己的问题，重试只会把一个确定性错误
+      变成一个看起来随机的错误。
+    """
+
+    from codentum_engine.agent_runner import _is_transient
+
+    assert _is_transient(RuntimeError("Error code: 500 - internal_error")) is True
+    assert _is_transient(RuntimeError("Error code: 503")) is True
+    assert _is_transient(RuntimeError("Error code: 400 - invalid_request")) is False
+    assert _is_transient(RuntimeError("Error code: 401 - unauthorized")) is False

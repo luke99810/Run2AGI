@@ -216,3 +216,78 @@ def test_the_executing_gate_is_registered_under_the_id_the_loop_actually_uses(
             _packet(predicate="python -c \"raise SystemExit(1)\"", pid="wp-notreg001"),
         )
         assert verdict.passed is False, f"门禁 {gate_id!r} 没有执行谓词就放行了"
+
+
+# ══════════════════════════════════════════════════════════════
+#  第五层：验收测试本身不能是空的
+# ══════════════════════════════════════════════════════════════
+
+
+def test_vacuous_tests_do_not_pass_acceptance(workers_root: Path) -> None:
+    """★ 2026-08-12 真实撞到的那一个：实现是对的，测试只有一句 `assert True`。
+
+    验收谓词 `pytest workspace -q` 返回 1 passed、退出码 0，packet 被 accepted ——
+    **验收标准达到了，而验收标准本身什么都没验证。**
+
+    判据是「如果它坏了，哪条测试会变红」。这里的答案是：一条都不会。
+    """
+
+    ws = workers_root / "wp-acc000001" / "attempt-1"
+    (ws / "subscriptions.py").write_text(
+        "def monthly_total(subs):\n    return sum(s for s in subs)\n", encoding="utf-8"
+    )
+    # ★ 原样照抄模型当时写出来的东西
+    (ws / "test_subscriptions.py").write_text(
+        "def test_example():\n    assert True\n", encoding="utf-8"
+    )
+
+    gate = build_executing_acceptance_gate(workers_root)
+    verdict = gate(_packet(predicate=f"{sys.executable} -m pytest . -q"))
+
+    assert verdict.passed is False, "空测试通过了验收"
+    assert "验收测试是空的" in verdict.detail
+    # ★ 工作区必须被还原 —— 检查本身不能留下残骸
+    assert (ws / "subscriptions.py").exists()
+    assert not list(ws.glob("*.vacuity-check"))
+
+
+def test_real_tests_still_pass_acceptance(workers_root: Path) -> None:
+    """★ 对照组。没有它，上面那条用「永远不通过」也能绿。
+
+    真正验证实现的测试：实现被移走后会 ImportError，因此必然变红。
+    """
+
+    ws = workers_root / "wp-acc000001" / "attempt-1"
+    (ws / "subscriptions.py").write_text(
+        "def monthly_total(subs):\n    return sum(subs)\n", encoding="utf-8"
+    )
+    (ws / "test_subscriptions.py").write_text(
+        "from subscriptions import monthly_total\n\n\n"
+        "def test_empty():\n    assert monthly_total([]) == 0\n\n\n"
+        "def test_sum():\n    assert monthly_total([1.5, 2.5]) == 4.0\n",
+        encoding="utf-8",
+    )
+
+    gate = build_executing_acceptance_gate(workers_root)
+    verdict = gate(_packet(predicate=f"{sys.executable} -m pytest . -q"))
+
+    assert verdict.passed is True, verdict.detail
+    assert "移走后确实变红" in verdict.detail
+    assert (ws / "subscriptions.py").exists()
+
+
+def test_workspace_is_restored_even_when_the_predicate_explodes(workers_root: Path) -> None:
+    """★ 还原必须在 finally 里 —— 检查过程中出任何事都不能把工作区留成残破状态。
+
+    验收判错可以重来；把用户的文件弄丢不能。
+    """
+
+    ws = workers_root / "wp-acc000001" / "attempt-1"
+    (ws / "impl.py").write_text("x = 1", encoding="utf-8")
+    (ws / "test_impl.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+
+    gate = build_executing_acceptance_gate(workers_root)
+    gate(_packet(predicate=f"{sys.executable} -m pytest . -q"))
+
+    assert (ws / "impl.py").read_text(encoding="utf-8") == "x = 1"
+    assert not list(ws.glob("*.vacuity-check"))

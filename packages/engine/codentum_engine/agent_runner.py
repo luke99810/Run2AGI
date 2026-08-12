@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ from codentum_contracts.interfaces import (
 from codentum_contracts.state import EvidenceRef
 from codentum_harness.prompt_bundle import load_worker_prompt_bundle
 
+from .acceptance import _split_command
 from .tools import ToolExecutor, tool_schemas_for
 
 __all__ = ["AgentRunnerConfig", "build_agent_runner"]
@@ -99,6 +101,7 @@ class _AgentRun:
         self._transcript: list[dict[str, Any]] = []
         self._spent = 0.0
         self._acceptance_predicate = acceptance_predicate
+        self._helped_once = False
 
     # ── 入口 ────────────────────────────────────────────────
 
@@ -140,41 +143,71 @@ class _AgentRun:
                 self._req.role, self._req.routing, self._req.budget.limit_cny
             )
             for turn in range(1, self._config.max_turns + 1):
-                response = await session.invoke(
+                response = await self._invoke_with_retry(
+                    session,
                     ModelRequest(
                         system=prompt.system,
                         messages=tuple(messages),
                         effort=self._req.routing.effort,
                         tools=tools,
-                    )
+                    ),
                 )
                 self._spent = max(self._spent, _session_spent(session))
                 self._record_turn(turn, response)
 
                 if not response.tool_calls:
-                    # 模型不再要求调工具 —— 循环结束，成败由是否落了文件判定
-                    return self._finish(prompt.digest, response, turn)
+                    # ★ 模型说完事了 —— 但**先把验收谓词跑一遍再放它走**。
+                    #
+                    #   验收谓词就是「完成」的定义。让模型在谓词不过时收尾，
+                    #   等于让它自己宣布达标 —— 那正是本项目一路在拆的那个病。
+                    #
+                    #   2026-08-12 实测：模型写完实现就停手/求助，测试文件从来没写过。
+                    #   把真实的失败输出喂回去之后，它才知道自己还没做完。
+                    verdict = self._verify()
+                    if verdict is None or turn >= self._config.max_turns:
+                        return self._finish(prompt.digest, response, turn)
+
+                    messages.append(
+                        ModelMessage(role="assistant", content=response.text or "（我认为已完成）")
+                    )
+                    messages.append(ModelMessage(role="user", content=verdict))
+                    continue
 
                 if any(call.name == "request_help" for call in response.tool_calls):
-                    # ★ 求助必须**终止**循环，不能当成普通工具调用。
-                    #
-                    #   第一版把 request_help 也返回 ok=True，等于告诉模型
-                    #   「求助成功了，你继续」—— 于是它每一轮都重复求助，
-                    #   12 轮全部烧完、一个文件没写。2026-08-12 实测到的正是这个。
-                    #
-                    #   语义上也该如此：求助的意思是「我需要人来决定」，
-                    #   那就不该再让模型自己往下猜。
-                    self._run_tool_calls(response)
                     reason = next(
                         str(call.input.get("reason", "")).strip()
                         for call in response.tool_calls
                         if call.name == "request_help"
                     )
-                    return self._fail(
-                        FailureCode.ACCEPTANCE_NOT_MET,
-                        f"模型请求人工介入：{reason or '(未说明原因)'}",
-                        status="help_requested",
+                    self._run_tool_calls(response)
+                    pushback = self._verify() if not self._helped_once else None
+
+                    if pushback is None or turn >= self._config.max_turns:
+                        # ★ 求助**终止**循环：它的语义是「我需要人来决定」，
+                        #   不该再让模型自己往下猜。
+                        #   （第一版把 request_help 也返回 ok=True，等于告诉它
+                        #   「求助成功了，你继续」，于是它每轮重复求助、
+                        #   12 轮烧完、一个文件没写。）
+                        return self._fail(
+                            FailureCode.ACCEPTANCE_NOT_MET,
+                            f"模型请求人工介入：{reason or '(未说明原因)'}",
+                            status="help_requested",
+                        )
+
+                    # ★ 但**第一次**求助先给一次事实性回推。
+                    #
+                    #   2026-08-12 实测：模型写完实现就求助「需要具体的验收条件」——
+                    #   而验收条件一直在 prompt 里，它只是没把「谓词跑不过」
+                    #   当成自己的事。把谓词的真实输出摆给它看，
+                    #   比重复一遍要求有效得多。
+                    #
+                    #   只回推一次：再求助就是真的卡住了，那就交给人。
+                    self._helped_once = True
+                    messages.append(
+                        ModelMessage(role="assistant", content=response.text or f"（请求协助：{reason}）")
                     )
+                    messages.append(ModelMessage(role="user", content=pushback))
+                    continue
 
                 # ★ 不能发 content="" 的 assistant 消息。
                 #   模型只调工具、不说话时 response.text 是空的，而空 content
@@ -197,6 +230,34 @@ class _AgentRun:
         finally:
             if session is not None:
                 await session.close()
+
+    async def _invoke_with_retry(
+        self, session: ModelSession, req: ModelRequest
+    ) -> ModelResponse:
+        """瞬时 5xx 重试。**只重试瞬时错误，且次数有上限。**
+
+        ★ 2026-08-12 实测：百炼在多轮工具会话里约 40% 的运行会返回一次
+          `500 internal_error`，网关自己的重试也扛不住。它是服务端瞬时故障
+          （同样的请求下一次就成功），不是我们的载荷问题。
+
+        ★ 但**不能无限重试**：真的坏了要让它坏出来。重试三次仍失败就如实上报
+          model_error —— 把服务端故障伪装成「模型没做完」会把排查带到错误的方向。
+
+        ★ 只重试 5xx / internal_error。4xx 是我们自己的问题，重试没有意义
+          （而且会把一个确定性错误变成一个看起来随机的错误）。
+        """
+
+        last: Exception | None = None
+        for attempt in range(1, _MODEL_RETRIES + 1):
+            try:
+                return await session.invoke(req)
+            except Exception as exc:  # noqa: BLE001
+                if not _is_transient(exc) or attempt == _MODEL_RETRIES:
+                    raise
+                last = exc
+                logger.warning("模型瞬时错误，第 %d/%d 次重试：%s", attempt, _MODEL_RETRIES, exc)
+                await asyncio.sleep(2.0 * attempt)
+        raise last  # type: ignore[misc]  # 上面的循环必然 return 或 raise
 
     def _definition_of_done(self) -> str:
         """把「完成」的定义明确告诉模型。
@@ -223,8 +284,7 @@ class _AgentRun:
             "2. **把代码写在回复正文里不算交付。** 只有 write_file 写进工作区的文件才算。\n"
             "3. 缺什么就自己补 —— 例如验收要跑测试而工作区里没有测试文件，"
             "那就是你还没写完，不是环境有问题。\n"
-            "4. request_help 只用于**你无法自行补齐**的情况（例如需求本身自相矛盾）。"
-            "它会立刻终止本次执行并交给人处理，所以不要用它来汇报进度。\n"
+            "4. 规格已经完整，**不需要再向任何人确认** —— 直接把它做完。\n"
         )
 
     # ── 工具调用 ────────────────────────────────────────────
@@ -246,6 +306,45 @@ class _AgentRun:
             status = "成功" if result.ok else "失败"
             chunks.append(f"[工具 {call.name} {status}]\n{result.content}")
         return "\n\n".join(chunks)
+
+    def _verify(self) -> str | None:
+        """跑一遍验收谓词。通过返回 None；不通过返回**要喂回给模型的话**。
+
+        ★ 为什么把真实输出原样喂回去：模型看到 "no tests ran" 才知道
+          自己漏了测试文件；只说「验收未通过」它会去猜，而猜错的方向
+          （改实现、换命令）比不动更糟。
+        """
+
+        command = _split_command(self._acceptance_predicate)
+        if not command:
+            return None
+        try:
+            proc = subprocess.run(  # noqa: S603 - argv 明确，shell=False
+                command,
+                cwd=self._workspace,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120.0,
+                stdin=subprocess.DEVNULL,
+                shell=False,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # ★ 跑不了就别拦着 —— 门禁那边还会再跑一次并如实报告。
+            #   在这里把「我跑不动」误判成「你没做完」会把模型带偏。
+            return None
+
+        if proc.returncode == 0:
+            return None
+
+        tail = (proc.stdout + proc.stderr).strip()[-1500:]
+        return (
+            f"[自动验收检查] 你还不能收尾：验收谓词 `{self._acceptance_predicate}` "
+            f"退出码 {proc.returncode}。\n\n{tail}\n\n"
+            "请根据上面的真实输出把缺的东西补齐（例如验收要跑测试而工作区里"
+            "还没有测试文件，那就用 write_file 把测试写出来），然后再收尾。"
+        )
 
     # ── 收尾 ────────────────────────────────────────────────
 
@@ -351,6 +450,19 @@ class _AgentRun:
         return WorkerFailed(
             reason_code=code, detail=detail, evidence=(evidence,), spent_cny=self._spent
         )
+
+
+_MODEL_RETRIES = 3
+
+_TRANSIENT_MARKERS = ("internal_error", "500", "502", "503", "504", "timeout")
+
+
+def _is_transient(exc: Exception) -> bool:
+    """★ 只认瞬时错误。4xx 是我们自己的问题，重试只会把确定性错误
+    变成看起来随机的错误。"""
+
+    text = str(exc).lower()
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
 
 
 def _session_spent(session: ModelSession) -> float:
