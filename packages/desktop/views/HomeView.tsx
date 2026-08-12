@@ -19,6 +19,7 @@ export function HomeView({
   task,
   draftScope,
   taskHistory,
+  pluginOptions,
   skillOptions,
   onTaskDraftChange,
   onTaskAttachmentNamesChange,
@@ -40,6 +41,7 @@ export function HomeView({
   readonly task: TaskSession
   readonly draftScope: string
   readonly taskHistory: readonly TaskHistoryEntry[]
+  readonly pluginOptions: readonly ResourceOption[]
   readonly skillOptions: readonly ResourceOption[]
   readonly onTaskDraftChange: (text: string) => void
   readonly onTaskAttachmentNamesChange: (names: readonly string[]) => void
@@ -153,6 +155,7 @@ export function HomeView({
           legacyScope={snapshot?.source.id ?? 'unassigned'}
           taskContext={task.context}
           taskHistory={taskHistory}
+          pluginOptions={pluginOptions}
           skillOptions={skillOptions}
           onDraftChange={onTaskDraftChange}
           onAttachmentNamesChange={onTaskAttachmentNamesChange}
