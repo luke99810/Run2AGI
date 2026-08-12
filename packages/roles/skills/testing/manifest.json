@@ -1,0 +1,39 @@
+{
+  "id": "testing",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["qa", "coder", "integrator"],
+  "description": "为 WorkPacket 设计、运行和归因测试证据的内置 Skill。",
+  "inputs": {
+    "task": "WorkPacket 或需求上下文",
+    "acceptance": "验收谓词",
+    "changedFiles": "候选变更路径"
+  },
+  "outputs": {
+    "testPlan": "测试计划",
+    "testRun": "测试输出摘要",
+    "evidence": "可引用测试证据"
+  },
+  "preconditions": [
+    "任务涉及验证、回归、验收、绿线或质量门禁"
+  ],
+  "failure": {
+    "timeoutSeconds": 240,
+    "onError": "write_blocker_report",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R1",
+    "tools": ["read_file", "write_acceptance_tests", "run_acceptance_tests", "run_tests"],
+    "readPaths": ["packages/**", "tests/**", "fixtures/**", ".codentum/**"],
+    "writePaths": ["tests/acceptance/**", "evidence/qa/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

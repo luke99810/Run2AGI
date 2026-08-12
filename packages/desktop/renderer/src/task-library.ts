@@ -1,3 +1,5 @@
+import type { RoleSpec } from '@codentum/contracts'
+
 export type TaskSessionStatus = 'draft' | 'submitted'
 export type AccessMode = 'read_only' | 'workspace_write' | 'full_access'
 
@@ -69,6 +71,33 @@ export const SKILL_OPTIONS: readonly ResourceOption[] = [
   { id: 'testing', label: '测试验证', detail: '请求 QA/Coder 加载测试技能', availability: 'pending_runtime' },
   { id: 'review', label: '代码评审', detail: '请求 Reviewer 加载评审技能', availability: 'pending_runtime' }
 ]
+
+const SKILL_LABELS: Readonly<Record<string, string>> = {
+  frontend: '前端实现',
+  testing: '测试验证',
+  review: '代码评审'
+}
+
+export function skillOptionsFromRoles(roles: readonly RoleSpec[] | undefined): readonly ResourceOption[] {
+  const projected = new Map<string, { roles: Set<string>; active: boolean }>()
+  for (const role of roles ?? []) {
+    for (const skill of role.skills ?? []) {
+      const entry = projected.get(skill.id) ?? { roles: new Set<string>(), active: false }
+      entry.roles.add(role.id)
+      if (skill.state === undefined || skill.state === 'active') entry.active = true
+      projected.set(skill.id, entry)
+    }
+  }
+  if (projected.size === 0) return SKILL_OPTIONS
+  return [...projected.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, entry]) => ({
+      id,
+      label: SKILL_LABELS[id] ?? id,
+      detail: `B RoleSpec 已绑定：${[...entry.roles].sort().join('、')}`,
+      availability: entry.active ? 'available' : 'pending_runtime'
+    }))
+}
 
 const TASK_STORAGE_KEY = 'codentum.desktop.task-sessions.v1'
 const PREFERENCE_STORAGE_KEY = 'codentum.desktop.workbench-preferences.v1'

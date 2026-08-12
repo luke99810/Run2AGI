@@ -10,7 +10,6 @@ import type { CommandDispatcher } from '../renderer/src/command-types'
 import {
   KNOWLEDGE_OPTIONS,
   PLUGIN_OPTIONS,
-  SKILL_OPTIONS,
   toggleSelection,
   type ResourceOption,
   type TaskContextSelection,
@@ -86,6 +85,7 @@ export function RequirementComposer({
   legacyScope,
   taskContext,
   taskHistory,
+  skillOptions,
   onDraftChange,
   onAttachmentNamesChange,
   onContextChange,
@@ -105,6 +105,7 @@ export function RequirementComposer({
   readonly legacyScope: string
   readonly taskContext: TaskContextSelection
   readonly taskHistory: readonly TaskHistoryEntry[]
+  readonly skillOptions: readonly ResourceOption[]
   readonly onDraftChange: (text: string) => void
   readonly onAttachmentNamesChange: (names: readonly string[]) => void
   readonly onContextChange: (context: TaskContextSelection) => void
@@ -441,7 +442,7 @@ export function RequirementComposer({
               />
               <ResourceChecks
                 label="Skills"
-                options={SKILL_OPTIONS}
+                options={skillOptions}
                 selected={taskContext.skillIds}
                 onToggle={(id) => onContextChange({ ...taskContext, skillIds: toggleSelection(taskContext.skillIds, id) })}
               />

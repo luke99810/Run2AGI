@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DraftAttachment, EngineHandshake, RequirementDraftSnapshot, StateSnapshot } from '../shared/protocol'
 import type { CommandDispatcher } from '../renderer/src/command-types'
 import { formatCny, hasCapability, PACKET_STATE_LABELS, packetCounts, packetTitle, roleLabel, sameProjectPath } from '../renderer/src/domain'
-import type { TaskContextSelection, TaskHistoryEntry, TaskSession } from '../renderer/src/task-library'
+import type { ResourceOption, TaskContextSelection, TaskHistoryEntry, TaskSession } from '../renderer/src/task-library'
 import { RequirementComposer } from '../inputs/RequirementComposer'
 import { EmptyState, Icon } from '../panels/Common'
 
@@ -19,6 +19,7 @@ export function HomeView({
   task,
   draftScope,
   taskHistory,
+  skillOptions,
   onTaskDraftChange,
   onTaskAttachmentNamesChange,
   onTaskContextChange,
@@ -39,6 +40,7 @@ export function HomeView({
   readonly task: TaskSession
   readonly draftScope: string
   readonly taskHistory: readonly TaskHistoryEntry[]
+  readonly skillOptions: readonly ResourceOption[]
   readonly onTaskDraftChange: (text: string) => void
   readonly onTaskAttachmentNamesChange: (names: readonly string[]) => void
   readonly onTaskContextChange: (context: TaskContextSelection) => void
@@ -151,6 +153,7 @@ export function HomeView({
           legacyScope={snapshot?.source.id ?? 'unassigned'}
           taskContext={task.context}
           taskHistory={taskHistory}
+          skillOptions={skillOptions}
           onDraftChange={onTaskDraftChange}
           onAttachmentNamesChange={onTaskAttachmentNamesChange}
           onContextChange={onTaskContextChange}

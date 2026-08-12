@@ -63,6 +63,10 @@ describe('RoleSpec 项目投影', () => {
       expect(snapshot.roles.map((role) => role.id).sort()).toEqual(
         specs.map((name) => name.replace(/\.json$/u, '')).sort()
       )
+      const skillsByRole = new Map(snapshot.roles.map((role) => [role.id, role.skills?.map((skill) => skill.id) ?? []]))
+      expect(skillsByRole.get('coder')).toEqual(['frontend', 'testing'])
+      expect(skillsByRole.get('qa')).toEqual(['testing'])
+      expect(skillsByRole.get('reviewer')).toEqual(['review'])
     } finally {
       source.close()
     }

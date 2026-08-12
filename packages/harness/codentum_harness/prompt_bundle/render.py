@@ -11,7 +11,7 @@ from pathlib import Path
 
 from codentum_contracts.interfaces import ModelMessage, ModelRequest, SpawnRequest
 from codentum_contracts.state import Effort, RoleSpec
-from codentum_roles import RolePromptLoadError, load_role_prompt
+from codentum_roles import RolePromptLoadError, RoleSkillLoadError, load_role_prompt, load_role_skill_prompt
 
 from codentum_harness.context_broker import ContextBundle
 
@@ -87,6 +87,7 @@ def write_worker_prompt_bundle(
         "system_path": "system.md",
         "user_path": "user.md",
         "context_refs": list(context.refs) if context is not None else [],
+        "skill_refs": list(_active_skill_ids(role_spec)),
     }
     (prompt_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -133,6 +134,7 @@ def _render_system(role_spec: RoleSpec) -> str:
         "This prompt is orientation only.",
         "",
         *role_prompt,
+        *_skill_prompt_sections(role_spec),
     ]
     return "\n".join(lines)
 
@@ -151,6 +153,37 @@ def _role_prompt_section(role_spec: RoleSpec) -> list[str]:
         role_prompt.rstrip(),
         "",
     ]
+
+
+def _skill_prompt_sections(role_spec: RoleSpec) -> list[str]:
+    active_skill_ids = _active_skill_ids(role_spec)
+    if not active_skill_ids:
+        return []
+
+    lines = ["## Active Skills", ""]
+    for skill_id in active_skill_ids:
+        try:
+            skill_prompt = load_role_skill_prompt(skill_id)
+        except RoleSkillLoadError as exc:
+            raise PromptBundleError(str(exc)) from exc
+        lines.extend(
+            [
+                f"### {skill_id}",
+                "",
+                skill_prompt.rstrip(),
+                "",
+            ]
+        )
+    return lines
+
+
+def _active_skill_ids(role_spec: RoleSpec) -> tuple[str, ...]:
+    active_skills = tuple(
+        skill
+        for skill in (role_spec.skills or ())
+        if skill.state is None or skill.state == "active"
+    )
+    return tuple(skill.id for skill in active_skills)
 
 
 def _render_user(request: SpawnRequest, *, context: ContextBundle | None) -> str:

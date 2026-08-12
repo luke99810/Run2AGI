@@ -6,9 +6,11 @@ from pathlib import Path
 import pytest
 from codentum_roles import (
     RolePromptLoadError,
+    RoleSkillLoadError,
     RoleSpecLoadError,
     load_builtin_role_specs,
     load_role_prompt,
+    load_role_skill_prompt,
     load_role_spec_file,
     load_role_specs_dir,
 )
@@ -37,6 +39,23 @@ def test_builtin_rolespecs_have_readable_prompt_refs() -> None:
         prompt = load_role_prompt(spec)
         assert prompt is not None
         assert prompt.startswith("# ")
+
+
+def test_builtin_rolespecs_reference_existing_skills() -> None:
+    specs = load_builtin_role_specs()
+    skills_by_role = {spec.id: tuple(skill.id for skill in spec.skills or ()) for spec in specs}
+
+    assert skills_by_role["coder"] == ("frontend", "testing")
+    assert skills_by_role["qa"] == ("testing",)
+    assert skills_by_role["reviewer"] == ("review",)
+    assert skills_by_role["integrator"] == ("testing", "review")
+    assert skills_by_role["guardian"] == ("review",)
+
+
+def test_builtin_role_skills_have_readable_prompt_body() -> None:
+    assert "# Frontend Skill" in load_role_skill_prompt("frontend")
+    assert "# Testing Skill" in load_role_skill_prompt("testing")
+    assert "# Review Skill" in load_role_skill_prompt("review")
 
 
 def test_builtin_guardian_is_deterministic() -> None:
@@ -79,6 +98,41 @@ def test_loader_rejects_duplicate_role_ids(tmp_path: Path) -> None:
     (tmp_path / "b.json").write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(RoleSpecLoadError, match="重复"):
+        load_role_specs_dir(tmp_path)
+
+
+def test_loader_rejects_missing_skill_ref(tmp_path: Path) -> None:
+    payload = {
+        "id": "coder",
+        "usesModel": True,
+        "writes": [],
+        "reads": [],
+        "tools": [],
+        "transitions": [],
+        "skills": [{"id": "missing-skill", "scope": "role"}],
+    }
+    (tmp_path / "coder.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RoleSkillLoadError, match="Skill 不存在"):
+        load_role_specs_dir(tmp_path)
+
+
+def test_loader_rejects_duplicate_skill_refs(tmp_path: Path) -> None:
+    payload = {
+        "id": "coder",
+        "usesModel": True,
+        "writes": [],
+        "reads": [],
+        "tools": [],
+        "transitions": [],
+        "skills": [
+            {"id": "frontend", "scope": "role"},
+            {"id": "frontend", "scope": "role"},
+        ],
+    }
+    (tmp_path / "coder.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RoleSkillLoadError, match="重复声明 Skill"):
         load_role_specs_dir(tmp_path)
 
 

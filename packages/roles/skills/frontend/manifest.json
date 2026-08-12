@@ -1,0 +1,39 @@
+{
+  "id": "frontend",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["coder", "helper"],
+  "description": "实现和调整桌面端、Web 前端或 React/TypeScript UI 时使用的内置 Skill。",
+  "inputs": {
+    "task": "WorkPacket 或需求上下文",
+    "state": "项目状态快照",
+    "files": "授权前端文件"
+  },
+  "outputs": {
+    "diff": "实现变更",
+    "tests": "类型检查或前端测试结果",
+    "notes": "实现说明"
+  },
+  "preconditions": [
+    "任务涉及 UI、React、TypeScript、桌面端视图、样式或交互"
+  ],
+  "failure": {
+    "timeoutSeconds": 180,
+    "onError": "report_and_continue",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R1",
+    "tools": ["read_file", "write_file", "run_tests", "create_diff"],
+    "readPaths": ["packages/desktop/**", "packages/contracts/**", "docs/adr/**"],
+    "writePaths": ["packages/desktop/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

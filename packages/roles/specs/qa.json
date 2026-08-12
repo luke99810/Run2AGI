@@ -14,5 +14,8 @@
     "defaultModel": "qwen-plus-2025-07-14",
     "defaultEffort": "high",
     "mustDifferFrom": ["coder"]
-  }
+  },
+  "skills": [
+    { "id": "testing", "scope": "role", "state": "active" }
+  ]
 }

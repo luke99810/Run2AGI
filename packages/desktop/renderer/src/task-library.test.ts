@@ -3,6 +3,7 @@ import {
   createTaskSession,
   historyForAgent,
   searchTaskSessions,
+  skillOptionsFromRoles,
   taskDraftScope,
   taskRequestsValidation,
   toggleSelection,
@@ -49,6 +50,36 @@ describe('task library', () => {
   it('toggles resource ids without duplicates', () => {
     expect(toggleSelection(['git'], 'browser')).toEqual(['git', 'browser'])
     expect(toggleSelection(['git', 'browser'], 'git')).toEqual(['browser'])
+  })
+
+  it('derives available Skill options from projected RoleSpec bindings', () => {
+    expect(skillOptionsFromRoles([
+      {
+        id: 'coder',
+        usesModel: true,
+        writes: [],
+        reads: [],
+        tools: [],
+        transitions: [],
+        skills: [
+          { id: 'frontend', scope: 'role', state: 'active' },
+          { id: 'testing', scope: 'role', state: 'active' }
+        ]
+      },
+      {
+        id: 'reviewer',
+        usesModel: true,
+        writes: [],
+        reads: [],
+        tools: [],
+        transitions: [],
+        skills: [{ id: 'review', scope: 'role', state: 'active' }]
+      }
+    ])).toEqual([
+      expect.objectContaining({ id: 'frontend', availability: 'available', detail: 'B RoleSpec 已绑定：coder' }),
+      expect.objectContaining({ id: 'review', availability: 'available', detail: 'B RoleSpec 已绑定：reviewer' }),
+      expect.objectContaining({ id: 'testing', availability: 'available', detail: 'B RoleSpec 已绑定：coder' })
+    ])
   })
 
   it('only enables integration and validation for an explicit request', () => {

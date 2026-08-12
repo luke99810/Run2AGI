@@ -14,11 +14,14 @@ from pydantic import ValidationError
 
 __all__ = [
     "RolePromptLoadError",
+    "RoleSkillLoadError",
     "RoleSpecLoadError",
     "default_prompts_dir",
+    "default_skills_dir",
     "default_specs_dir",
     "load_builtin_role_specs",
     "load_role_prompt",
+    "load_role_skill_prompt",
     "load_role_spec_file",
     "load_role_specs_dir",
 ]
@@ -32,6 +35,10 @@ class RolePromptLoadError(ValueError):
     """RoleSpec.promptRef 无法解析或读取。"""
 
 
+class RoleSkillLoadError(ValueError):
+    """RoleSpec.skills 无法解析或读取。"""
+
+
 def default_specs_dir() -> Path:
     """仓库内置 RoleSpec 目录。"""
     return Path(__file__).resolve().parents[1] / "specs"
@@ -40,6 +47,11 @@ def default_specs_dir() -> Path:
 def default_prompts_dir() -> Path:
     """仓库内置角色 prompt 目录。"""
     return Path(__file__).resolve().parents[1] / "prompts"
+
+
+def default_skills_dir() -> Path:
+    """仓库内置 Skill 目录。"""
+    return Path(__file__).resolve().parents[1] / "skills"
 
 
 def load_role_prompt(spec: RoleSpec, prompts_dir: Path | str | None = None) -> str | None:
@@ -57,6 +69,21 @@ def load_role_prompt(spec: RoleSpec, prompts_dir: Path | str | None = None) -> s
         return prompt_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RolePromptLoadError(f"无法读取 RoleSpec[{spec.id}] prompt: {prompt_path}") from exc
+
+
+def load_role_skill_prompt(skill_id: str, skills_dir: Path | str | None = None) -> str:
+    """读取 RoleSpec.skills 指向的 Skill 正文。
+
+    Skill 进入 PromptBundle 时读取的是 SKILL.md, 不是 manifest.json。manifest 用于登记
+    元数据; SKILL.md 才是 Worker 能实际执行的能力说明。因此引用存在但正文缺失时必须
+    fail-closed, 避免 UI 显示“已接入”而运行时没有任何 Skill 指令。
+    """
+    skill_dir = _resolve_skill_dir(skill_id, skills_dir or default_skills_dir())
+    skill_prompt_path = skill_dir / "SKILL.md"
+    try:
+        return skill_prompt_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RoleSkillLoadError(f"无法读取 Skill[{skill_id}] 正文: {skill_prompt_path}") from exc
 
 
 def load_role_spec_file(path: Path | str) -> RoleSpec:
@@ -90,6 +117,7 @@ def load_role_specs_dir(path: Path | str) -> tuple[RoleSpec, ...]:
     specs_dir = Path(path)
     specs = tuple(load_role_spec_file(p) for p in sorted(specs_dir.glob("*.json")))
     _reject_duplicate_roles(specs)
+    _validate_skill_refs(specs, default_skills_dir())
     return specs
 
 
@@ -110,6 +138,52 @@ def _reject_duplicate_roles(specs: tuple[RoleSpec, ...]) -> None:
         if spec.id in seen:
             raise RoleSpecLoadError(f"RoleSpec 重复定义: {spec.id}")
         seen.add(spec.id)
+
+
+def _validate_skill_refs(specs: tuple[RoleSpec, ...], skills_dir: Path) -> None:
+    for spec in specs:
+        if spec.skills is None:
+            continue
+        seen: set[str] = set()
+        for skill in spec.skills:
+            if skill.id in seen:
+                raise RoleSkillLoadError(f"RoleSpec[{spec.id}] 重复声明 Skill: {skill.id}")
+            seen.add(skill.id)
+            _load_skill_manifest(skills_dir, skill.id)
+            load_role_skill_prompt(skill.id, skills_dir)
+
+
+def _load_skill_manifest(skills_dir: Path, skill_id: str) -> dict[str, object]:
+    path = _resolve_skill_dir(skill_id, skills_dir) / "manifest.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RoleSkillLoadError(f"RoleSpec 引用的 Skill 不存在: {skill_id}") from exc
+    except json.JSONDecodeError as exc:
+        raise RoleSkillLoadError(f"Skill manifest 不是合法 JSON: {path}") from exc
+    if not isinstance(raw, dict):
+        raise RoleSkillLoadError(f"Skill manifest 必须是对象: {path}")
+    if raw.get("id") != skill_id:
+        raise RoleSkillLoadError(f"Skill manifest id 与目录名不一致: {path}")
+    return raw
+
+
+def _resolve_skill_dir(skill_id: str, skills_dir: Path | str) -> Path:
+    ref = Path(skill_id)
+    if ref.is_absolute():
+        raise RoleSkillLoadError(f"Skill id 不允许使用绝对路径: {skill_id!r}")
+    if not skill_id or len(ref.parts) != 1 or any(part in {"", ".", ".."} for part in ref.parts):
+        raise RoleSkillLoadError(f"Skill id 不允许路径穿越或空路径片段: {skill_id!r}")
+
+    root = Path(skills_dir)
+    path = root / skill_id
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise RoleSkillLoadError(f"Skill 必须位于 skills/ 下: {skill_id!r}") from exc
+    if not path.is_dir():
+        raise RoleSkillLoadError(f"RoleSpec 引用的 Skill 不存在: {skill_id}")
+    return path
 
 
 def _resolve_prompt_ref(prompt_ref: str, prompts_dir: Path | str) -> Path:

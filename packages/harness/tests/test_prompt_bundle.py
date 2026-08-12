@@ -131,6 +131,50 @@ def test_prompt_bundle_includes_rolespec_prompt_ref(tmp_path: Path) -> None:
     assert "Coder Prompt" in bundle.system
 
 
+def test_prompt_bundle_includes_active_role_skills(tmp_path: Path) -> None:
+    coder_spec = load_role_spec_file(default_specs_dir() / "coder.json")
+
+    bundle = write_worker_prompt_bundle(
+        request=request(tmp_path / "worker", role="coder"),
+        role_spec=coder_spec,
+        evidence_dir=tmp_path / "evidence",
+    )
+
+    assert "## Active Skills" in bundle.system
+    assert "### frontend" in bundle.system
+    assert "# Frontend Skill" in bundle.system
+    assert "### testing" in bundle.system
+    assert "# Testing Skill" in bundle.system
+
+    manifest = json.loads(
+        (tmp_path / "evidence" / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["skill_refs"] == ["frontend", "testing"]
+
+
+def test_prompt_bundle_excludes_inactive_role_skills(tmp_path: Path) -> None:
+    spec = RoleSpec(
+        id="coder",
+        summary="write code",
+        usesModel=True,
+        writes=("workspace/**",),
+        reads=("packages/contracts/**",),
+        tools=("read_file", "write_file"),
+        transitions=(),
+        skills=(
+            {"id": "frontend", "scope": "role", "state": "candidate"},
+            {"id": "testing", "scope": "role", "state": "active"},
+        ),
+    )
+
+    bundle = assemble_worker_prompt_bundle(request(tmp_path / "worker", role="coder"), spec)
+
+    assert "### testing" in bundle.system
+    assert "# Testing Skill" in bundle.system
+    assert "### frontend" not in bundle.system
+    assert "# Frontend Skill" not in bundle.system
+
+
 def test_prompt_bundle_loader_rejects_digest_mismatch(tmp_path: Path) -> None:
     write_worker_prompt_bundle(
         request=request(tmp_path / "worker"),

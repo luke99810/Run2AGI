@@ -33,6 +33,19 @@
 | `prompts/` | 角色提示词。可以迭代，但不承载硬约束 |
 | `skills/` | Skill 定义。五态状态机 + 三级作用域 |
 
+### 内置 Skills
+
+| Skill | 绑定角色 | 用途 |
+|---|---|---|
+| `frontend` | coder · helper | React / TypeScript / 桌面端 UI 实现与验证 |
+| `testing` | qa · coder · integrator · helper | 验收测试、回归验证、绿线证据 |
+| `review` | reviewer · integrator · guardian | 对抗评审、证据审计、边界检查 |
+
+每个 Skill 都有 `manifest.json` 与 `SKILL.md`。RoleSpec 只引用 Skill id、scope、state；
+loader 会校验引用的 Skill manifest 必须存在、id 与目录名一致，且 `SKILL.md` 可读。
+`PromptBundle` 只注入 state 为空或 `active` 的 Skill 正文。这样 C 的 Skills 面板从项目
+RoleSpec 派生选项时，背后有 B 的真源文件和运行时输入链路，而不是静态字符串。
+
 ### RoleSpec 派生四处
 
 ```

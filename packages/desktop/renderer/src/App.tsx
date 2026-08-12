@@ -23,6 +23,7 @@ import {
   loadWorkbenchPreferences,
   saveTaskSessions,
   saveWorkbenchPreferences,
+  skillOptionsFromRoles,
   taskDraftScope,
   taskRequestsValidation,
   updateTaskFromDraft,
@@ -80,6 +81,7 @@ export function App(): ReactNode {
   const activeTask = sourceTasks.find((task) => task.id === activeTaskId)
   const validationEnabled = activeTask !== undefined && taskRequestsValidation(activeTask)
   const visibleWarnings = warningsForDisplay(desktop.snapshot?.warnings ?? [])
+  const skillOptions = skillOptionsFromRoles(desktop.snapshot?.roles)
 
   useEffect(() => {
     saveTaskSessions(tasks)
@@ -249,6 +251,7 @@ export function App(): ReactNode {
           task={activeTask}
           draftScope={taskDraftScope(activeTask)}
           taskHistory={historyForAgent(sourceTasks, activeTask.id)}
+          skillOptions={skillOptions}
           onTaskDraftChange={(text) => updateTask(activeTask.id, (task) => updateTaskFromDraft(task, text))}
           onTaskAttachmentNamesChange={(attachmentNames) => updateTask(activeTask.id, (task) => ({ ...task, attachmentNames, updatedAt: new Date().toISOString() }))}
           onTaskContextChange={(context: TaskContextSelection) => updateTask(activeTask.id, (task) => ({ ...task, context, updatedAt: new Date().toISOString() }))}
@@ -306,7 +309,7 @@ export function App(): ReactNode {
     case 'plugins':
     case 'knowledge':
     case 'skills':
-      view = <ResourceLibraryView kind={navigation} task={activeTask} onContextChange={updateActiveContext} />
+      view = <ResourceLibraryView kind={navigation} task={activeTask} skillOptions={skillOptions} onContextChange={updateActiveContext} />
       break
     case 'mcp':
       view = <McpView services={[]} />
