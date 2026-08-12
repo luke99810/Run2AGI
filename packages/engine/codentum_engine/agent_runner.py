@@ -52,7 +52,7 @@ from codentum_contracts.interfaces import (
 from codentum_contracts.state import EvidenceRef
 from codentum_harness.prompt_bundle import load_worker_prompt_bundle
 
-from .acceptance import _split_command
+from .acceptance import split_command, vacuity_check
 from .tools import ToolExecutor, tool_schemas_for
 
 __all__ = ["AgentRunnerConfig", "build_agent_runner"]
@@ -143,15 +143,42 @@ class _AgentRun:
                 self._req.role, self._req.routing, self._req.budget.limit_cny
             )
             for turn in range(1, self._config.max_turns + 1):
-                response = await self._invoke_with_retry(
-                    session,
-                    ModelRequest(
-                        system=prompt.system,
-                        messages=tuple(messages),
-                        effort=self._req.routing.effort,
-                        tools=tools,
-                    ),
-                )
+                try:
+                    response = await self._invoke_with_retry(
+                        session,
+                        ModelRequest(
+                            system=prompt.system,
+                            messages=tuple(messages),
+                            effort=self._req.routing.effort,
+                            tools=tools,
+                        ),
+                    )
+                except ValueError as exc:
+                    # ★ 工具调用的参数被**截断**（输出超长），JSON 不完整。
+                    #
+                    #   2026-08-12 实测：模型写一个较大的测试文件时，
+                    #   arguments 在 `result = add_subscription(` 处断掉。
+                    #   这不是解析器过严 —— JSON 是真的不完整，救不回来。
+                    #
+                    #   但模型自己能修：告诉它「上次被截断了，写小一点」。
+                    #   直接判失败等于把一个可恢复的情况当成终局。
+                    if "JSON object text" not in str(exc) or turn >= self._config.max_turns:
+                        raise
+                    logger.warning("工具调用参数被截断，回推让模型重写（第 %d 轮）", turn)
+                    messages.append(
+                        ModelMessage(role="assistant", content="（上一次工具调用输出被截断）")
+                    )
+                    messages.append(
+                        ModelMessage(
+                            role="user",
+                            content=(
+                                "[系统] 你上一次的工具调用**参数被截断了**（单次输出超长）。"
+                                "请重新调用，并把内容写短一些 —— "
+                                "例如一次只写一个文件、去掉冗长注释。"
+                            ),
+                        )
+                    )
+                    continue
                 self._spent = max(self._spent, _session_spent(session))
                 self._record_turn(turn, response)
 
@@ -284,7 +311,19 @@ class _AgentRun:
             "2. **把代码写在回复正文里不算交付。** 只有 write_file 写进工作区的文件才算。\n"
             "3. 缺什么就自己补 —— 例如验收要跑测试而工作区里没有测试文件，"
             "那就是你还没写完，不是环境有问题。\n"
-            "4. 规格已经完整，**不需要再向任何人确认** —— 直接把它做完。\n"
+            "4. 规格已经完整，**不需要再向任何人确认** —— 直接把它做完。\n\n"
+            "### 路径（这里最容易出错，看清楚）\n\n"
+            "- 你的**当前工作目录就是工作区根**。`write_file` / `read_file` 的 path "
+            "都相对于它。\n"
+            "- 验收谓词也在这个根目录下执行。所以需求说「放在 workspace/ 下」时，"
+            "文件的真实路径是 `workspace/xxx.py`。\n"
+            "- **用 run_tests 时路径同样要带 workspace/**，例如 "
+            '`["python","-m","pytest","workspace","-q"]`。\n'
+            "- 找不到文件时先用 `list_files` 看一眼，**不要猜**。\n\n"
+            "### 收尾\n\n"
+            "验收谓词一过就**直接回复完成、不要再调工具**。\n"
+            "反复跑 `git diff`、重复确认之类的动作只会耗光轮数 —— "
+            "轮数用尽会被判失败，哪怕东西已经做对了。\n"
         )
 
     # ── 工具调用 ────────────────────────────────────────────
@@ -295,7 +334,7 @@ class _AgentRun:
         chunks: list[str] = []
         for call in response.tool_calls:
             result = self._tools.execute(call.name, dict(call.input))
-            self._transcript.append(
+            self._append_transcript(
                 {
                     "tool": call.name,
                     "input": dict(call.input),
@@ -315,7 +354,7 @@ class _AgentRun:
           （改实现、换命令）比不动更糟。
         """
 
-        command = _split_command(self._acceptance_predicate)
+        command = split_command(self._acceptance_predicate)
         if not command:
             return None
         try:
@@ -336,7 +375,22 @@ class _AgentRun:
             return None
 
         if proc.returncode == 0:
-            return None
+            # ★ 谓词过了还不够 —— **自验必须用和门禁一样的判据**。
+            #
+            #   2026-08-12 实测：模型被推回去补测试后，写了一句 `assert True`，
+            #   谓词退出码 0，自验放行 —— 而门禁那边的空测试检查会拒绝它。
+            #   模型在对着一个**比门禁更弱的标准**优化，于是永远差一层。
+            #
+            #   判据不一致比判据宽松更糟：它让模型以为自己做完了。
+            vacuous = vacuity_check(self._workspace, command)
+            if vacuous is None:
+                return None
+            return (
+                f"[自动验收检查] 你还不能收尾。\n\n{vacuous}\n\n"
+                "请把测试改成真正调用被测代码、并断言它的返回值 —— "
+                "例如 `from subscriptions import monthly_total` 之后 "
+                "`assert monthly_total([]) == 0.0`。"
+            )
 
         tail = (proc.stdout + proc.stderr).strip()[-1500:]
         return (
@@ -403,7 +457,7 @@ class _AgentRun:
         )
 
     def _record_turn(self, turn: int, response: ModelResponse) -> None:
-        self._transcript.append(
+        self._append_transcript(
             {
                 "turn": turn,
                 "stop_reason": response.stop_reason,
@@ -413,6 +467,21 @@ class _AgentRun:
                 ],
             }
         )
+
+    def _append_transcript(self, entry: dict[str, Any]) -> None:
+        """追加一条轨迹并**立刻落盘**。
+
+        ★ 原来只在收尾时写一次，于是跑的过程中根本看不到模型在干什么 ——
+          一次运行要 2–5 分钟，出问题时只能等它结束才知道原因。
+          这跟 2026-08-11 那个 `_drain_stderr` 同类：
+          **要能在出问题的当下取证，而不是事后。**
+
+        ★ 每条都重写整个文件，效率不高但轨迹很短（十几条），
+          换来的是任何时刻 `cat` 一下就能看到进度。
+        """
+
+        self._transcript.append(entry)
+        self._write_transcript()
 
     def _write_transcript(self) -> None:
         self._model_dir.mkdir(parents=True, exist_ok=True)

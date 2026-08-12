@@ -52,6 +52,13 @@ credentials/
 /.codentum/mcp/
 /.codentum/roles/
 /.codentum/skills/
+# ★ 2026-08-12 补：引擎跑在**本仓库自身**上时会生成这两个目录
+#   （调试时把 project_root 指向了 codentum/），而它们没被上面的清单覆盖，
+#   于是 `git status` 一直挂着两个未跟踪文件。
+#   把某次调试跑出来的 packet 提进库，别人 clone 下来会多出一个
+#   莫名其妙的历史任务 —— 而且它看起来像真的。
+/.codentum/packets/
+/.codentum/requirements/
 *.local
 *.local.*
 

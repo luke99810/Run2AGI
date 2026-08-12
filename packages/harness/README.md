@@ -60,6 +60,8 @@ Skill，以及这些 Skill 来自项目共享副本还是内置源。
 
 `ModelGatewayRunner` 则读取同一份 Prompt Bundle，经冻结的 `ModelGateway` 发起一次模型调用，
 并把模型响应、usage、tool_calls 与 prompt digest 写入 `model/` 证据目录。
+百炼默认价格表来自 `codentum_harness.model_gateway.bailian_pricing`，以人民币/百万 Token
+归因；缺价格或超出已审计价格阶梯时 fail-closed，不把真实调用记成 0 成本。
 
 `TeamWorkerRuntime` 目前是 AgentTeams 适配的最小壳：从同一个 `SpawnRequest` 写 manifest /
 checkpoint-0 / Prompt Bundle，再通过官方 `agt` CLI 创建并检查 AgentTeams Worker 资源。

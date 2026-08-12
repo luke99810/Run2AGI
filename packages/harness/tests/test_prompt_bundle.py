@@ -168,7 +168,7 @@ def test_prompt_bundle_can_read_active_skills_from_project_shared_space(tmp_path
         reads=("packages/contracts/**",),
         tools=("read_file", "write_file"),
         transitions=(),
-        skills=({"id": "frontend", "scope": "role", "state": "active"},),
+        skills=(RoleSkill(id="frontend", scope="role", state="active"),),
     )
 
     bundle = write_worker_prompt_bundle(

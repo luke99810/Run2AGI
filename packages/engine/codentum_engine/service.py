@@ -64,10 +64,12 @@ from codentum_control_plane.reconcile import ReconcileLoop
 from codentum_control_plane.state_machine import TransitionTable
 from codentum_delivery.protocol import CAPABILITY_NAMES, PROTOCOL_VERSION, JsonValue
 from codentum_harness.context_broker import ContextCandidate
+from codentum_harness.model_gateway import audited_bailian_pricing
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
     ModelGatewayConfig,
     RunnerConfig,
+    TokenPricingConfig,
     build_local_worker_runtime,
     build_model_gateway,
 )
@@ -588,13 +590,11 @@ class EngineService:
             return None
 
         gateway_config = ModelGatewayConfig.bailian(
-            pricing={},
+            pricing={
+                model: TokenPricingConfig.from_pricing(price)
+                for model, price in audited_bailian_pricing().items()
+            },
             api_key_env=self._key_env,
-            # ★ 价格表证据还没落地（待办 7d）。显式放行 unknown pricing，
-            #   代价是**成本数字不能当证据** —— 桌面端 Cost 视图会显示 0，
-            #   那是「不知道」不是「没花钱」。偷偷塞个假价格会让那个 0
-            #   变成一个看起来可信的数。
-            require_pricing=False,
         )
 
         if self.config.enable_tool_loop:

@@ -8,12 +8,15 @@ import pytest
 from codentum_contracts import ModelRouting, Usage
 from codentum_contracts.interfaces import ModelMessage, ModelRequest, ToolSchema
 from codentum_harness.model_gateway import (
+    BAILIAN_PRICING_SOURCE_URL,
     AnthropicGateway,
     MissingModelPricingError,
     ModelGatewayPolicy,
     ModelIsolationError,
+    ModelPricingRangeError,
     OpenAICompatibleGateway,
     TokenPricing,
+    audited_bailian_pricing,
 )
 from codentum_roles import load_builtin_role_specs
 
@@ -69,6 +72,34 @@ def test_openai_compatible_gateway_invokes_chat_completion_and_prices_usage() ->
     ledger = asyncio.run(gateway.ledger())
     assert ledger.total_cny == pytest.approx(0.00491)
     assert ledger.by_role == {"coder": pytest.approx(0.00491)}
+
+
+def test_audited_bailian_pricing_covers_current_routed_models() -> None:
+    pricing = audited_bailian_pricing()
+
+    assert BAILIAN_PRICING_SOURCE_URL == "https://help.aliyun.com/zh/model-studio/model-pricing"
+    assert pricing["qwen-coder-plus-1106"].cost_cny(input_tokens=1000, output_tokens=2000) == pytest.approx(
+        0.0175
+    )
+    assert pricing["qwen-plus-2025-11-05"].cost_cny(input_tokens=1000, output_tokens=2000) == pytest.approx(
+        0.0048
+    )
+    assert pricing["qwen-plus-2025-07-14"].cost_cny(input_tokens=1000, output_tokens=2000) == pytest.approx(
+        0.0048
+    )
+    assert pricing["qwen3.6-plus"].cost_cny(input_tokens=1000, output_tokens=2000) == pytest.approx(0.026)
+
+
+def test_audited_bailian_pricing_fails_closed_outside_audited_token_tier() -> None:
+    price = audited_bailian_pricing()["qwen-plus-2025-11-05"]
+
+    with pytest.raises(ModelPricingRangeError, match="exceeds audited pricing range"):
+        price.cost_cny(input_tokens=128_001, output_tokens=1)
+
+    flat_version_price = audited_bailian_pricing()["qwen-plus-2025-07-14"]
+    assert flat_version_price.cost_cny(input_tokens=128_001, output_tokens=1) == pytest.approx(
+        0.1024028
+    )
 
 
 def test_openai_compatible_gateway_parses_tool_calls() -> None:
