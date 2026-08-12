@@ -12,6 +12,7 @@ import type {
   WorkPacket
 } from '@codentum/contracts'
 import type {
+  McpServiceProjection,
   SnapshotSourceDescriptor,
   StateSnapshot,
   WorkerEventProjection,
@@ -260,6 +261,7 @@ async function readDirectorySnapshot(
   const evidence = parseJsonCollection(context, 'evidence/', isEvidence, true, true)
   const knowledge = parseKnowledge(context)
   const roles = parseJsonCollection(context, 'roles/', isRoleSpec, false)
+  const mcpServices = parseJsonCollection(context, 'mcp/', isMcpServiceProjection, false)
   const workers = parseWorkers(context, staleAfterMs)
 
   checkGraphPacketCoherence(context, graph, packets)
@@ -278,6 +280,7 @@ async function readDirectorySnapshot(
       evidence,
       knowledge,
       roles,
+      mcpServices,
       workers,
       warnings: unique(context.warnings)
     }
@@ -334,6 +337,7 @@ async function scanStateDirectory(stateDirectory: string): Promise<StateScan> {
   await scanFlatJsonDirectory(stateDirectory, 'packets', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'knowledge', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'roles', directories, warnings, addFile)
+  await scanFlatJsonDirectory(stateDirectory, 'mcp', directories, warnings, addFile)
 
   const evidencePath = join(stateDirectory, 'evidence')
   const evidenceStat = await safeLstat(evidencePath)
@@ -1089,6 +1093,31 @@ function isRoleSpec(value: unknown): value is RoleSpec {
     isStringArray(value['reads']) &&
     isStringArray(value['tools']) &&
     Array.isArray(value['transitions'])
+  )
+}
+
+function isMcpServiceProjection(value: unknown): value is McpServiceProjection {
+  return (
+    isRecord(value) &&
+    value['schemaVersion'] === 1 &&
+    typeof value['id'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    (value['transport'] === 'stdio' || value['transport'] === 'http' || value['transport'] === 'sse') &&
+    (
+      value['status'] === 'connected' ||
+      value['status'] === 'connecting' ||
+      value['status'] === 'disconnected' ||
+      value['status'] === 'error'
+    ) &&
+    (
+      value['authentication'] === 'not_required' ||
+      value['authentication'] === 'configured' ||
+      value['authentication'] === 'missing' ||
+      value['authentication'] === 'unknown'
+    ) &&
+    isStringArray(value['tools']) &&
+    (value['configSource'] === undefined || typeof value['configSource'] === 'string') &&
+    (value['error'] === undefined || typeof value['error'] === 'string')
   )
 }
 

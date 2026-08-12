@@ -262,7 +262,11 @@ class TeamWorkerRuntime:
         self._sessions[worker_id] = session
         session.write_manifest(workspace, worker_runtime=self._worker_runtime)
         checkpoint = session.write_checkpoint0(prepared.context)
-        session.write_prompt_bundle(prepared.role_spec, prepared.context)
+        session.write_prompt_bundle(
+            prepared.role_spec,
+            prepared.context,
+            skills_dir=self._shared_skills_dir(),
+        )
         session.append(
             "started",
             {
@@ -295,12 +299,7 @@ class TeamWorkerRuntime:
             session.write_status(status)
             session.append(
                 "progress",
-                {
-                    "agentteams_worker": worker_name,
-                    "phase": status.phase,
-                    "container_state": status.container_state,
-                    "room_id": status.room_id,
-                },
+                _agentteams_status_event_payload(status, worker_name=worker_name),
             )
         except Exception as exc:
             session.write_error(exc)
@@ -310,7 +309,15 @@ class TeamWorkerRuntime:
                 evidence=(EvidenceRef("file:agentteams/error.json"),),
                 spent_cny=0.0,
             )
-            session.append("finished", {"status": session.outcome.status, "reason": "provisioning_failed"})
+            session.append(
+                "finished",
+                _agentteams_error_event_payload(
+                    exc,
+                    worker_name=worker_name,
+                    status=session.outcome.status,
+                    reason="provisioning_failed",
+                ),
+            )
         return handle
 
     async def events(self, handle: WorkerHandle, since_seq: int = 0) -> AsyncIterator[WorkerEvent]:
@@ -327,6 +334,10 @@ class TeamWorkerRuntime:
         try:
             status = await asyncio.to_thread(self._client.worker_status, session.agentteams_worker)
             session.write_status(status)
+            session.append(
+                "progress",
+                _agentteams_status_event_payload(status, worker_name=session.agentteams_worker),
+            )
         except Exception as exc:
             session.write_error(exc)
             session.outcome = WorkerFailed(
@@ -335,7 +346,15 @@ class TeamWorkerRuntime:
                 evidence=(EvidenceRef("file:agentteams/error.json"),),
                 spent_cny=0.0,
             )
-            session.append("finished", {"status": session.outcome.status, "reason": "status_failed"})
+            session.append(
+                "finished",
+                _agentteams_error_event_payload(
+                    exc,
+                    worker_name=session.agentteams_worker,
+                    status=session.outcome.status,
+                    reason="status_failed",
+                ),
+            )
             return session.outcome
 
         evidence = (EvidenceRef("file:agentteams/status.json"),)
@@ -354,7 +373,15 @@ class TeamWorkerRuntime:
             evidence=evidence,
             spent_cny=0.0,
         )
-        session.append("finished", {"status": session.outcome.status, "reason": "team_dispatch_missing"})
+        session.append(
+            "finished",
+            {
+                **_agentteams_status_event_payload(status, worker_name=session.agentteams_worker),
+                "status": session.outcome.status,
+                "reason": "team_dispatch_missing",
+                "moduleState": "failed",
+            },
+        )
         return session.outcome
 
     async def abort(self, handle: WorkerHandle, reason: AbortReason) -> None:
@@ -376,6 +403,10 @@ class TeamWorkerRuntime:
         if spec is None:
             raise RuntimeError(f"RoleSpec is not loaded for role: {role}")
         return spec
+
+    def _shared_skills_dir(self) -> Path | None:
+        skills_dir = self._repo_root / ".codentum" / "skills" / "shared"
+        return skills_dir if skills_dir.is_dir() else None
 
     def _get(self, handle: WorkerHandle) -> _TeamSession:
         session = self._sessions.get(handle.worker_id)
@@ -436,12 +467,15 @@ class _TeamSession:
         self,
         role_spec: RoleSpec,
         context: ContextBundle | None,
+        *,
+        skills_dir: Path | str | None = None,
     ) -> WorkerPromptBundle:
         return write_worker_prompt_bundle(
             request=self.request,
             role_spec=role_spec,
             evidence_dir=self.evidence_dir,
             context=context,
+            skills_dir=skills_dir,
         )
 
     def write_status(self, status: AgentTeamsWorkerStatus) -> None:
@@ -488,6 +522,64 @@ def _worker_name(prefix: str, role: RoleId, packet_id: str, attempt: int) -> str
 
 def _identity(role: RoleId, packet_id: str) -> str:
     return f"Codentum {role} worker for packet {packet_id}."
+
+
+def _agentteams_status_event_payload(
+    status: AgentTeamsWorkerStatus,
+    *,
+    worker_name: str,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "runtime_mode": "agentteams",
+        "moduleId": "agentteams.worker",
+        "moduleLabel": "AgentTeams Worker",
+        "moduleState": _agentteams_module_state(status.phase),
+        "agentteams_worker": worker_name,
+        "phase": status.phase,
+        "model": status.model,
+        "runtime": status.runtime,
+        "status_ref": "file:agentteams/status.json",
+    }
+    optional = {
+        "container_state": status.container_state,
+        "matrix_user_id": status.matrix_user_id,
+        "room_id": status.room_id,
+        "message": status.message,
+    }
+    payload.update({key: value for key, value in optional.items() if value is not None})
+    return payload
+
+
+def _agentteams_error_event_payload(
+    exc: Exception,
+    *,
+    worker_name: str,
+    status: str,
+    reason: str,
+) -> dict[str, object]:
+    return {
+        "runtime_mode": "agentteams",
+        "moduleId": "agentteams.worker",
+        "moduleLabel": "AgentTeams Worker",
+        "moduleState": "failed",
+        "agentteams_worker": worker_name,
+        "status": status,
+        "reason": reason,
+        "error_type": type(exc).__name__,
+        "error_detail": str(exc),
+        "error_ref": "file:agentteams/error.json",
+    }
+
+
+def _agentteams_module_state(phase: str) -> str:
+    normalized = phase.lower()
+    if normalized in {"running", "ready"}:
+        return "running"
+    if normalized in {"failed", "error"}:
+        return "failed"
+    if normalized in {"pending", "creating", "initializing", "starting"}:
+        return "waiting"
+    return "unknown"
 
 
 def _duration_arg(seconds: float) -> str:

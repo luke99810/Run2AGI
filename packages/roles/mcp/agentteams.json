@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "agentteams",
+  "name": "AgentTeams 编排",
+  "transport": "http",
+  "status": "disconnected",
+  "authentication": "missing",
+  "tools": ["create_worker", "inspect_worker", "collect_result"],
+  "configSource": "packages/roles/mcp/agentteams.json",
+  "error": "需要本机 AgentTeams endpoint 与凭据后才能连接；当前只作为 Team-mode 能力清单投影。"
+}

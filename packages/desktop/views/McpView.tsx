@@ -1,17 +1,6 @@
 import type { ReactNode } from 'react'
 import { EmptyState, Icon, PageHeader } from '../panels/Common'
-
-export type McpServiceStatus = 'connected' | 'connecting' | 'disconnected' | 'error'
-
-export interface McpServiceProjection {
-  readonly id: string
-  readonly name: string
-  readonly transport: 'stdio' | 'http' | 'sse'
-  readonly status: McpServiceStatus
-  readonly authentication: 'not_required' | 'configured' | 'missing' | 'unknown'
-  readonly tools: readonly string[]
-  readonly error?: string
-}
+import type { McpServiceProjection, McpServiceStatus } from '../shared/protocol'
 
 const STATUS_LABELS: Readonly<Record<McpServiceStatus, string>> = {
   connected: '已连接',
@@ -32,6 +21,9 @@ export function McpView({ services }: { readonly services: readonly McpServicePr
   const toolCount = services
     .filter((service) => service.status === 'connected')
     .reduce((total, service) => total + service.tools.length, 0)
+  const configSources = new Set(services.map((service) => service.configSource).filter((source) => source !== undefined))
+  const runtimeLabel = services.length === 0 ? '运行时未提供 MCP 投影' : '运行时已返回 MCP 投影'
+  const configLabel = configSources.size === 0 ? '尚未接入' : `${configSources.size} 个来源`
 
   return (
     <main className="page mcp-page">
@@ -45,7 +37,7 @@ export function McpView({ services }: { readonly services: readonly McpServicePr
         <div><span>服务</span><strong>{services.length}</strong></div>
         <div><span>已连接</span><strong>{connectedCount}</strong></div>
         <div><span>可用工具</span><strong>{toolCount}</strong></div>
-        <div><span>配置来源</span><strong>尚未接入</strong></div>
+        <div><span>配置来源</span><strong>{configLabel}</strong></div>
       </section>
 
       <section className="mcp-service-section" aria-labelledby="mcp-service-heading">
@@ -54,7 +46,7 @@ export function McpView({ services }: { readonly services: readonly McpServicePr
             <span className="section-icon"><Icon name="server" size={19} /></span>
             <div><h2 id="mcp-service-heading">服务</h2><p>状态只来自运行时投影，不由前端推断。</p></div>
           </div>
-          <span className="mcp-runtime-state">运行时未提供 MCP 投影</span>
+          <span className="mcp-runtime-state">{runtimeLabel}</span>
         </header>
 
         {services.length === 0 ? (

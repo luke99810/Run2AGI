@@ -98,6 +98,19 @@ export interface WorkerProjection {
   readonly events: readonly WorkerEventProjection[]
 }
 
+export type McpServiceStatus = 'connected' | 'connecting' | 'disconnected' | 'error'
+
+export interface McpServiceProjection {
+  readonly id: string
+  readonly name: string
+  readonly transport: 'stdio' | 'http' | 'sse'
+  readonly status: McpServiceStatus
+  readonly authentication: 'not_required' | 'configured' | 'missing' | 'unknown'
+  readonly tools: readonly string[]
+  readonly configSource?: string
+  readonly error?: string
+}
+
 export interface StateSnapshot {
   readonly source: SnapshotSourceDescriptor
   readonly revision: string
@@ -109,6 +122,7 @@ export interface StateSnapshot {
   readonly evidence: readonly Evidence[]
   readonly knowledge: KnowledgeFile | null
   readonly roles: readonly RoleSpec[]
+  readonly mcpServices: readonly McpServiceProjection[]
   readonly workers: readonly WorkerProjection[]
   readonly warnings: readonly string[]
 }

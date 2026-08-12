@@ -13,7 +13,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-
 from codentum_delivery.protocol import CAPABILITY_NAMES, validate_handshake, validate_receipt
 from codentum_engine.intake import (
     build_packet_for_requirement,
@@ -125,7 +124,7 @@ def test_state_revision_survives_a_restart(project: Path, fake_key: None) -> Non
 
     first = _service(project)
     before = first.revision
-    first._session.bump()  # noqa: SLF001
+    first._session.bump()
     bumped = first.revision
     assert bumped == before + 1
 
@@ -209,7 +208,7 @@ def test_requirement_reaches_the_model_context(project: Path, fake_key: None) ->
     request = _Request()
     request.packet_id = packet_id  # type: ignore[attr-defined]
 
-    candidates = service._context_loader(request, service._role_specs[0])  # noqa: SLF001
+    candidates = service._context_loader(request, service._role_specs[0])
     assert len(candidates) == 1
     assert "记账小工具" in candidates[0].text
     # required=True：被 char_budget 裁掉的话，模型又会收到一份没有任务的 prompt
@@ -327,11 +326,16 @@ def test_generated_packet_id_matches_the_frozen_pattern() -> None:
         assert re.fullmatch(r"^wp-[0-9a-z]{6,}$", str(new_packet_id()))
 
 
-def test_placeholder_acceptance_is_manual_not_a_fake_test_predicate() -> None:
-    """★ 操作者提交的是一句话，不是 ACCEPTANCE.md。
+def test_default_acceptance_is_executable_not_a_manual_placeholder() -> None:
+    """★ 验收谓词必须是**能被跑一遍**的，不能是 manual 占位。
 
-    塞一条 `kind=test, predicate=pytest` 会让 I2「验收可判定」在纸面上成立，
-    实际上那条 predicate 从来不会被执行 —— 那是把「可判定」写成了装饰。
+    2026-08-12 实测：模型只写了规格要求的两个文件中的一个（第 5 轮自己承认了），
+    packet 仍被判 accepted —— 因为 `kind: manual` 的谓词永远不会被执行，
+    于是「产生了一条真实证据」就等于「验收通过」。
+
+    ★ 为什么默认跑测试：需求是自由文本，机器判不了「做得对不对」；
+      但「你自己写的测试跑不跑得过」是机器能判的，
+      而且它把举证责任推回给了执行者。
     """
 
     packet = build_packet_for_requirement(
@@ -344,10 +348,29 @@ def test_placeholder_acceptance_is_manual_not_a_fake_test_predicate() -> None:
         budget_cny=1.0,
         acceptance_author="qa",
     )
-    assert packet.acceptance.kind == "manual"
+    assert packet.acceptance.kind == "test", "manual 谓词永远不会被执行"
+    assert packet.acceptance.predicate.split(), "谓词必须是可执行命令"
     # authoredBy 不得等于 packet.role —— 自己给自己定验收即作弊，契约强制
     assert packet.acceptance.authoredBy != packet.role
-    assert "占位" in packet.acceptance.predicate
+
+
+def test_manual_placeholder_is_still_available_and_says_it_needs_a_human() -> None:
+    """★ 保留 manual 那条路：确实无法机器判定时，要如实标成需人工判定，
+    而不是塞一条跑不了的假 test 谓词。"""
+
+    packet = build_packet_for_requirement(
+        packet_id=new_packet_id(),
+        requirement="做个东西",
+        owns_paths=("workspace/",),
+        reads_paths=(),
+        model="qwen-coder-plus-1106",
+        effort="medium",
+        budget_cny=1.0,
+        acceptance_author="qa",
+        executable_acceptance=False,
+    )
+    assert packet.acceptance.kind == "manual"
+    assert "人工判定" in packet.acceptance.predicate
 
 
 def test_acceptance_author_prefers_intake_once_the_rolespec_exists() -> None:
@@ -426,3 +449,119 @@ def test_ensure_state_dir_never_clobbers_existing_state(project: Path, fake_key:
     assert sorted(
         p.name for p in (project / ".codentum" / "packets").glob("*.json")
     ) == packets_before
+
+
+def test_role_specs_are_projected_into_the_project(project: Path, fake_key: None) -> None:
+    """★ 引擎启动就把 B 的 RoleSpec 投影进 `<project>/.codentum/roles/`。
+
+    桌面端「研发团队」页读的是**项目内**的 `roles/`，而真源在
+    `packages/roles/specs/`。两者之间原本没有任何人搬运 ——
+    于是界面显示「系统岗位 11、项目投影 0」：名字对得上，
+    但**不代表这 11 个角色真的被系统加载了**。
+
+    这个搬运归装配点：它是唯一同时知道「RoleSpec 从哪来」
+    和「状态目录在哪」的地方。
+    """
+
+    service = _service(project)
+    roles_dir = project / ".codentum" / "roles"
+    projected = sorted(p.stem for p in roles_dir.glob("*.json"))
+
+    assert projected, "roles/ 是空的，桌面端会显示「项目投影 0」"
+    assert projected == sorted(str(spec.id) for spec in service._role_specs)
+    assert len(projected) >= 11, f"只投影了 {len(projected)} 份，B 已经补齐 11 个角色"
+
+
+def test_role_skills_are_projected_into_project_shared_space(
+    project: Path,
+    fake_key: None,
+) -> None:
+    """★ RoleSpec 只说明“要用哪个 Skill”，共享空间才是 Worker 能读的正文副本。
+
+    C 和 Worker 都不该依赖 `packages/roles/skills/` 这个源码目录。引擎启动时
+    投影到 `.codentum/skills/shared/`，才算进入项目级共享空间。
+    """
+
+    _service(project)
+    shared_dir = project / ".codentum" / "skills" / "shared"
+    projected = sorted(p.name for p in shared_dir.iterdir() if p.is_dir())
+
+    assert projected == [
+        "architecture",
+        "backend",
+        "cost-governance",
+        "debugging",
+        "evolution",
+        "frontend",
+        "integration",
+        "planning",
+        "requirements",
+        "review",
+        "security",
+        "testing",
+    ]
+    assert "# Architecture Skill" in (shared_dir / "architecture" / "SKILL.md").read_text("utf-8")
+    assert "# Backend Skill" in (shared_dir / "backend" / "SKILL.md").read_text("utf-8")
+    assert "# Cost Governance Skill" in (shared_dir / "cost-governance" / "SKILL.md").read_text("utf-8")
+    assert "# Debugging Skill" in (shared_dir / "debugging" / "SKILL.md").read_text("utf-8")
+    assert "# Evolution Skill" in (shared_dir / "evolution" / "SKILL.md").read_text("utf-8")
+    assert "# Frontend Skill" in (shared_dir / "frontend" / "SKILL.md").read_text("utf-8")
+    assert "# Integration Skill" in (shared_dir / "integration" / "SKILL.md").read_text("utf-8")
+    assert "# Planning Skill" in (shared_dir / "planning" / "SKILL.md").read_text("utf-8")
+    assert "# Requirements Skill" in (shared_dir / "requirements" / "SKILL.md").read_text("utf-8")
+    assert "# Review Skill" in (shared_dir / "review" / "SKILL.md").read_text("utf-8")
+    assert "# Security Skill" in (shared_dir / "security" / "SKILL.md").read_text("utf-8")
+    assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text("utf-8")
+
+
+def test_mcp_services_are_projected_into_project_state(
+    project: Path,
+    fake_key: None,
+) -> None:
+    _service(project)
+    mcp_dir = project / ".codentum" / "mcp"
+    projected = sorted(p.name for p in mcp_dir.glob("*.json"))
+
+    assert projected == ["agentteams.json", "browser.json", "filesystem.json", "git.json"]
+    filesystem = json.loads((mcp_dir / "filesystem.json").read_text("utf-8"))
+    agentteams = json.loads((mcp_dir / "agentteams.json").read_text("utf-8"))
+    assert filesystem["status"] == "connected"
+    assert filesystem["tools"] == ["read_file", "write_file", "list_directory"]
+    assert agentteams["status"] == "disconnected"
+    assert agentteams["authentication"] == "missing"
+    assert "error" in agentteams
+
+
+def test_projection_matches_the_source_spec_field_for_field(
+    project: Path, fake_key: None
+) -> None:
+    """★ 投影必须与 B 的源文件逐字段一致 —— 它是副本，不是二次加工。
+
+    只断言「文件存在」是不够的：写出一份**结构合法但内容不对**的副本，
+    桌面端照样能读，只是显示的是假事实。
+    """
+
+    _service(project)
+    source_dir = Path(__file__).resolve().parents[3] / "packages" / "roles" / "specs"
+    for source in sorted(source_dir.glob("*.json")):
+        expected = json.loads(source.read_text("utf-8"))
+        actual = json.loads((project / ".codentum" / "roles" / source.name).read_text("utf-8"))
+        assert actual == expected, f"{source.name} 的投影与源文件不一致"
+
+
+def test_projection_is_refreshed_not_merely_created(project: Path, fake_key: None) -> None:
+    """★ 与 `ensure_state_dir()` 的「只补缺不覆盖」相反：投影必须每次重写。
+
+    投影的语义是「真源的副本」。留着旧副本比缺副本更糟 —— B 改了 RoleSpec
+    而项目里还是上一版时，桌面端会显示一份**看起来正确的过时事实**，
+    而没有任何东西会报错。
+    """
+
+    _service(project)
+    stale = project / ".codentum" / "roles" / "coder.json"
+    stale.write_text('{"id": "coder", "usesModel": false}', encoding="utf-8")
+
+    _service(project)  # 重启
+
+    refreshed = json.loads(stale.read_text("utf-8"))
+    assert refreshed["usesModel"] is True, "旧副本没有被刷新，桌面端会显示过时的角色定义"

@@ -1,0 +1,39 @@
+{
+  "id": "debugging",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["helper", "coder", "integrator"],
+  "description": "诊断失败测试、阻塞 Worker、运行时错误和跨层接缝问题的内置 Skill。",
+  "inputs": {
+    "failure": "失败日志或截图",
+    "state": "项目状态",
+    "diff": "候选变更"
+  },
+  "outputs": {
+    "rootCause": "根因假设与证据",
+    "fixPlan": "修复计划",
+    "verification": "回归验证"
+  },
+  "preconditions": [
+    "任务出现失败、阻塞、UI/运行时不一致或证据缺失"
+  ],
+  "failure": {
+    "timeoutSeconds": 240,
+    "onError": "write_debug_blocker",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R1",
+    "tools": ["read_file", "write_file", "run_tests", "create_diff", "diagnose_blocker", "write_help_report"],
+    "readPaths": ["packages/**", "tests/**", ".codentum/**", "evidence/**", "docs/**"],
+    "writePaths": ["workspace/**", "evidence/helper/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": ["testing"],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

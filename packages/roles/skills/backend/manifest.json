@@ -1,0 +1,39 @@
+{
+  "id": "backend",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["coder", "helper"],
+  "description": "实现 engine、harness、delivery、control-plane 或 Python 后端行为的内置 Skill。",
+  "inputs": {
+    "packet": "WorkPacket",
+    "contracts": "冻结契约和类型",
+    "tests": "相关单测或验收测试"
+  },
+  "outputs": {
+    "diff": "后端实现变更",
+    "tests": "验证结果",
+    "evidence": "可追溯证据"
+  },
+  "preconditions": [
+    "任务涉及 Python 包、协议、运行时、证据、状态或控制逻辑"
+  ],
+  "failure": {
+    "timeoutSeconds": 240,
+    "onError": "write_blocker_report",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R2",
+    "tools": ["read_file", "write_file", "run_tests", "create_diff"],
+    "readPaths": ["packages/**", "tests/**", "docs/adr/**", "fixtures/**"],
+    "writePaths": ["packages/**", "tests/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

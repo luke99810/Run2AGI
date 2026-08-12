@@ -1,3 +1,6 @@
+import type { RoleSpec } from '@codentum/contracts'
+import type { McpServiceProjection } from '../../shared/protocol'
+
 export type TaskSessionStatus = 'draft' | 'submitted'
 export type AccessMode = 'read_only' | 'workspace_write' | 'full_access'
 
@@ -55,7 +58,7 @@ export interface ResourceOption {
 export const PLUGIN_OPTIONS: readonly ResourceOption[] = [
   { id: 'local-files', label: '本地文件', detail: '直接引用原始位置，提交前校验内容', availability: 'available' },
   { id: 'git', label: 'Git', detail: '由 WorkerRuntime 在隔离 worktree 中使用', availability: 'available' },
-  { id: 'browser', label: '浏览器', detail: '等待 B 将浏览器工具加入 ToolSurface', availability: 'pending_runtime' }
+  { id: 'browser', label: '浏览器', detail: '浏览器 MCP 服务尚未连接；不会假装工具已可调用', availability: 'pending_runtime' }
 ]
 
 export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
@@ -65,32 +68,99 @@ export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
 ]
 
 export const SKILL_OPTIONS: readonly ResourceOption[] = [
-  { id: 'requirement-clarify', label: '需求澄清', detail: 'Intake · 需求槽位与假设确认', availability: 'pending_runtime' },
-  { id: 'contract-design', label: '契约设计', detail: 'Architect · API、数据与边界契约', availability: 'pending_runtime' },
-  { id: 'feasibility-probe', label: '可行性探测', detail: 'Architect · 安装、编译与冲突探测', availability: 'pending_runtime' },
-  { id: 'boundary-score', label: '边界评分', detail: 'Architect · 并行潜力与耦合度评估', availability: 'pending_runtime' },
-  { id: 'packet-split', label: '任务拆分', detail: 'Planner · 生成可执行 WorkPacket', availability: 'pending_runtime' },
-  { id: 'virtual-schedule', label: '虚拟排程', detail: 'Planner · 关键路径、冲突与死锁检查', availability: 'pending_runtime' },
-  { id: 'acceptance-authoring', label: '验收用例编写', detail: 'QA · 先于实现编写验收测试', availability: 'pending_runtime' },
-  { id: 'adversarial-review', label: '对抗评审', detail: 'Reviewer · 反证式代码评审', availability: 'pending_runtime' },
-  { id: 'diagnose-assist', label: '诊断协助', detail: 'Helper · 只读定位失败根因', availability: 'pending_runtime' },
-  { id: 'integrate-merge', label: '集成合并', detail: 'Integrator · 合并、冒烟与回退', availability: 'pending_runtime' },
-  { id: 'dependency-policy-check', label: '依赖策略检查', detail: 'Global · 新依赖准入与替代建议', availability: 'pending_runtime' },
-  { id: 'rule-conformance-check', label: '规则符合性检查', detail: 'Global · 规则集与变更一致性', availability: 'pending_runtime' },
-  { id: 'gate-check', label: '门禁检查', detail: 'Global · 阶段转换前执行门禁', availability: 'pending_runtime' },
-  { id: 'context-recipe', label: '上下文配方', detail: 'Global · 按角色与预算组装上下文', availability: 'pending_runtime' },
-  { id: 'cost-estimate', label: '成本估算', detail: 'Global · 生成分阶段成本区间', availability: 'pending_runtime' },
-  { id: 'provisioning-collect', label: '交付配置收集', detail: 'Integrator · 收集并校验交付配置', availability: 'pending_runtime' },
-  { id: 'secret-leak-scan', label: '凭证泄漏扫描', detail: 'Global · 交付前不可豁免扫描', availability: 'pending_runtime' },
-  { id: 'deploy-verify-checklist', label: '部署验证清单', detail: 'Integrator · 版本、健康与冒烟验证', availability: 'pending_runtime' },
-  { id: 'cold-start-verify', label: '冷启动验证', detail: 'Global · 零缓存环境复现验证', availability: 'pending_runtime' },
-  { id: 'canary-release', label: '金丝雀发布', detail: 'Integrator · 分阶段发布与自动回滚', availability: 'pending_runtime' },
-  { id: 'failure-cluster', label: '失败聚类', detail: 'Evolver · 聚类 Trace 中的失败模式', availability: 'pending_runtime' },
-  { id: 'experience-distill', label: '经验蒸馏', detail: 'Evolver · 证伪后沉淀可复用经验', availability: 'pending_runtime' },
-  { id: 'shadow-replay', label: '影子回放', detail: 'Evolver · 能力变更回归验证', availability: 'pending_runtime' },
-  { id: 'skill-authoring', label: 'Skill 生成', detail: 'Evolver · 生成 manifest、实现与测试', availability: 'pending_runtime' },
-  { id: 'mutation-test', label: '变异测试', detail: 'QA · 验证测试是否真正有效', availability: 'pending_runtime' }
+  { id: 'requirements', label: '需求澄清', detail: '请求 Intake 加载需求澄清技能', availability: 'pending_runtime' },
+  { id: 'architecture', label: '架构边界', detail: '请求 Architect 加载架构边界技能', availability: 'pending_runtime' },
+  { id: 'planning', label: '研发计划', detail: '请求 Planner/Manager 加载计划技能', availability: 'pending_runtime' },
+  { id: 'frontend', label: '前端实现', detail: '请求 Coder 加载前端实现技能', availability: 'pending_runtime' },
+  { id: 'backend', label: '后端实现', detail: '请求 Coder/Helper 加载后端实现技能', availability: 'pending_runtime' },
+  { id: 'testing', label: '测试验证', detail: '请求 QA/Coder 加载测试技能', availability: 'pending_runtime' },
+  { id: 'debugging', label: '问题诊断', detail: '请求 Helper/Coder 加载诊断技能', availability: 'pending_runtime' },
+  { id: 'review', label: '代码评审', detail: '请求 Reviewer 加载评审技能', availability: 'pending_runtime' },
+  { id: 'security', label: '安全审计', detail: '请求 Guardian/Reviewer 加载安全技能', availability: 'pending_runtime' },
+  { id: 'integration', label: '集成发布', detail: '请求 Integrator 加载集成技能', availability: 'pending_runtime' },
+  { id: 'cost-governance', label: '成本治理', detail: '请求 Manager/Planner 加载成本治理技能', availability: 'pending_runtime' },
+  { id: 'evolution', label: '能力进化', detail: '请求 Evolver 加载能力进化技能', availability: 'pending_runtime' }
 ]
+
+const SKILL_LABELS: Readonly<Record<string, string>> = {
+  requirements: '需求澄清',
+  architecture: '架构边界',
+  planning: '研发计划',
+  frontend: '前端实现',
+  backend: '后端实现',
+  testing: '测试验证',
+  debugging: '问题诊断',
+  review: '代码评审',
+  security: '安全审计',
+  integration: '集成发布',
+  'cost-governance': '成本治理',
+  evolution: '能力进化'
+}
+
+const MCP_PLUGIN_ORDER = ['filesystem', 'git', 'browser'] as const
+const MCP_PLUGIN_IDS: Readonly<Record<(typeof MCP_PLUGIN_ORDER)[number], string>> = {
+  filesystem: 'local-files',
+  git: 'git',
+  browser: 'browser'
+}
+const MCP_PLUGIN_LABELS: Readonly<Record<(typeof MCP_PLUGIN_ORDER)[number], string>> = {
+  filesystem: '本地文件',
+  git: 'Git',
+  browser: '浏览器'
+}
+
+function mcpPluginDetail(service: McpServiceProjection): string {
+  if (service.status === 'connected') {
+    const toolSummary = service.tools.length === 0 ? '暂无工具' : `${service.tools.length} 个工具`
+    return `${service.name} MCP 已投影：${toolSummary}；实际权限仍由 RoleSpec、ToolSurface 与 Guardian 收紧`
+  }
+  if (service.error !== undefined && service.error.trim() !== '') return service.error
+  if (service.authentication === 'missing') return `${service.name} MCP 缺少凭据，工具暂不可调用`
+  return `${service.name} MCP 当前${service.status === 'connecting' ? '连接中' : service.status === 'error' ? '连接错误' : '未连接'}，工具暂不可调用`
+}
+
+export function pluginOptionsFromMcpServices(services: readonly McpServiceProjection[] | undefined): readonly ResourceOption[] {
+  if (services === undefined || services.length === 0) return PLUGIN_OPTIONS
+  const projected = new Map(services.map((service) => [service.id, service]))
+  return MCP_PLUGIN_ORDER.map((serviceId) => {
+    const service = projected.get(serviceId)
+    if (service === undefined) {
+      return {
+        id: MCP_PLUGIN_IDS[serviceId],
+        label: MCP_PLUGIN_LABELS[serviceId],
+        detail: `${MCP_PLUGIN_LABELS[serviceId]} MCP 未出现在当前项目投影中，工具暂不可调用`,
+        availability: 'pending_runtime' as const
+      }
+    }
+    return {
+      id: MCP_PLUGIN_IDS[serviceId],
+      label: MCP_PLUGIN_LABELS[serviceId],
+      detail: mcpPluginDetail(service),
+      availability: service.status === 'connected' ? 'available' as const : 'pending_runtime' as const
+    }
+  })
+}
+
+export function skillOptionsFromRoles(roles: readonly RoleSpec[] | undefined): readonly ResourceOption[] {
+  const projected = new Map<string, { roles: Set<string>; active: boolean }>()
+  for (const role of roles ?? []) {
+    for (const skill of role.skills ?? []) {
+      const entry = projected.get(skill.id) ?? { roles: new Set<string>(), active: false }
+      entry.roles.add(role.id)
+      if (skill.state === undefined || skill.state === 'active') entry.active = true
+      projected.set(skill.id, entry)
+    }
+  }
+  if (projected.size === 0) return SKILL_OPTIONS
+  return [...projected.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, entry]) => ({
+      id,
+      label: SKILL_LABELS[id] ?? id,
+      detail: `B RoleSpec 已绑定：${[...entry.roles].sort().join('、')}`,
+      availability: entry.active ? 'available' : 'pending_runtime'
+    }))
+}
 
 const TASK_STORAGE_KEY = 'codentum.desktop.task-sessions.v1'
 const PREFERENCE_STORAGE_KEY = 'codentum.desktop.workbench-preferences.v1'

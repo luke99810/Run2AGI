@@ -17,6 +17,7 @@ import { StateHub } from '../../data'
 import { IPC_CHANNELS } from '../../shared/ipc'
 import {
   MAX_DRAFT_ATTACHMENTS,
+  type EngineHandshake,
   type ManagedResourceKind,
   type ManagedResourcePatch,
   type ManagedResourceSourceKind,
@@ -134,6 +135,15 @@ async function chooseProject(kind: ProjectSelectionKind): Promise<Awaited<Return
   if (descriptor.rootPath === undefined) throw new Error('Selected project did not provide a canonical root path')
   await sidecar?.bindProject(descriptor.rootPath)
   return descriptor
+}
+
+async function registerEngineProjectSource(handshake: EngineHandshake): Promise<void> {
+  if (stateHub === undefined || !handshake.connected || handshake.projectRoot === undefined) return
+  try {
+    await stateHub.selectProject(handshake.projectRoot)
+  } catch {
+    // The user can still choose a project manually; do not block app startup here.
+  }
 }
 
 async function chooseDraftFiles(scopeId: string): Promise<Awaited<ReturnType<RequirementDraftStore['load']>>> {
@@ -409,7 +419,8 @@ void app.whenReady().then(async () => {
   registerIpc()
   createApplicationMenu()
   createTray()
-  await sidecar.start()
+  const startupHandshake = await sidecar.start()
+  await registerEngineProjectSource(startupHandshake)
   mainWindow = createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()

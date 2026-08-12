@@ -32,6 +32,45 @@
 | `specs/` | ★ RoleSpec —— 每个角色一份。**Single Source**，派生四处配置 |
 | `prompts/` | 角色提示词。可以迭代，但不承载硬约束 |
 | `skills/` | Skill 定义。五态状态机 + 三级作用域 |
+| `mcp/` | MCP 服务清单。声明服务、工具入口、鉴权和连接状态 |
+
+### 内置 Skills
+
+| Skill | 绑定角色 | 用途 |
+|---|---|---|
+| `requirements` | intake | 需求澄清、假设记录、可验收 brief |
+| `architecture` | architect | 契约、ADR、模块边界与权限面 |
+| `planning` | planner · manager | WorkPacket 拆分、依赖图、调度决策 |
+| `frontend` | coder · helper | React / TypeScript / 桌面端 UI 实现与验证 |
+| `backend` | coder · helper | engine / harness / delivery / control-plane 后端实现 |
+| `testing` | qa · coder · integrator · helper | 验收测试、回归验证、绿线证据 |
+| `debugging` | coder · helper · integrator | 失败测试、阻塞 Worker、运行时接缝诊断 |
+| `review` | reviewer · integrator · evolver · guardian | 对抗评审、证据审计、边界检查 |
+| `security` | architect · reviewer · guardian | 权限、密钥、命令执行、网络与注入风险审计 |
+| `integration` | integrator | 已评审变更整合、绿线验证、集成证据 |
+| `cost-governance` | planner · manager | token / 模型成本、预算降级、CNY 归因 |
+| `evolution` | evolver | 从失败与评审证据中沉淀候选 Skill / Policy |
+
+每个 Skill 都有 `manifest.json` 与 `SKILL.md`。RoleSpec 只引用 Skill id、scope、state；
+loader 会校验引用的 Skill manifest 必须存在、id 与目录名一致，且 `SKILL.md` 可读。
+引擎启动时会把被 RoleSpec 引用的内置 Skill 投影到项目共享空间
+`.codentum/skills/shared/<id>/`，Local/Team Worker 写 PromptBundle 时优先从这个共享目录
+读取 `SKILL.md`；没有共享目录时才回退到内置源。`PromptBundle` 只注入 state 为空或
+`active` 的 Skill 正文。这样 C 的 Skills 面板从项目 RoleSpec 派生选项时，背后有 B 的
+真源文件、项目共享副本和运行时输入链路，而不是静态字符串。
+
+### 内置 MCP 服务清单
+
+| MCP 服务 | 状态 | 工具入口 | 说明 |
+|---|---|---|---|
+| `filesystem` | connected | read_file · write_file · list_directory | 本地项目文件入口；实际读写仍由 RoleSpec / ToolSurface 限制 |
+| `git` | connected | read_diff · create_diff · merge_changes | Git 工作区入口；不绕过路径锁和评审门禁 |
+| `browser` | disconnected | open_page · inspect_dom · capture_screenshot | 只投影清单，尚未启动浏览器 MCP server |
+| `agentteams` | disconnected / missing auth | create_worker · inspect_worker · collect_result | 只投影 Team-mode 能力清单，仍需 endpoint 与凭据 |
+
+引擎启动时会把 `mcp/*.json` 投影到 `.codentum/mcp/*.json`。C 的 MCP 页只读这个
+运行时投影，不自行猜连接状态。`connected` 也只代表服务入口在项目状态中可见；
+每个 Agent 的实际可用工具仍要被 RoleSpec、ToolSurface 与 Guardian 收紧。
 
 ### RoleSpec 派生四处
 

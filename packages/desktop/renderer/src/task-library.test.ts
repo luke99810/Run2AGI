@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   createTaskSession,
   historyForAgent,
+  pluginOptionsFromMcpServices,
   searchTaskSessions,
+  skillOptionsFromRoles,
   taskDraftScope,
   taskRequestsValidation,
   toggleSelection,
@@ -49,6 +51,86 @@ describe('task library', () => {
   it('toggles resource ids without duplicates', () => {
     expect(toggleSelection(['git'], 'browser')).toEqual(['git', 'browser'])
     expect(toggleSelection(['git', 'browser'], 'git')).toEqual(['browser'])
+  })
+
+  it('derives available Skill options from projected RoleSpec bindings', () => {
+    expect(skillOptionsFromRoles([
+      {
+        id: 'coder',
+        usesModel: true,
+        writes: [],
+        reads: [],
+        tools: [],
+        transitions: [],
+        skills: [
+          { id: 'frontend', scope: 'role', state: 'active' },
+          { id: 'backend', scope: 'role', state: 'active' },
+          { id: 'testing', scope: 'role', state: 'active' }
+        ]
+      },
+      {
+        id: 'reviewer',
+        usesModel: true,
+        writes: [],
+        reads: [],
+        tools: [],
+        transitions: [],
+        skills: [
+          { id: 'review', scope: 'role', state: 'active' },
+          { id: 'security', scope: 'role', state: 'active' }
+        ]
+      }
+    ])).toEqual([
+      expect.objectContaining({ id: 'backend', label: '后端实现', availability: 'available', detail: 'B RoleSpec 已绑定：coder' }),
+      expect.objectContaining({ id: 'frontend', availability: 'available', detail: 'B RoleSpec 已绑定：coder' }),
+      expect.objectContaining({ id: 'review', availability: 'available', detail: 'B RoleSpec 已绑定：reviewer' }),
+      expect.objectContaining({ id: 'security', label: '安全审计', availability: 'available', detail: 'B RoleSpec 已绑定：reviewer' }),
+      expect.objectContaining({ id: 'testing', availability: 'available', detail: 'B RoleSpec 已绑定：coder' })
+    ])
+  })
+
+  it('uses a truthful Browser plugin fallback before MCP projection exists', () => {
+    const browser = pluginOptionsFromMcpServices(undefined).find((option) => option.id === 'browser')
+    expect(browser).toEqual(expect.objectContaining({
+      label: '浏览器',
+      availability: 'pending_runtime'
+    }))
+    expect(browser?.detail).toContain('浏览器 MCP 服务尚未连接')
+    expect(browser?.detail).not.toContain('等待 B')
+  })
+
+  it('derives plugin availability from the MCP runtime projection', () => {
+    expect(pluginOptionsFromMcpServices([
+      {
+        id: 'filesystem',
+        name: '本地文件系统',
+        transport: 'stdio',
+        status: 'connected',
+        authentication: 'not_required',
+        tools: ['read_file', 'list_directory', 'stat']
+      },
+      {
+        id: 'git',
+        name: 'Git 仓库',
+        transport: 'stdio',
+        status: 'connected',
+        authentication: 'not_required',
+        tools: ['status', 'diff']
+      },
+      {
+        id: 'browser',
+        name: '浏览器自动化',
+        transport: 'stdio',
+        status: 'disconnected',
+        authentication: 'unknown',
+        tools: ['navigate', 'screenshot'],
+        error: '本地 browser MCP server 尚未启动'
+      }
+    ])).toEqual([
+      expect.objectContaining({ id: 'local-files', label: '本地文件', availability: 'available', detail: expect.stringContaining('3 个工具') }),
+      expect.objectContaining({ id: 'git', label: 'Git', availability: 'available', detail: expect.stringContaining('2 个工具') }),
+      expect.objectContaining({ id: 'browser', label: '浏览器', availability: 'pending_runtime', detail: '本地 browser MCP server 尚未启动' })
+    ])
   })
 
   it('only enables integration and validation for an explicit request', () => {

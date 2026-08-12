@@ -45,6 +45,7 @@ responsibility 也都没写它。
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -54,7 +55,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codentum_contracts.state import RoleSpec, WorkPacket
+from codentum_contracts.state import RoleSpec, WorkPacket, dump_state
 from codentum_control_plane.admission import AdmissionChecker
 from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.gates import GateRunner, register_builtin_gates
@@ -68,10 +69,19 @@ from codentum_harness.runtime import (
     ModelGatewayConfig,
     RunnerConfig,
     build_local_worker_runtime,
+    build_model_gateway,
 )
 from codentum_harness.worker import LocalWorkerRuntime
-from codentum_roles.loader import load_builtin_role_specs
+from codentum_roles.loader import (
+    RoleMcpLoadError,
+    RoleSkillLoadError,
+    load_builtin_role_specs,
+    project_mcp_services,
+    project_role_skills,
+)
 
+from .acceptance import build_executing_acceptance_gate
+from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
     RequirementRecord,
@@ -143,6 +153,20 @@ class EngineConfig:
     model_timeout_seconds: float = 180.0
 
     context_char_budget: int = 8000
+
+    enable_tool_loop: bool = True
+    """是否使用带工具循环的 runner（模型能真的写文件）。
+
+    ★ 默认 True —— 这是产品要的行为。设成 False 会退回 B 的 one-shot
+      `ModelGatewayRunner`：模型只能把代码写在回复正文里，一个文件都不会创建。
+
+    ★ 两个 runner 都留着，因为它们守的判据不同：
+      one-shot 守「模型能被真实调用、用量能落盘」，
+      工具循环守「模型能真的交付文件」。合并成一个会丢掉前一条。
+    """
+
+    max_tool_turns: int = DEFAULT_MAX_TURNS
+    """工具循环的轮数上限。撞上限时如实报 max_turns_exhausted，不伪装成完成。"""
 
     enforce_role_transitions: bool = False
     """是否把 RoleSpec 派生的 TransitionTable 装进 ReconcileLoop。
@@ -217,6 +241,87 @@ class EngineService:
             state_dir=str(state_dir),
             budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
         ).ensure_state_dir()
+        self._project_role_specs(state_dir)
+        self._project_shared_skills(state_dir)
+        self._project_mcp_services(state_dir)
+
+    def _project_role_specs(self, state_dir: Path) -> None:
+        """把 B 的 RoleSpec 投影进 `<project>/.codentum/roles/`。
+
+        ════════════════════════════════════════════════════════════
+         ★ 桌面端读的是项目里的投影，不是 packages/roles/specs/
+        ════════════════════════════════════════════════════════════
+
+        `directory-state-source.ts:262` 读的是 `roles/` 这个**项目内目录**，
+        而 B 的真源在 `packages/roles/specs/*.json`。两者之间原本没有任何人搬运，
+        于是桌面端「研发团队」页显示的是 C 自己维护的一份静态岗位清单 ——
+        名字对得上，但**不代表这 11 个角色真的被系统加载了**
+        （截图上「系统岗位 11、项目投影 0」说的就是这件事）。
+
+        ★ 这个搬运归装配点：它是唯一同时知道「RoleSpec 从哪来」
+          和「状态目录在哪」的地方。控制平面不接触 RoleSpec，
+          桌面端不该去读别的包的源码目录。
+
+        ★ 与 `ensure_state_dir()` 的「只补缺不覆盖」不同，这里**每次启动都重写**：
+          投影的语义是「真源的副本」，留着旧副本比缺副本更糟 ——
+          B 改了 RoleSpec 而项目里还是上一版，桌面端会显示一份**看起来正确的
+          过时事实**，而没有任何东西会报错。
+        """
+
+        roles_dir = state_dir / "roles"
+        try:
+            roles_dir.mkdir(parents=True, exist_ok=True)
+            for spec in self._role_specs:
+                payload = dump_state(spec)
+                (roles_dir / f"{spec.id}.json").write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+            logger.info("已投影 %d 份 RoleSpec 到 %s", len(self._role_specs), roles_dir)
+        except OSError as exc:
+            # ★ 投影失败不该拖垮引擎：桌面端少一块展示，比整个引擎起不来轻得多。
+            #   但必须留话 —— 否则「为什么研发团队页是空的」又会变成查不到的问题。
+            logger.warning("RoleSpec 投影失败（%s），研发团队页会显示 0 份项目投影", exc)
+
+    def _project_shared_skills(self, state_dir: Path) -> None:
+        """把 B 的内置 Skills 投影进项目级共享空间。
+
+        RoleSpec 里的 `skills` 只是引用关系；Worker 真正执行时需要读到 `SKILL.md`
+        正文。把引用过的内置 Skill 投到 `.codentum/skills/shared/` 后，Local 与
+        Team Worker 都能从同一个项目空间读取，C 的 Skills 面板也不必依赖源码目录。
+        """
+
+        skill_ids = sorted(
+            {
+                skill.id
+                for spec in self._role_specs
+                for skill in (spec.skills or ())
+            }
+        )
+        if not skill_ids:
+            return
+
+        shared_dir = state_dir / "skills" / "shared"
+        try:
+            written = project_role_skills(skill_ids, shared_dir)
+            logger.info("已投影 %d 个共享 Skill 文件到 %s", len(written), shared_dir)
+        except (OSError, RoleSkillLoadError) as exc:
+            logger.warning("Skill 共享空间投影失败（%s），Worker 将回退到内置 Skill 源", exc)
+
+    def _project_mcp_services(self, state_dir: Path) -> None:
+        """把 B 的 MCP 服务清单投影进项目状态。
+
+        这里投影的是“运行时知道哪些 MCP 服务/工具入口”，不是“所有工具都已可调用”。
+        每个服务自己的 status/authentication/error 必须说真话，桌面端只展示这份
+        投影，不自行猜连接状态。
+        """
+
+        mcp_dir = state_dir / "mcp"
+        try:
+            written = project_mcp_services(mcp_dir)
+            logger.info("已投影 %d 个 MCP 服务文件到 %s", len(written), mcp_dir)
+        except (OSError, RoleMcpLoadError) as exc:
+            logger.warning("MCP 服务投影失败（%s），MCP 页面会显示未接入", exc)
 
     # ══════════════════════════════════════════════════════════
     #  协议方法
@@ -437,6 +542,21 @@ class EngineService:
 
         gate_runner = GateRunner()
         register_builtin_gates(gate_runner)
+        # ★ 覆盖内置的 acceptance 门禁：内置那个只检查「有没有证据」，
+        #   注释里写的「完整版：实际运行验收测试」一直没写。
+        #   装配点在这里把会真的执行谓词的那个装上去。
+        executing_gate = build_executing_acceptance_gate(self._workers_root())
+        # ★ 必须同时注册到 "review" 上。
+        #
+        #   `_try_review_to_accepted` 在没有 transition_table 时，用的 gate_id
+        #   是 **"review"** 而不是 "acceptance"。只注册 acceptance 的话，
+        #   这个会执行谓词的门禁**永远不会被调用** ——
+        #   2026-08-12 实测：日志写「门禁 'review' 通过」，packet 被 accepted，
+        #   而验收谓词一次都没跑过。
+        #
+        #   ★ 判据装了但没接上，比没装更糟：它让人以为已经在判了。
+        for gate_id in ("acceptance", "review"):
+            gate_runner.register(gate_id, executing_gate)
 
         loop = ReconcileLoop(
             state_dir=str(self.config.resolved_state_dir()),
@@ -448,6 +568,16 @@ class EngineService:
         loop.worker_runtime = self._build_worker_runtime()
         return loop
 
+    def _workers_root(self) -> Path:
+        """worker 工作区的父目录 —— 必须与 `_build_spawn_request` 算出来的一致。
+
+        ★ 控制平面把 workspace 定在 `state_dir.parent.parent / codentum-workers`。
+          这里重算一遍是重复，但**重复优于猜错**：算错的后果是验收永远
+          找不到工作区、于是永远不通过，而那看起来像「模型没干活」。
+        """
+
+        return self.config.resolved_state_dir().parent.parent / "codentum-workers"
+
     def _transition_table(self) -> TransitionTable | None:
         if not self.config.enforce_role_transitions:
             return None
@@ -456,20 +586,40 @@ class EngineService:
     def _build_worker_runtime(self) -> LocalWorkerRuntime | None:
         if self._key_env is None:
             return None
+
+        gateway_config = ModelGatewayConfig.bailian(
+            pricing={},
+            api_key_env=self._key_env,
+            # ★ 价格表证据还没落地（待办 7d）。显式放行 unknown pricing，
+            #   代价是**成本数字不能当证据** —— 桌面端 Cost 视图会显示 0，
+            #   那是「不知道」不是「没花钱」。偷偷塞个假价格会让那个 0
+            #   变成一个看起来可信的数。
+            require_pricing=False,
+        )
+
+        if self.config.enable_tool_loop:
+            # ★ 带工具循环的 runner：模型能真的把代码写进文件。
+            #   不走 build_local_worker_runtime 是因为 RunnerConfig 只认
+            #   harness 内置的两种 runner，而这个 runner 属于装配层。
+            return LocalWorkerRuntime(
+                repo_root=self.config.project_root,
+                runner=build_agent_runner(
+                    AgentRunnerConfig(
+                        gateway=build_model_gateway(gateway_config),
+                        timeout_seconds=self.config.model_timeout_seconds,
+                        max_turns=self.config.max_tool_turns,
+                    )
+                ),
+                role_specs=self._role_specs,
+                context_loader=self._context_loader,
+                context_char_budget=self.config.context_char_budget,
+            )
+
         return build_local_worker_runtime(
             LocalWorkerRuntimeConfig(
                 repo_root=self.config.project_root,
                 runner=RunnerConfig.model_gateway(
-                    ModelGatewayConfig.bailian(
-                        pricing={},
-                        api_key_env=self._key_env,
-                        # ★ 价格表证据还没落地（待办 7d）。显式放行 unknown
-                        #   pricing，代价是**成本数字不能当证据** —— 桌面端的
-                        #   Cost 视图会显示 0，那是「不知道」不是「没花钱」。
-                        #   偷偷塞个假价格会让那个 0 变成一个看起来可信的数。
-                        require_pricing=False,
-                    ),
-                    timeout_seconds=self.config.model_timeout_seconds,
+                    gateway_config, timeout_seconds=self.config.model_timeout_seconds
                 ),
                 context_char_budget=self.config.context_char_budget,
             ),

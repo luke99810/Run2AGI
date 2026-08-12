@@ -21,8 +21,10 @@ import {
   historyForAgent,
   loadTaskSessions,
   loadWorkbenchPreferences,
+  pluginOptionsFromMcpServices,
   saveTaskSessions,
   saveWorkbenchPreferences,
+  skillOptionsFromRoles,
   taskDraftScope,
   taskRequestsValidation,
   updateTaskFromDraft,
@@ -80,6 +82,8 @@ export function App(): ReactNode {
   const activeTask = sourceTasks.find((task) => task.id === activeTaskId)
   const validationEnabled = activeTask !== undefined && taskRequestsValidation(activeTask)
   const visibleWarnings = warningsForDisplay(desktop.snapshot?.warnings ?? [])
+  const pluginOptions = pluginOptionsFromMcpServices(desktop.snapshot?.mcpServices)
+  const skillOptions = skillOptionsFromRoles(desktop.snapshot?.roles)
 
   useEffect(() => {
     saveTaskSessions(tasks)
@@ -249,6 +253,8 @@ export function App(): ReactNode {
           task={activeTask}
           draftScope={taskDraftScope(activeTask)}
           taskHistory={historyForAgent(sourceTasks, activeTask.id)}
+          pluginOptions={pluginOptions}
+          skillOptions={skillOptions}
           onTaskDraftChange={(text) => updateTask(activeTask.id, (task) => updateTaskFromDraft(task, text))}
           onTaskAttachmentNamesChange={(attachmentNames) => updateTask(activeTask.id, (task) => ({ ...task, attachmentNames, updatedAt: new Date().toISOString() }))}
           onTaskContextChange={(context: TaskContextSelection) => updateTask(activeTask.id, (task) => ({ ...task, context, updatedAt: new Date().toISOString() }))}
@@ -310,6 +316,8 @@ export function App(): ReactNode {
         <ResourceLibraryView
           kind={navigation}
           task={activeTask}
+          pluginOptions={pluginOptions}
+          skillOptions={skillOptions}
           snapshot={desktop.snapshot}
           onContextChange={updateActiveContext}
           listManagedResources={desktop.listManagedResources}
@@ -321,7 +329,7 @@ export function App(): ReactNode {
       )
       break
     case 'mcp':
-      view = <McpView services={[]} />
+      view = <McpView services={desktop.snapshot?.mcpServices ?? []} />
       break
     case 'settings':
       view = <SettingsView preferences={preferences} onChange={setPreferences} />

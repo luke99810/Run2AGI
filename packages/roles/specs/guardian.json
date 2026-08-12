@@ -6,5 +6,9 @@
   "writes": ["evidence/guardian/**"],
   "reads": ["packages/contracts/**", "boundaries.yaml", ".codentum/packets/**"],
   "tools": ["read_state", "check_invariants", "check_boundaries", "write_guardian_report"],
-  "transitions": []
+  "transitions": [],
+  "skills": [
+    { "id": "review", "scope": "role", "state": "active" },
+    { "id": "security", "scope": "role", "state": "active" }
+  ]
 }

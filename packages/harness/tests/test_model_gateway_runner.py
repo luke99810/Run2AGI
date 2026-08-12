@@ -291,3 +291,70 @@ def _git() -> str:
     if exe is None:
         raise RuntimeError("git executable not found")
     return exe
+
+
+def test_empty_tool_arguments_parse_as_no_arguments() -> None:
+    """★ 空 arguments 是 OpenAI 格式里「这个工具没有参数」的合法表示。
+
+    2026-08-12 实测：模型连写两次文件都成功，第三轮想调 list_files 确认
+    文件在不在，`arguments` 发的是空串 —— 解析器一律 json.loads，
+    于是把**一次本该成功的开发**打成了 model_error。
+
+    ★ 只放行空串；真正畸形的 JSON 仍要抛错，那是应该抛的。
+    """
+
+    from codentum_harness.model_gateway.openai_compatible import _json_mapping_field
+
+    assert _json_mapping_field({"arguments": ""}, "arguments") == {}
+    assert _json_mapping_field({"arguments": "   "}, "arguments") == {}
+    assert _json_mapping_field({"arguments": '{"path": "a.py"}'}, "arguments") == {"path": "a.py"}
+
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="JSON object text"):
+        _json_mapping_field({"arguments": "{不是 JSON"}, "arguments")
+
+
+def test_unescaped_newlines_in_tool_arguments_are_tolerated() -> None:
+    """★ 模型把多行代码放进 write_file 的 content 时常常不转义换行。
+
+    那在 JSON 字符串里是非法控制字符，严格模式必然失败 ——
+    而这恰恰是「让模型写代码」最常见的载荷。
+    2026-08-12 实测：不放宽的话，凡是多行代码的 write_file 调用
+    都会把整轮会话打成 model_error。
+    """
+
+    from codentum_harness.model_gateway.openai_compatible import _json_mapping_field
+
+    raw = '{"path": "a.py", "content": "def add(a, b):\n    return a + b\n"}'
+    parsed = _json_mapping_field({"arguments": raw}, "arguments")
+    assert parsed["path"] == "a.py"
+    assert "return a + b" in parsed["content"]
+
+
+def test_truly_malformed_arguments_still_fail_with_a_usable_message() -> None:
+    """★ 放宽换行不等于什么都放行；而且报错要带上实际内容的开头，
+    否则「must be JSON object text」这句话本身不含任何排查信息。"""
+
+    from codentum_harness.model_gateway.openai_compatible import _json_mapping_field
+
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="got"):
+        _json_mapping_field({"arguments": "这根本不是 JSON"}, "arguments")
+
+
+def test_trailing_prose_after_valid_json_arguments_is_ignored() -> None:
+    """★ 模型很常见地在合法 JSON 之后又追加一段自然语言。
+
+    2026-08-12 实测到的原文：
+        {"reason": "..."}\n 需要知道测试文件或目录的路径以及测试框架的配置信息。
+
+    整串 decode 必然失败，而开头那个对象其实是好的 ——
+    `raw_decode` 只吃开头那个值，尾巴一概不管。
+    """
+
+    from codentum_harness.model_gateway.openai_compatible import _json_mapping_field
+
+    raw = '{"reason": "需要路径"}\n 需要知道测试文件或目录的路径。'
+    assert _json_mapping_field({"arguments": raw}, "arguments") == {"reason": "需要路径"}

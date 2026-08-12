@@ -3,9 +3,7 @@ import type { ManagedResource, ManagedResourceKind, ManagedResourcePatch, StateS
 import { Icon, PageHeader } from '../panels/Common'
 import {
   KNOWLEDGE_OPTIONS,
-  PLUGIN_OPTIONS,
   searchTaskSessions,
-  SKILL_OPTIONS,
   toggleSelection,
   type ResourceOption,
   type TaskContextSelection,
@@ -46,10 +44,10 @@ export function ConversationsView({ tasks, activeTaskId, onSelectTask, onNewTask
   )
 }
 
-function resourceCopy(kind: 'plugins' | 'knowledge' | 'skills'): { title: string; description: string; icon: 'plug' | 'book' | 'spark'; options: readonly ResourceOption[]; key: 'pluginIds' | 'knowledgeIds' | 'skillIds' } {
-  if (kind === 'plugins') return { title: '插件', description: '为当前任务声明可用工具。标记“待接入”的项目会随需求发送，但不会假装已经生效。', icon: 'plug', options: PLUGIN_OPTIONS, key: 'pluginIds' }
+function resourceCopy(kind: 'plugins' | 'knowledge' | 'skills', pluginOptions: readonly ResourceOption[], skillOptions: readonly ResourceOption[]): { title: string; description: string; icon: 'plug' | 'book' | 'spark'; options: readonly ResourceOption[]; key: 'pluginIds' | 'knowledgeIds' | 'skillIds' } {
+  if (kind === 'plugins') return { title: '插件', description: '为当前任务声明可用工具；选项优先来自当前项目 MCP 运行时投影。', icon: 'plug', options: pluginOptions, key: 'pluginIds' }
   if (kind === 'knowledge') return { title: '知识库', description: '选择随当前需求提交的上下文来源。本地任务摘要会进入请求，但不冒充尚未接入的 MemoryIndex 语义检索。', icon: 'book', options: KNOWLEDGE_OPTIONS, key: 'knowledgeIds' }
-  return { title: 'Skills', description: '为当前任务声明需要的专业能力；最终 Skill 加载由 B 的 RoleSpec 与 ToolSurface 决定。', icon: 'spark', options: SKILL_OPTIONS, key: 'skillIds' }
+  return { title: 'Skills', description: '为当前任务声明需要的专业能力；选项优先来自 B 投影到项目 RoleSpec 的 Skill。', icon: 'spark', options: skillOptions, key: 'skillIds' }
 }
 
 const RESOURCE_ROLES = [
@@ -66,6 +64,8 @@ function managedKind(kind: 'plugins' | 'knowledge' | 'skills'): ManagedResourceK
 export function ResourceLibraryView({
   kind,
   task,
+  pluginOptions,
+  skillOptions,
   snapshot,
   onContextChange,
   listManagedResources,
@@ -77,6 +77,8 @@ export function ResourceLibraryView({
   readonly kind: 'plugins' | 'knowledge' | 'skills'
   readonly task: TaskSession | undefined
   readonly snapshot: StateSnapshot | null
+  readonly pluginOptions: readonly ResourceOption[]
+  readonly skillOptions: readonly ResourceOption[]
   readonly onContextChange: (context: TaskContextSelection) => void
   readonly listManagedResources: (kind?: ManagedResourceKind) => Promise<readonly ManagedResource[]>
   readonly selectManagedResources: (kind: ManagedResourceKind, sourceKind: 'file' | 'folder') => Promise<readonly ManagedResource[]>
@@ -84,7 +86,7 @@ export function ResourceLibraryView({
   readonly updateManagedResource: (id: string, patch: ManagedResourcePatch) => Promise<ManagedResource>
   readonly removeManagedResource: (id: string) => Promise<boolean>
 }): ReactNode {
-  const copy = resourceCopy(kind)
+  const copy = resourceCopy(kind, pluginOptions, skillOptions)
   const resourceKind = managedKind(kind)
   const selected = task?.context[copy.key] ?? []
   const [managed, setManaged] = useState<readonly ManagedResource[]>([])

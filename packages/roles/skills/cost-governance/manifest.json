@@ -1,0 +1,39 @@
+{
+  "id": "cost-governance",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["manager", "planner"],
+  "description": "估算 token / 模型成本、预算降级和 CNY 归因的内置 Skill。",
+  "inputs": {
+    "budget": "预算状态",
+    "routing": "模型路由",
+    "usage": "模型用量证据"
+  },
+  "outputs": {
+    "budgetDecision": "预算决策",
+    "costAttribution": "成本归因",
+    "degradationPlan": "降级计划"
+  },
+  "preconditions": [
+    "任务涉及预算、模型选择、成本归因、降级或暂停决策"
+  ],
+  "failure": {
+    "timeoutSeconds": 120,
+    "onError": "require_pricing_or_block",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R1",
+    "tools": ["read_state", "estimate_budget", "rebalance_budget", "write_decision", "request_human_approval"],
+    "readPaths": [".codentum/**", "docs/04-模型路由表.md", "docs/adr/**", "evidence/**"],
+    "writePaths": [".codentum/decisions/**", "evidence/manager/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

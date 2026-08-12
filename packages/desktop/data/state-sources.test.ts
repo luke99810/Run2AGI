@@ -85,6 +85,75 @@ describe('ProjectStateSource', () => {
     source.close()
   })
 
+  it('projects B AgentTeams status events through the existing worker stream', async () => {
+    const project = await copyFixtureProject('empty')
+    const workerDirectory = join(project, '.codentum', 'evidence', 'wp-team-attempt-1')
+    await mkdir(workerDirectory, { recursive: true })
+    const now = new Date().toISOString()
+    await writeFile(
+      join(workerDirectory, 'manifest.json'),
+      JSON.stringify({
+        worker_id: 'wp-team-attempt-1',
+        packet_id: 'wp-team',
+        role: 'coder',
+        attempt: 1,
+        workspace: project,
+        tools: [],
+        mounts: [],
+        created_at: now,
+        runtime_mode: 'agentteams',
+        agentteams: {
+          worker: 'codentum-coder-wp-team-a1',
+          runtime: 'copaw',
+          model: 'qwen3.6-plus'
+        }
+      }),
+      'utf8'
+    )
+    await writeFile(
+      join(workerDirectory, 'events.jsonl'),
+      [
+        JSON.stringify({ kind: 'started', at: now, seq: 1, payload: { runtime_mode: 'agentteams', workspace: project } }),
+        JSON.stringify({ kind: 'checkpoint', at: now, seq: 2, payload: { path: 'checkpoints/0000.json' } }),
+        JSON.stringify({
+          kind: 'progress',
+          at: now,
+          seq: 3,
+          payload: {
+            runtime_mode: 'agentteams',
+            moduleId: 'agentteams.worker',
+            moduleLabel: 'AgentTeams Worker',
+            moduleState: 'running',
+            agentteams_worker: 'codentum-coder-wp-team-a1',
+            phase: 'Running',
+            container_state: 'running',
+            status_ref: 'file:agentteams/status.json'
+          }
+        })
+      ].join('\n') + '\n',
+      'utf8'
+    )
+
+    const source = await ProjectStateSource.create(project)
+    const snapshot = await source.read()
+
+    expect(snapshot.workers).toEqual([
+      expect.objectContaining({
+        workerId: 'wp-team-attempt-1',
+        packetId: 'wp-team',
+        role: 'coder',
+        state: 'running',
+        currentModule: 'agentteams.worker'
+      })
+    ])
+    expect(snapshot.workers[0]?.events.at(-1)?.payload).toEqual(expect.objectContaining({
+      agentteams_worker: 'codentum-coder-wp-team-a1',
+      phase: 'Running',
+      status_ref: 'file:agentteams/status.json'
+    }))
+    source.close()
+  })
+
   it('projects B worker evidence from an isolated linked worktree', async () => {
     const project = await copyFixtureProject('empty')
     await runGit(project, ['init'])
@@ -332,6 +401,20 @@ describe('StateHub.projectRoot 必须认得草稿作用域', () => {
     expect(() => hub.projectRoot('project:deadbeefdeadbeefdeadbeef:task:x')).toThrow(
       /Unknown state source/u
     )
+    hub.close()
+  })
+})
+
+describe('StateHub 可以注册引擎握手里的项目根', () => {
+  it('selectProject(projectRoot) 后 listSources 立即出现项目来源', async () => {
+    const project = await copyFixtureProject('empty')
+    const hub = new StateHub({ fixtureRoot: null })
+
+    const descriptor = await hub.selectProject(project)
+
+    expect(hub.listSources()).toEqual([descriptor])
+    expect(descriptor.kind).toBe('project')
+    expect(descriptor.rootPath).toBe(await realpath(project))
     hub.close()
   })
 })

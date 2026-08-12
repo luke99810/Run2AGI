@@ -1,0 +1,38 @@
+{
+  "id": "requirements",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["intake"],
+  "description": "把模糊需求澄清成可验收 brief 的内置 Skill。",
+  "inputs": {
+    "request": "用户原始需求",
+    "references": "项目设计、路线与示例"
+  },
+  "outputs": {
+    "brief": "可验收需求 brief",
+    "assumptions": "显式假设",
+    "questions": "阻塞问题"
+  },
+  "preconditions": [
+    "需求尚未形成可验收 brief，或存在目标、用户、范围不清"
+  ],
+  "failure": {
+    "timeoutSeconds": 180,
+    "onError": "ask_or_block",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R0",
+    "tools": ["ask_human", "read_reference", "write_brief", "check_slots"],
+    "readPaths": ["docs/**", "fixtures/**", "brief/**"],
+    "writePaths": ["brief/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

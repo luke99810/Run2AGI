@@ -412,10 +412,37 @@ def _int_field_any(obj: object, names: Sequence[str], *, default: int | None = N
 def _json_mapping_field(obj: object, name: str) -> Mapping[str, Any]:
     raw = _required_field(obj, name)
     if isinstance(raw, str):
+        # ★ 空串是 OpenAI 工具调用格式里「这个工具没有参数」的**合法**表示。
+        #   原来这里一律 json.loads，于是模型每调一次无参数工具
+        #   （list_files 之类）就把整轮会话打成 model_error。
+        #   2026-08-12 实测：模型连写两次文件都成功，第三轮想确认文件在不在，
+        #   就挂在这里 —— 一次本该成功的开发，因为解析器过严而判失败。
+        #   ★ 只放行空串；真正畸形的 JSON 仍然抛错，那是应该抛的。
+        if not raw.strip():
+            return {}
         try:
             parsed = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"response field {name!r} must be JSON object text") from exc
+        except json.JSONDecodeError:
+            # ★ 再试一次 strict=False。
+            #   模型把多行代码放进 write_file 的 content 时，常常**不转义换行**
+            #   —— 那在 JSON 字符串里是非法控制字符，严格模式必然失败。
+            #   而这恰恰是「让模型写代码」这件事最常见的载荷。
+            #   strict=False 允许字符串内出现字面控制字符，语义不变。
+            #   2026-08-12 实测：不放宽的话，凡是多行代码的 write_file 调用
+            #   都会把整轮会话打成 model_error。
+            try:
+                # ★ raw_decode 只吃开头那个 JSON 值，后面的尾巴一概不管。
+                #   模型很常见地在合法 JSON 之后**又追加一段自然语言**：
+                #     {"reason": "..."} + 换行 + 「需要知道测试文件的路径…」
+                #   整串 decode 必然失败，而开头那个对象其实是好的。
+                #   2026-08-12 实测到的正是这一种。
+                parsed, _ = json.JSONDecoder(strict=False).raw_decode(raw.lstrip())
+            except json.JSONDecodeError as exc:
+                # ★ 报错要带上实际内容的开头，否则"must be JSON object text"
+                #   这句话本身不含任何可用于排查的信息。
+                raise ValueError(
+                    f"response field {name!r} must be JSON object text; got {raw[:200]!r}"
+                ) from exc
     else:
         parsed = raw
     if not isinstance(parsed, Mapping):

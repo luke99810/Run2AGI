@@ -29,23 +29,39 @@ owner: B ｜ 评审: A ｜ 详见 ../README.md 与 docs/01-角色详细设计与
 """
 
 from .loader import (
+    RoleMcpLoadError,
     RolePromptLoadError,
+    RoleSkillLoadError,
     RoleSpecLoadError,
+    default_mcp_dir,
     default_prompts_dir,
+    default_skills_dir,
     default_specs_dir,
+    load_builtin_mcp_services,
     load_builtin_role_specs,
     load_role_prompt,
+    load_role_skill_prompt,
     load_role_spec_file,
     load_role_specs_dir,
+    project_mcp_services,
+    project_role_skills,
 )
 
 __all__ = [
+    "RoleMcpLoadError",
     "RolePromptLoadError",
+    "RoleSkillLoadError",
     "RoleSpecLoadError",
+    "default_mcp_dir",
     "default_prompts_dir",
+    "default_skills_dir",
     "default_specs_dir",
+    "load_builtin_mcp_services",
     "load_builtin_role_specs",
     "load_role_prompt",
+    "load_role_skill_prompt",
     "load_role_spec_file",
     "load_role_specs_dir",
+    "project_mcp_services",
+    "project_role_skills",
 ]

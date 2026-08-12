@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "browser",
+  "name": "浏览器自动化",
+  "transport": "stdio",
+  "status": "disconnected",
+  "authentication": "unknown",
+  "tools": ["open_page", "inspect_dom", "capture_screenshot"],
+  "configSource": "packages/roles/mcp/browser.json",
+  "error": "本地 engine 只投影 MCP 清单，尚未启动浏览器 MCP server；工具保持不可调用。"
+}

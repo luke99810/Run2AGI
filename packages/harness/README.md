@@ -51,11 +51,22 @@
 本地命令 Runner 支持 `{prompt_dir}`、`{system_prompt}`、`{user_prompt}`、`{prompt_manifest}`
 等占位符，外部编码 Agent 命令可直接读取已落盘的 Prompt Bundle。
 
+Prompt Bundle 会从 `RoleSpec.promptRef` 读取角色提示词，并从 `RoleSpec.skills` 读取
+state 为空或 `active` 的 Skill 正文。运行时优先使用项目共享空间
+`.codentum/skills/shared/<id>/SKILL.md`；共享空间不存在时，才回退到内置
+`packages/roles/skills/<id>/SKILL.md`。写出的 `prompt/manifest.json` 记录
+`skill_refs` 与 `skill_source`，便于桌面端和评审只看证据就知道这次 Worker 实际带了哪些
+Skill，以及这些 Skill 来自项目共享副本还是内置源。
+
 `ModelGatewayRunner` 则读取同一份 Prompt Bundle，经冻结的 `ModelGateway` 发起一次模型调用，
 并把模型响应、usage、tool_calls 与 prompt digest 写入 `model/` 证据目录。
 
 `TeamWorkerRuntime` 目前是 AgentTeams 适配的最小壳：从同一个 `SpawnRequest` 写 manifest /
 checkpoint-0 / Prompt Bundle，再通过官方 `agt` CLI 创建并检查 AgentTeams Worker 资源。
+每次创建/检查得到的 `status.json` 会同步投影成 Worker `progress` 事件，payload 使用
+`moduleId=agentteams.worker`、`moduleLabel=AgentTeams Worker`、`moduleState` 与
+`status_ref=file:agentteams/status.json`，因此桌面端现有执行中心可以直接展示 Team-mode
+资源状态，不需要读取 AgentTeams 私有目录。
 在任务派发和结果回收接上之前，`settle()` 会返回 `WorkerFailed(runtime_error)`，
 并附上 `file:agentteams/status.json` 或 `file:agentteams/error.json` 证据，避免把“Worker 资源已 Running”
 误报成“Codentum 任务已完成”。

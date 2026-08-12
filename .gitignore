@@ -43,7 +43,15 @@ credentials/
 #   直到别人 clone 下来发现 C 的渲染测试全红才会发现。
 /.codentum/state/
 /.codentum/evidence/
+/.codentum/budget.json
+/.codentum/decisions.jsonl
+/.codentum/engine-session.json
+/.codentum/engine.log
+/.codentum/graph.json
 /.codentum/locks.json
+/.codentum/mcp/
+/.codentum/roles/
+/.codentum/skills/
 *.local
 *.local.*
 

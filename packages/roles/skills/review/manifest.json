@@ -1,0 +1,39 @@
+{
+  "id": "review",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["reviewer", "integrator", "guardian", "evolver"],
+  "description": "对 diff、证据链、权限边界和验收结论做对抗评审的内置 Skill。",
+  "inputs": {
+    "diff": "候选变更",
+    "evidence": "测试、构建和运行证据",
+    "roleSpec": "角色权限和不可见边界"
+  },
+  "outputs": {
+    "findings": "按严重度排序的问题",
+    "verdict": "pass 或 fail",
+    "checkedItems": "已检查项目"
+  },
+  "preconditions": [
+    "任务进入 review、accepted 前检查，或需要审计边界/证据"
+  ],
+  "failure": {
+    "timeoutSeconds": 180,
+    "onError": "report_and_continue",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R0",
+    "tools": ["read_file", "read_diff", "run_static_analysis", "write_review", "check_invariants"],
+    "readPaths": ["packages/contracts/**", "tests/**", "evidence/**", ".codentum/**", "boundaries.yaml"],
+    "writePaths": ["evidence/reviews/**", "evidence/guardian/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": [],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

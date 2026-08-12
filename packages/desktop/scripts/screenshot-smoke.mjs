@@ -494,11 +494,16 @@ async function exerciseInteractiveDetails(client, navigation) {
   if (navigation === 'MCP') {
     const mcp = await evaluate(client, `(() => ({
       services: document.querySelector('.mcp-summary > div:first-child strong')?.textContent?.trim(),
+      runtimeAvailable: document.body.innerText.includes('运行时已返回 MCP 投影'),
       runtimeUnavailable: document.body.innerText.includes('运行时未提供 MCP 投影'),
       emptyState: document.body.innerText.includes('尚未配置 MCP 服务'),
+      hasFilesystem: document.body.innerText.includes('项目文件系统'),
+      hasAgentTeams: document.body.innerText.includes('AgentTeams 编排'),
       boundary: document.body.innerText.includes('RoleSpec、ToolSurface 与 Guardian 收紧')
     }))()`, 'audit MCP projection')
-    if (mcp.services !== '0' || !mcp.runtimeUnavailable || !mcp.emptyState || !mcp.boundary) {
+    const realProjection = mcp.services === '4' && mcp.runtimeAvailable && !mcp.emptyState && mcp.hasFilesystem && mcp.hasAgentTeams
+    const honestEmptyProjection = mcp.services === '0' && mcp.runtimeUnavailable && mcp.emptyState
+    if ((!realProjection && !honestEmptyProjection) || !mcp.boundary) {
       throw new Error(`MCP view is incomplete or claims unavailable runtime state: ${JSON.stringify(mcp)}`)
     }
   }

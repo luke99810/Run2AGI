@@ -11,7 +11,7 @@ from pathlib import Path
 
 from codentum_contracts.interfaces import ModelMessage, ModelRequest, SpawnRequest
 from codentum_contracts.state import Effort, RoleSpec
-from codentum_roles import RolePromptLoadError, load_role_prompt
+from codentum_roles import RolePromptLoadError, RoleSkillLoadError, load_role_prompt, load_role_skill_prompt
 
 from codentum_harness.context_broker import ContextBundle
 
@@ -49,6 +49,7 @@ def assemble_worker_prompt_bundle(
     role_spec: RoleSpec,
     *,
     context: ContextBundle | None = None,
+    skills_dir: Path | str | None = None,
 ) -> WorkerPromptBundle:
     """Render model input from already-enforced worker constraints."""
 
@@ -57,7 +58,7 @@ def assemble_worker_prompt_bundle(
     if context is not None and context.role != role_spec.id:
         raise PromptBundleError(f"context role {context.role!r} does not match RoleSpec[{role_spec.id}]")
 
-    system = _render_system(role_spec)
+    system = _render_system(role_spec, skills_dir=skills_dir)
     user = _render_user(request, context=context)
     digest = _digest({"schema_version": 1, "system": system, "user": user})
     return WorkerPromptBundle(system=system, user=user, digest=digest)
@@ -69,10 +70,16 @@ def write_worker_prompt_bundle(
     role_spec: RoleSpec,
     evidence_dir: Path | str,
     context: ContextBundle | None = None,
+    skills_dir: Path | str | None = None,
 ) -> WorkerPromptBundle:
     """Write system/user prompts and a stable manifest under evidence_dir."""
 
-    bundle = assemble_worker_prompt_bundle(request, role_spec, context=context)
+    bundle = assemble_worker_prompt_bundle(
+        request,
+        role_spec,
+        context=context,
+        skills_dir=skills_dir,
+    )
     prompt_dir = Path(evidence_dir) / "prompt"
     prompt_dir.mkdir(parents=True, exist_ok=True)
     (prompt_dir / "system.md").write_text(bundle.system, encoding="utf-8")
@@ -87,6 +94,8 @@ def write_worker_prompt_bundle(
         "system_path": "system.md",
         "user_path": "user.md",
         "context_refs": list(context.refs) if context is not None else [],
+        "skill_refs": list(_active_skill_ids(role_spec)),
+        "skill_source": "project_shared" if skills_dir is not None else "builtin",
     }
     (prompt_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -116,7 +125,7 @@ def load_worker_prompt_bundle(evidence_dir: Path | str) -> WorkerPromptBundle:
     return WorkerPromptBundle(system=system, user=user, digest=digest)
 
 
-def _render_system(role_spec: RoleSpec) -> str:
+def _render_system(role_spec: RoleSpec, *, skills_dir: Path | str | None = None) -> str:
     role_prompt = _role_prompt_section(role_spec)
     lines = [
         "# Codentum Worker",
@@ -133,6 +142,7 @@ def _render_system(role_spec: RoleSpec) -> str:
         "This prompt is orientation only.",
         "",
         *role_prompt,
+        *_skill_prompt_sections(role_spec, skills_dir=skills_dir),
     ]
     return "\n".join(lines)
 
@@ -151,6 +161,37 @@ def _role_prompt_section(role_spec: RoleSpec) -> list[str]:
         role_prompt.rstrip(),
         "",
     ]
+
+
+def _skill_prompt_sections(role_spec: RoleSpec, *, skills_dir: Path | str | None = None) -> list[str]:
+    active_skill_ids = _active_skill_ids(role_spec)
+    if not active_skill_ids:
+        return []
+
+    lines = ["## Active Skills", ""]
+    for skill_id in active_skill_ids:
+        try:
+            skill_prompt = load_role_skill_prompt(skill_id, skills_dir)
+        except RoleSkillLoadError as exc:
+            raise PromptBundleError(str(exc)) from exc
+        lines.extend(
+            [
+                f"### {skill_id}",
+                "",
+                skill_prompt.rstrip(),
+                "",
+            ]
+        )
+    return lines
+
+
+def _active_skill_ids(role_spec: RoleSpec) -> tuple[str, ...]:
+    active_skills = tuple(
+        skill
+        for skill in (role_spec.skills or ())
+        if skill.state is None or skill.state == "active"
+    )
+    return tuple(skill.id for skill in active_skills)
 
 
 def _render_user(request: SpawnRequest, *, context: ContextBundle | None) -> str:

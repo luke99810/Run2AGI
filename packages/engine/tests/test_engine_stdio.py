@@ -301,3 +301,45 @@ def test_argv_still_wins_when_no_env_is_set(project: Path, engine_env: None) -> 
         assert Path(str(handshake["projectRoot"])).resolve() == project.resolve()
     finally:
         gateway.close()
+
+
+def test_engine_runs_without_pythonpath_when_launched_by_absolute_path(
+    project: Path, tmp_path: Path
+) -> None:
+    """★ 引擎必须在**没有 PYTHONPATH、任意 cwd** 的情况下也能被拉起来。
+
+    引擎是 sidecar 用 `CODENTUM_ENGINE_COMMAND_JSON` 里的 argv 拉起来的。
+    如果那条 argv 依赖 `PYTHONPATH`（`python -m codentum_engine` 就依赖），
+    那么「引擎能不能启动」取决于**启动 Electron 的那个终端有没有 export 过它** ——
+    换个终端、双击启动、从 IDE 里跑、别人 clone 下来照 README 跑，全都不成立。
+
+    ★ 而它不成立时的现象是最难查的一种：
+      - 引擎进程根本没启动，所以它自己的日志一个字都没有
+      - `JsonlEngineProxy._drain_stderr` 有意丢弃 stderr 文本
+      - 桌面端只显示一句 "A/B engine handshake failed"
+      **三层之中没有任何一层知道真因。** 2026-08-11 在这上面耗了一整轮。
+
+    解决方向不是「把环境配对」，是让它**不需要被配对**：
+    `_bootstrap.py` 从自己的 `__file__` 推出仓库根，把包根挂上 sys.path。
+    """
+
+    entry = Path(__file__).resolve().parents[1] / "codentum_engine" / "__main__.py"
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    proc = subprocess.run(
+        [sys.executable, str(entry), "--project-root", str(project), "--log-level", "WARNING"],
+        input='{"id":"1","method":"handshake","params":{"protocolVersion":1}}\n',
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=str(tmp_path),  # ★ 任意 cwd，不在仓库里
+        timeout=90,
+    )
+
+    assert proc.returncode == 0, f"引擎非零退出：{proc.stderr[-800:]}"
+    assert proc.stdout.strip(), f"引擎没有任何协议输出；stderr：{proc.stderr[-800:]}"
+    handshake = json.loads(proc.stdout.splitlines()[0])
+    assert handshake["ok"] is True
+    assert handshake["result"]["connected"] is True

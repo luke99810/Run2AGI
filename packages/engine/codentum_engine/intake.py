@@ -80,6 +80,22 @@ _PLACEHOLDER_PREDICATE = (
     "此条为引擎在 Intake 缺位时生成的占位验收，需人工判定"
 )
 
+DEFAULT_TEST_PREDICATE = "python -m pytest workspace -q"
+"""默认的**可执行**验收谓词。
+
+★ 为什么要有它：`kind: manual` 的占位验收永远不会被执行，于是
+  「产生了一条真实证据」就等于「验收通过」。2026-08-12 实测：模型只写了
+  规格要求的两个文件中的一个，packet 照样 accepted。
+
+★ 为什么是跑测试而不是别的：需求是自由文本，机器判不了「做得对不对」；
+  但「你自己写的测试跑不跑得过」是机器能判的，而且它把举证责任
+  推回给了执行者 —— 想通过验收，就得写出能跑的测试。
+
+★ 仍然不完美：模型可以写一个恒真的测试。那属于 §十五 推论 2
+  「可判定不等于判得出差别」的下一层，需要 QA 角色独立出题才能解决，
+  而 QA 目前还没有独立的 packet。**这个缺口记在案，不假装它不存在。**
+"""
+
 # ★ 谁「写」了这条占位验收？
 #
 #   概念上是 Intake —— 问题定义端。但 `check_role_exists` 会拒绝任何
@@ -215,6 +231,7 @@ def build_packet_for_requirement(
     effort: str,
     budget_cny: float,
     acceptance_author: str,
+    executable_acceptance: bool = True,
 ) -> WorkPacket:
     """一个需求 → 一个 coder packet。
 
@@ -242,11 +259,23 @@ def build_packet_for_requirement(
         #   但在**构造**路径上用 dict 会让 mypy 看不见字段错误 ——
         #   写错一个字段名的后果是 pydantic 在运行时才炸，而它炸的位置
         #   离写错的位置很远（08-10 已经踩过一次「报错位置不等于出错位置」）。
-        acceptance=Acceptance(
-            kind="manual",
-            predicate=_PLACEHOLDER_PREDICATE,
-            threshold=None,
-            authoredBy=acceptance_author,  # type: ignore[arg-type]
+        acceptance=(
+            # ★ 可执行谓词优先：只有 kind=test 会被门禁真的跑一遍。
+            #   用 manual 的话，「有证据」就等于「验收通过」——
+            #   那正是 2026-08-12 那个虚假 accepted 的来源。
+            Acceptance(
+                kind="test",
+                predicate=DEFAULT_TEST_PREDICATE,
+                threshold=None,
+                authoredBy=acceptance_author,  # type: ignore[arg-type]
+            )
+            if executable_acceptance
+            else Acceptance(
+                kind="manual",
+                predicate=_PLACEHOLDER_PREDICATE,
+                threshold=None,
+                authoredBy=acceptance_author,  # type: ignore[arg-type]
+            )
         ),
         budget=BudgetGrant(
             currency="CNY",

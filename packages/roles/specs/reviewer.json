@@ -15,5 +15,9 @@
     "defaultModel": "qwen-plus-2025-11-05",
     "defaultEffort": "high",
     "mustDifferFrom": ["coder"]
-  }
+  },
+  "skills": [
+    { "id": "review", "scope": "role", "state": "active" },
+    { "id": "security", "scope": "role", "state": "active" }
+  ]
 }
