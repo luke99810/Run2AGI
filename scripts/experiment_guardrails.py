@@ -212,6 +212,20 @@ def _run(state_dir: Path, packets: list[WorkPacket], **guardrails: object) -> di
     for f in (state_dir / "packets").glob("*.json"):
         f.unlink()
     (state_dir / "packets").mkdir(parents=True, exist_ok=True)
+
+    # ★ 也要清掉 graph.json 里的**残留锁**。
+    #
+    #   「护栏开」那轮会先拿锁、再被护栏拦下，锁就留在了 graph.json 里。
+    #   只清 packets/ 的话，「护栏关」那轮 load_state() 会加载到这把残留锁，
+    #   packet 卡在 ready 拿不到锁 —— **看起来像护栏还在生效**，
+    #   于是 leaked_off 变成 0，而那正是「护栏没用」的读数。
+    #
+    #   ★ 这个隔离缺陷一直存在，只是此前 `_run` 从不调用 save_state()
+    #     所以 graph.json 从没被写过。2026-08-13 给 tick 加了逐条落盘后
+    #     立刻暴露 —— **实验的隔离性不该依赖「被测代码恰好不写盘」**。
+    graph = state_dir / "graph.json"
+    if graph.exists():
+        graph.unlink()
     for p in packets:
         (state_dir / "packets" / f"{p.id}.json").write_text(
             json.dumps(dump_state(p), indent=2, ensure_ascii=False) + "\n",
@@ -232,6 +246,20 @@ def _run_with_lock_table(
     for f in (state_dir / "packets").glob("*.json"):
         f.unlink()
     (state_dir / "packets").mkdir(parents=True, exist_ok=True)
+
+    # ★ 也要清掉 graph.json 里的**残留锁**。
+    #
+    #   「护栏开」那轮会先拿锁、再被护栏拦下，锁就留在了 graph.json 里。
+    #   只清 packets/ 的话，「护栏关」那轮 load_state() 会加载到这把残留锁，
+    #   packet 卡在 ready 拿不到锁 —— **看起来像护栏还在生效**，
+    #   于是 leaked_off 变成 0，而那正是「护栏没用」的读数。
+    #
+    #   ★ 这个隔离缺陷一直存在，只是此前 `_run` 从不调用 save_state()
+    #     所以 graph.json 从没被写过。2026-08-13 给 tick 加了逐条落盘后
+    #     立刻暴露 —— **实验的隔离性不该依赖「被测代码恰好不写盘」**。
+    graph = state_dir / "graph.json"
+    if graph.exists():
+        graph.unlink()
     for p in packets:
         (state_dir / "packets" / f"{p.id}.json").write_text(
             json.dumps(dump_state(p), indent=2, ensure_ascii=False) + "\n",

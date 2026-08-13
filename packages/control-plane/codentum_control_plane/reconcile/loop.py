@@ -584,6 +584,20 @@ class ReconcileLoop:
                 if t is not None:
                     transitions.append(t)
                     self._dirty = True
+                    # ★ **每个 transition 立刻落盘**，不等整轮结束。
+                    #
+                    #   `_try_running_to_review` 里的 `settle()` 是阻塞的：
+                    #   8 个 running packet 在同一轮里顺序 settle，而落盘在
+                    #   整轮之后 —— 于是磁盘状态直到**最慢的那个 worker**
+                    #   结束前，一直停在 running。
+                    #
+                    #   2026-08-13 实测：两个 worker 21:33 就失败了，
+                    #   而 8 分钟后磁盘上仍是 8 个 running，界面上什么都看不到。
+                    #
+                    #   ★ 这与 `_run_until_stable` 文档里记的是同一个缺陷，
+                    #     只是从「tick 粒度」下沉到了「packet 粒度」——
+                    #     单 packet 时看不出来，并行起来立刻暴露。
+                    self.save_state()
             except Exception as exc:
                 errors.append(f"{pid} ({packet.state}): {exc}")
 
