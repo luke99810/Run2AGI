@@ -24,7 +24,7 @@
   },
   "permissions": {
     "riskLevel": "R1",
-    "tools": ["read_file", "write_file", "run_tests", "create_diff", "diagnose_blocker", "write_help_report"],
+    "tools": ["read_file", "write_file", "run_tests", "run_build", "create_diff", "diagnose_blocker", "write_help_report"],
     "readPaths": ["packages/**", "tests/**", ".codentum/**", "evidence/**", "docs/**"],
     "writePaths": ["workspace/**", "evidence/helper/**"],
     "networkAccess": []

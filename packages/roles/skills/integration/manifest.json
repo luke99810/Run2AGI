@@ -24,13 +24,13 @@
   },
   "permissions": {
     "riskLevel": "R2",
-    "tools": ["read_diff", "merge_changes", "run_tests", "check_green_line", "write_integration_report"],
+    "tools": ["read_diff", "merge_changes", "run_tests", "run_build", "check_green_line", "write_integration_report"],
     "readPaths": ["packages/**", "tests/**", "evidence/**", ".codentum/**"],
-    "writePaths": ["evidence/integration/**", ".codentum/integration/**"],
+    "writePaths": ["evidence/integration/**", "evidence/delivery/**", ".codentum/integration/**", ".codentum/delivery/**"],
     "networkAccess": []
   },
   "requiresMcp": [],
-  "requiresSkills": ["testing", "review"],
+  "requiresSkills": ["testing", "review", "delivery"],
   "conflicts": [],
   "reuse": {
     "crossRole": true,

@@ -1,0 +1,40 @@
+{
+  "id": "delivery",
+  "version": "0.1.0",
+  "scope": "role",
+  "appliesTo": ["integrator"],
+  "description": "选择 Agent 产出物的打包形态、运行构建并记录干净环境交付验证证据的内置 Skill。",
+  "inputs": {
+    "workspace": "已集成的 Agent 产出工作区",
+    "greenLine": "集成绿线结果",
+    "packageMetadata": "pyproject.toml、package.json 或等价构建清单"
+  },
+  "outputs": {
+    "artifactPlan": "制品类型与构建命令",
+    "buildEvidence": "构建输出、失败类型和依赖清单",
+    "deliveryReport": "干净环境验证结论或 blocker"
+  },
+  "preconditions": [
+    "集成阶段需要把 workspace/ 中的产物构建成可分发制品",
+    "需要区分测试失败、构建失败、依赖缺失和交付验证失败"
+  ],
+  "failure": {
+    "timeoutSeconds": 300,
+    "onError": "write_delivery_blocker",
+    "silentDegrade": false
+  },
+  "permissions": {
+    "riskLevel": "R2",
+    "tools": ["read_file", "run_build", "run_tests", "write_integration_report"],
+    "readPaths": ["workspace/**", "packages/**", "tests/**", "evidence/**", ".codentum/**"],
+    "writePaths": ["evidence/delivery/**", ".codentum/delivery/**"],
+    "networkAccess": []
+  },
+  "requiresMcp": [],
+  "requiresSkills": ["integration", "testing"],
+  "conflicts": [],
+  "reuse": {
+    "crossRole": true,
+    "crossProject": true
+  }
+}

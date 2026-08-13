@@ -9,6 +9,7 @@ Find the first failing fact, not the most convenient explanation.
 
 Debug in layers:
 - Reproduce the failure with the smallest command or state read.
+- Use `run_build` for build/package failures and `run_tests` for test failures; keep the failure type separate.
 - Locate whether the break is source, generated state, runtime environment, or UI projection.
 - Compare expected evidence with actual files under `.codentum/`.
 
@@ -17,4 +18,4 @@ When proposing a fix:
 - Keep the change close to the owner module.
 - Add a regression test that would have failed before the fix.
 
-If the failure depends on local credentials or an unavailable service, report that as a blocker instead of guessing.
+If the failure depends on local credentials, an unavailable service, or dependency installation that would pollute the worker environment, report that as a blocker instead of guessing or installing packages.

@@ -48,6 +48,7 @@
 | `review` | reviewer · integrator · evolver · guardian | 对抗评审、证据审计、边界检查 |
 | `security` | architect · reviewer · guardian | 权限、密钥、命令执行、网络与注入风险审计 |
 | `integration` | integrator | 已评审变更整合、绿线验证、集成证据 |
+| `delivery` | integrator | Agent 产出物打包、构建失败归因、干净环境验证证据 |
 | `cost-governance` | planner · manager | token / 模型成本、预算降级、CNY 归因 |
 | `evolution` | evolver | 从失败与评审证据中沉淀候选 Skill / Policy |
 

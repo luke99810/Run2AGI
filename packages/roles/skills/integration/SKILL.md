@@ -14,5 +14,8 @@ Before merging:
 
 While producing evidence:
 - Record the exact commands and state files inspected.
-- Separate merge conflicts from validation failures.
+- Separate merge conflicts, build failures, test failures, and delivery verification failures.
+- Use `run_build` before delivery evidence when the integrated output must become an artifact.
 - Do not report success when dispatch, result collection, or verification is still missing.
+
+If dependency installation is required, require a manifest or lockfile update and isolated verification. Do not install packages into the worker environment just to make the current attempt pass.

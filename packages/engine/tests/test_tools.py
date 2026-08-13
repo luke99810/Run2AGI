@@ -124,7 +124,49 @@ def test_run_tests_reports_exit_code(workspace: Path) -> None:
 
     bad = executor.execute("run_tests", {"command": [sys.executable, "-c", "raise SystemExit(3)"]})
     assert bad.ok is False
+    assert "failure_type=test" in bad.content
     assert "退出码 3" in bad.content
+
+
+def test_run_build_has_separate_failure_type_and_dependency_context(workspace: Path) -> None:
+    (workspace / "pyproject.toml").write_text("[project]\nname = \"demo\"\n", encoding="utf-8")
+    executor = ToolExecutor(workspace)
+
+    ok = executor.execute("run_build", {"command": [sys.executable, "-c", "print('built')"]})
+    assert ok.ok is True
+    assert "构建成功" in ok.content
+    assert "built" in ok.content
+
+    bad = executor.execute("run_build", {"command": [sys.executable, "-c", "raise SystemExit(7)"]})
+    assert bad.ok is False
+    assert "failure_type=build" in bad.content
+    assert "退出码 7" in bad.content
+    assert "pyproject.toml" in bad.content
+    assert "failure_type=test" not in bad.content
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        [sys.executable, "-m", "pip", "install", "requests"],
+        ["pip", "install", "requests"],
+        ["npm", "install"],
+        ["pnpm", "add", "lodash"],
+        ["uv", "pip", "install", "requests"],
+        ["poetry", "add", "requests"],
+    ],
+)
+def test_dependency_install_commands_are_blocked(workspace: Path, command: list[str]) -> None:
+    executor = ToolExecutor(workspace)
+
+    test_result = executor.execute("run_tests", {"command": command})
+    build_result = executor.execute("run_build", {"command": command})
+
+    assert test_result.ok is False
+    assert build_result.ok is False
+    assert "dependency_install_boundary" in test_result.content
+    assert "dependency_install_boundary" in build_result.content
+    assert "依赖清单" in build_result.content
 
 
 def test_run_tests_does_not_inherit_stdin(workspace: Path) -> None:
@@ -175,6 +217,6 @@ def test_declared_but_unimplemented_tools_are_skipped_silently() -> None:
 def test_every_schema_declares_its_required_inputs() -> None:
     """★ 少了 required，模型可以合法地不传参数，然后工具在运行时才炸。"""
 
-    for schema in tool_schemas_for(("write_file", "read_file", "run_tests", "request_help")):
+    for schema in tool_schemas_for(("write_file", "read_file", "run_tests", "run_build", "request_help")):
         assert schema.description.strip(), f"{schema.name} 没有描述，模型不知道何时该用它"
         assert schema.input_schema.get("required"), f"{schema.name} 没声明必填参数"

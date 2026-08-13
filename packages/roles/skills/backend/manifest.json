@@ -24,7 +24,7 @@
   },
   "permissions": {
     "riskLevel": "R2",
-    "tools": ["read_file", "write_file", "run_tests", "create_diff"],
+    "tools": ["read_file", "write_file", "run_tests", "run_build", "create_diff"],
     "readPaths": ["packages/**", "tests/**", "docs/adr/**", "fixtures/**"],
     "writePaths": ["packages/**", "tests/**"],
     "networkAccess": []

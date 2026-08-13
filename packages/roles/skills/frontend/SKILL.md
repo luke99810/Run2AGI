@@ -19,6 +19,9 @@ While editing:
 - Do not claim runtime availability unless the state projection or engine capability proves it.
 
 Validate with the narrowest relevant checks first:
+- `run_build` for frontend build/typecheck commands when the outcome is build readiness.
 - `npm run typecheck`
 - `npm test -- <target test file>`
 - Screenshot or smoke checks only when visual layout changed.
+
+Do not install packages from the worker environment. If a UI change needs a new dependency, update `package.json` or the relevant lockfile and report when isolated install/build verification is unavailable.

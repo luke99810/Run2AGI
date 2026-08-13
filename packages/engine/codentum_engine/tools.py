@@ -66,6 +66,25 @@ MAX_READ_CHARS = 40_000
 
 MAX_COMMAND_SECONDS = 120.0
 
+_DEPENDENCY_INSTALL_BOUNDARY = (
+    "依赖安装被拒绝 (failure_type=dependency_install_boundary)。"
+    "当前 Worker 工具只允许在隔离工作区内读写文件、运行测试和构建；"
+    "不得用 pip/npm/pnpm/yarn/bun/poetry/uv 直接安装依赖污染运行环境。"
+    "需要新依赖时，请把它写入 pyproject.toml、requirements.txt、package.json"
+    " 或对应 lockfile，并把缺少隔离安装环境作为 blocker 记录。"
+)
+
+_DEPENDENCY_MANIFEST_NAMES = {
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "pyproject.toml",
+    "requirements.txt",
+    "uv.lock",
+    "yarn.lock",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ToolResult:
@@ -118,6 +137,26 @@ _SCHEMAS: dict[str, ToolSchema] = {
         description=(
             "在工作区内运行一条命令并返回退出码与输出（如 python -m pytest）。"
             "用它验证自己写的代码能跑 —— 未经运行的代码不算完成。"
+            "不要用它安装依赖；缺依赖时写入项目依赖清单并报告 blocker。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "argv 形式，如 [\"python\", \"-m\", \"pytest\", \"-q\"]。不走 shell。",
+                }
+            },
+            "required": ["command"],
+        },
+    ),
+    "run_build": ToolSchema(
+        name="run_build",
+        description=(
+            "在工作区内运行构建命令并返回构建日志、失败类型和依赖清单。"
+            "构建失败会标记为 failure_type=build，不会和测试失败混为一谈。"
+            "不得用它安装依赖；依赖变更必须写入项目清单，由后续隔离构建环境处理。"
         ),
         input_schema={
             "type": "object",
@@ -250,25 +289,15 @@ class ToolExecutor:
         return ToolResult(True, "\n".join(entries) if entries else "(工作区内没有文件)")
 
     def _tool_run_tests(self, args: dict[str, Any]) -> ToolResult:
-        command = args.get("command")
-        if not isinstance(command, list) or not command or not all(
-            isinstance(part, str) and part for part in command
-        ):
-            return ToolResult(False, "command 必须是非空的字符串数组（argv 形式）")
+        command_or_error = self._validated_command(args)
+        if isinstance(command_or_error, ToolResult):
+            return command_or_error
+        command = command_or_error
+        blocker = _dependency_install_blocker(command)
+        if blocker is not None:
+            return ToolResult(False, blocker)
         try:
-            proc = subprocess.run(  # noqa: S603 - argv 明确，shell=False
-                command,
-                cwd=self._root,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=MAX_COMMAND_SECONDS,
-                # ★ 不继承 stdin：子进程若读 stdin 会挂住整个 worker。
-                #   这个坑 08-11 已经在引擎入口踩过一次（git 卡死 240 秒）。
-                stdin=subprocess.DEVNULL,
-                shell=False,
-            )
+            proc = self._run_command(command)
         except subprocess.TimeoutExpired:
             return ToolResult(False, f"命令超时（>{MAX_COMMAND_SECONDS:.0f} 秒）")
         except FileNotFoundError:
@@ -289,15 +318,115 @@ class ToolExecutor:
         listing = self._tool_list_files({}).content
         return ToolResult(
             False,
-            f"退出码 {proc.returncode}\n{tail}\n\n"
+            f"测试失败 (failure_type=test)\n退出码 {proc.returncode}\n{tail}\n\n"
             f"[工作区实际文件清单 —— 当前工作目录是工作区根 `.`]\n{listing}",
+        )
+
+    def _tool_run_build(self, args: dict[str, Any]) -> ToolResult:
+        command_or_error = self._validated_command(args)
+        if isinstance(command_or_error, ToolResult):
+            return command_or_error
+        command = command_or_error
+        blocker = _dependency_install_blocker(command)
+        if blocker is not None:
+            return ToolResult(False, f"{blocker}\n\n{self._dependency_manifest_summary()}")
+        try:
+            proc = self._run_command(command)
+        except subprocess.TimeoutExpired:
+            return ToolResult(False, f"构建超时 (failure_type=build, >{MAX_COMMAND_SECONDS:.0f} 秒)")
+        except FileNotFoundError:
+            return ToolResult(False, f"构建命令不存在 (failure_type=build)：{command[0]}")
+
+        tail = (proc.stdout + proc.stderr)[-4000:]
+        if proc.returncode == 0:
+            return ToolResult(True, f"构建成功\n退出码 0\n{tail}")
+        return ToolResult(
+            False,
+            f"构建失败 (failure_type=build)\n退出码 {proc.returncode}\n{tail}\n\n"
+            f"{self._dependency_manifest_summary()}",
         )
 
     def _tool_request_help(self, args: dict[str, Any]) -> ToolResult:
         reason = str(args.get("reason", "")).strip() or "(未说明原因)"
         return ToolResult(True, f"已记录求助：{reason}")
 
+    def _validated_command(self, args: dict[str, Any]) -> list[str] | ToolResult:
+        command = args.get("command")
+        if not isinstance(command, list) or not command or not all(
+            isinstance(part, str) and part for part in command
+        ):
+            return ToolResult(False, "command 必须是非空的字符串数组（argv 形式）")
+        return command
+
+    def _run_command(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 - argv 明确，shell=False
+            command,
+            cwd=self._root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=MAX_COMMAND_SECONDS,
+            # ★ 不继承 stdin：子进程若读 stdin 会挂住整个 worker。
+            #   这个坑 08-11 已经在引擎入口踩过一次（git 卡死 240 秒）。
+            stdin=subprocess.DEVNULL,
+            shell=False,
+        )
+
+    def _dependency_manifest_summary(self) -> str:
+        manifests = [
+            p
+            for p in sorted(self._root.rglob("*"))
+            if p.is_file()
+            and p.name in _DEPENDENCY_MANIFEST_NAMES
+            and ".codentum" not in p.parts
+            and ".git" not in p.parts
+            and "node_modules" not in p.parts
+            and ".venv" not in p.parts
+        ]
+        if not manifests:
+            return (
+                "[依赖清单]\n"
+                "(未发现 pyproject.toml、requirements.txt、package.json 或 lockfile；"
+                "不要直接安装依赖，请先写入项目依赖清单。)"
+            )
+        rows = [
+            f"- {path.relative_to(self._root).as_posix()} ({path.stat().st_size} bytes)"
+            for path in manifests[:20]
+        ]
+        if len(manifests) > 20:
+            rows.append(f"- ... 另有 {len(manifests) - 20} 个依赖清单文件")
+        return "[依赖清单]\n" + "\n".join(rows)
+
     # ── 证据 ────────────────────────────────────────────────
 
     def to_json(self) -> str:
         return json.dumps({"written_paths": self.written_paths}, ensure_ascii=False, indent=2)
+
+
+def _dependency_install_blocker(command: list[str]) -> str | None:
+    normalized = [_program_name(part) for part in command]
+    program = normalized[0]
+    tail = normalized[1:]
+
+    if program in {"pip", "pip3"} and "install" in tail:
+        return _DEPENDENCY_INSTALL_BOUNDARY
+    if program in {"python", "python3", "py"} and len(tail) >= 3:
+        if tail[0] == "-m" and tail[1] in {"pip", "pip3"} and "install" in tail[2:]:
+            return _DEPENDENCY_INSTALL_BOUNDARY
+    if program == "uv" and (tail[:2] == ["pip", "install"] or (tail and tail[0] == "sync")):
+        return _DEPENDENCY_INSTALL_BOUNDARY
+    if program == "poetry" and tail and tail[0] in {"add", "install"}:
+        return _DEPENDENCY_INSTALL_BOUNDARY
+    if program in {"npm", "pnpm", "yarn", "bun"} and tail:
+        if tail[0] in {"add", "ci", "i", "install"}:
+            return _DEPENDENCY_INSTALL_BOUNDARY
+    return None
+
+
+def _program_name(raw: str) -> str:
+    name = Path(raw).name.lower()
+    for suffix in (".exe", ".cmd", ".bat"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name

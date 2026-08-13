@@ -3,7 +3,7 @@
   "summary": "整合已通过评审的产物，跑绿线并产出集成证据。",
   "usesModel": true,
   "promptRef": "integrator.md",
-  "writes": ["evidence/integration/**", ".codentum/integration/**"],
+  "writes": ["evidence/integration/**", "evidence/delivery/**", ".codentum/integration/**", ".codentum/delivery/**"],
   "reads": [
     "packages/contracts/**",
     "tests/**",
@@ -11,7 +11,7 @@
     "evidence/test-reports/**",
     "evidence/reviews/**"
   ],
-  "tools": ["read_diff", "merge_changes", "run_tests", "check_green_line", "write_integration_report"],
+  "tools": ["read_diff", "merge_changes", "run_tests", "run_build", "check_green_line", "write_integration_report"],
   "transitions": [
     { "from": "running", "to": "review", "requiresGate": "self-test" },
     { "from": "review", "to": "accepted", "requiresGate": "self-test" },
@@ -23,6 +23,7 @@
   },
   "skills": [
     { "id": "integration", "scope": "role", "state": "active" },
+    { "id": "delivery", "scope": "role", "state": "active" },
     { "id": "testing", "scope": "role", "state": "active" },
     { "id": "review", "scope": "role", "state": "active" },
     { "id": "debugging", "scope": "role", "state": "active" }

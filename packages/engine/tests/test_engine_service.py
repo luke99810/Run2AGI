@@ -540,6 +540,7 @@ def test_role_skills_are_projected_into_project_shared_space(
         "backend",
         "cost-governance",
         "debugging",
+        "delivery",
         "evolution",
         "frontend",
         "integration",
@@ -552,6 +553,7 @@ def test_role_skills_are_projected_into_project_shared_space(
     assert "# Architecture Skill" in (shared_dir / "architecture" / "SKILL.md").read_text("utf-8")
     assert "# Backend Skill" in (shared_dir / "backend" / "SKILL.md").read_text("utf-8")
     assert "# Cost Governance Skill" in (shared_dir / "cost-governance" / "SKILL.md").read_text("utf-8")
+    assert "# Delivery Skill" in (shared_dir / "delivery" / "SKILL.md").read_text("utf-8")
     assert "# Debugging Skill" in (shared_dir / "debugging" / "SKILL.md").read_text("utf-8")
     assert "# Evolution Skill" in (shared_dir / "evolution" / "SKILL.md").read_text("utf-8")
     assert "# Frontend Skill" in (shared_dir / "frontend" / "SKILL.md").read_text("utf-8")

@@ -17,4 +17,6 @@ While editing:
 - Prefer structured parsing and typed models over ad hoc string handling.
 - Write fail-closed errors when missing evidence would otherwise look successful.
 
-Validate with targeted Python tests first, then broaden to `make verify-offline` when shared behavior changed.
+Validate with targeted Python tests first. Use `run_build` for packaging, type generation, wheel, or distribution checks so build failures are not reported as test failures. Broaden to `make verify-offline` when shared behavior changed.
+
+Do not install dependencies directly from tool commands. Dependency changes must be represented in `pyproject.toml`, `requirements.txt`, lockfiles, or the package manifest, then verified in an isolated build environment or reported as a blocker.

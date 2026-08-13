@@ -70,7 +70,7 @@ describe('RoleSpec 项目投影', () => {
       expect(skillsByRole.get('planner')).toEqual(['planning', 'cost-governance'])
       expect(skillsByRole.get('qa')).toEqual(['testing'])
       expect(skillsByRole.get('reviewer')).toEqual(['review', 'security'])
-      expect(skillsByRole.get('integrator')).toEqual(['integration', 'testing', 'review', 'debugging'])
+      expect(skillsByRole.get('integrator')).toEqual(['integration', 'delivery', 'testing', 'review', 'debugging'])
     } finally {
       source.close()
     }

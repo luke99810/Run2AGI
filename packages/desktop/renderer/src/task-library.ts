@@ -73,6 +73,7 @@ export const SKILL_OPTIONS: readonly ResourceOption[] = [
   { id: 'review', label: '代码评审', detail: '请求 Reviewer 加载评审技能', availability: 'pending_runtime' },
   { id: 'security', label: '安全审计', detail: '请求 Guardian/Reviewer 加载安全技能', availability: 'pending_runtime' },
   { id: 'integration', label: '集成发布', detail: '请求 Integrator 加载集成技能', availability: 'pending_runtime' },
+  { id: 'delivery', label: '交付打包', detail: '请求 Integrator 加载交付打包技能', availability: 'pending_runtime' },
   { id: 'cost-governance', label: '成本治理', detail: '请求 Manager/Planner 加载成本治理技能', availability: 'pending_runtime' },
   { id: 'evolution', label: '能力进化', detail: '请求 Evolver 加载能力进化技能', availability: 'pending_runtime' }
 ]
@@ -88,6 +89,7 @@ const SKILL_LABELS: Readonly<Record<string, string>> = {
   review: '代码评审',
   security: '安全审计',
   integration: '集成发布',
+  delivery: '交付打包',
   'cost-governance': '成本治理',
   evolution: '能力进化'
 }
