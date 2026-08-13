@@ -1,25 +1,25 @@
 {
   "schemaVersion": 1,
-  "id": "github",
-  "name": "GitHub",
+  "id": "notion",
+  "name": "Notion",
   "category": "third-party-app",
-  "purpose": "代码托管：仓库、Issue、PR、提交历史",
+  "purpose": "文档与知识库：读写需求文档、技术方案",
   "transport": "stdio",
   "command": "npx",
   "args": [
     "-y",
-    "@modelcontextprotocol/server-github"
+    "@notionhq/notion-mcp-server"
   ],
   "env": {},
   "enabled": false,
   "requiresEnv": [
-    "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "NOTION_TOKEN"
   ],
-  "credentialHowTo": "GitHub → Settings → Developer settings → Personal access tokens，勾选 repo 权限",
-  "docs": "https://github.com/modelcontextprotocol/servers",
+  "credentialHowTo": "Notion → Settings → Connections → 新建 integration，并把目标页面共享给它",
+  "docs": "https://github.com/makenotion/notion-mcp-server",
   "status": "disconnected",
   "authentication": "missing",
   "tools": [],
-  "configSource": "packages/roles/mcp/github.json",
+  "configSource": "packages/roles/mcp/notion.json",
   "error": "未启用。配置凭据后把 enabled 改为 true 即可接入；工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
 }

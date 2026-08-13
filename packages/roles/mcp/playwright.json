@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "playwright",
+  "name": "Playwright",
+  "category": "third-party-app",
+  "purpose": "端到端测试与浏览器自动化：点击、填表、截图、抓控制台",
+  "transport": "stdio",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@playwright/mcp@latest"
+  ],
+  "env": {},
+  "enabled": false,
+  "requiresEnv": [],
+  "credentialHowTo": "无需凭据；首次运行会下载浏览器内核",
+  "docs": "https://github.com/microsoft/playwright-mcp",
+  "status": "disconnected",
+  "authentication": "not_required",
+  "tools": [],
+  "configSource": "packages/roles/mcp/playwright.json",
+  "error": "未启用。配置凭据后把 enabled 改为 true 即可接入；工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
+}

@@ -3,6 +3,7 @@
   "id": "feishu",
   "name": "飞书 / Lark",
   "category": "third-party-app",
+  "purpose": "团队协作：文档、消息、日程、审批",
   "transport": "stdio",
   "command": "npx",
   "args": [
@@ -18,11 +19,11 @@
     "APP_ID",
     "APP_SECRET"
   ],
+  "credentialHowTo": "飞书开放平台创建企业自建应用，取 App ID / App Secret 并开通对应权限",
   "docs": "https://github.com/larksuite/lark-openapi-mcp",
-  "note": "飞书开放平台官方 MCP server。需在开放平台创建应用取得 APP_ID / APP_SECRET，并按所需能力开通权限；把两个变量写进 env 并将 enabled 改为 true 即可接入。",
   "status": "disconnected",
   "authentication": "missing",
   "tools": [],
   "configSource": "packages/roles/mcp/feishu.json",
-  "error": "尚未配置凭据，未连接。需在开放平台创建应用取得 APP_ID / APP_SECRET 并开通相应权限。 工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
+  "error": "未启用。配置凭据后把 enabled 改为 true 即可接入；工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
 }

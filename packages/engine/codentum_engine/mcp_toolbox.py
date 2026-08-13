@@ -56,6 +56,24 @@ class McpToolbox:
         """逐个连接。**单个失败不阻断其余。**"""
 
         for config in configs:
+            # ★ 先查凭据再启进程。
+            #
+            #   缺 token 时直接启动的后果是一个看不懂的错误
+            #   （或更糟：server 启动成功但所有调用返回 401），
+            #   而使用者会以为是配置写错了。
+            #   **「缺什么」必须说出名字**，这样它是一条可执行的指引。
+            missing = config.missing_env()
+            if missing:
+                self.reports.append(
+                    McpConnectionReport(
+                        config.id,
+                        config.name,
+                        connected=False,
+                        error=f"未配置凭据：{'、'.join(missing)}（设为环境变量或写入配置的 env 字段）",
+                    )
+                )
+                continue
+
             try:
                 session = McpSession(config)
                 session.start()

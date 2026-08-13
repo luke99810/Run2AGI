@@ -255,3 +255,79 @@ def test_non_ascii_content_survives_the_pipe(session: McpSession) -> None:
     ok, content = session.call_tool("create_issue", {"title": "修复登录问题"})
     assert ok is True
     assert "修复登录问题" in content, f"编码在管道上坏了：{content!r}"
+
+
+# ══════════════════════════════════════════════════════════════
+#  凭据前置检查
+# ══════════════════════════════════════════════════════════════
+
+
+def test_missing_credentials_are_named_before_the_process_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 缺凭据要在**启动进程之前**查出来，并说出缺哪个变量名。
+
+    直接启动的后果是一个看不懂的错误，或更糟 —— server 启动成功但
+    所有调用返回 401。使用者会以为是配置写错了，**而实际只是没设 token**。
+
+    「缺什么」说出名字，这条报告才是可执行的指引。
+    """
+
+    from codentum_engine.mcp_toolbox import McpToolbox
+
+    monkeypatch.delenv("SOME_API_TOKEN", raising=False)
+    config = McpServerConfig(
+        id="svc",
+        name="某服务",
+        command="definitely-not-a-real-command-xyz",
+        requires_env=("SOME_API_TOKEN",),
+    )
+    assert config.missing_env() == ("SOME_API_TOKEN",)
+
+    box = McpToolbox()
+    box.connect_all((config,))
+
+    report = box.reports[0]
+    assert report.connected is False
+    # ★ 关键：错误里必须有变量名，而不是「启动失败」
+    assert "SOME_API_TOKEN" in report.error
+    # ★ 且不该是进程启动失败的报错 —— 说明根本没去启动那个不存在的命令
+    assert "definitely-not-a-real-command" not in report.error
+
+
+def test_credentials_can_come_from_either_env_or_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """★ 使用者二选一：写进本机环境变量，或直接填在配置的 env 字段里。"""
+
+    monkeypatch.delenv("TOKEN_A", raising=False)
+    assert McpServerConfig(id="a", name="a", command="x", requires_env=("TOKEN_A",)).missing_env() == (
+        "TOKEN_A",
+    )
+
+    monkeypatch.setenv("TOKEN_A", "from-environment")
+    assert McpServerConfig(id="a", name="a", command="x", requires_env=("TOKEN_A",)).missing_env() == ()
+
+    monkeypatch.delenv("TOKEN_A", raising=False)
+    from_config = McpServerConfig(
+        id="a", name="a", command="x", env={"TOKEN_A": "from-config"}, requires_env=("TOKEN_A",)
+    )
+    assert from_config.missing_env() == ()
+
+
+def test_requires_env_is_parsed_from_json(tmp_path: Path) -> None:
+    """★ 这个字段以前只写在 JSON 里、没有任何代码读它 —— 是个死字段。"""
+
+    (tmp_path / "svc.json").write_text(
+        json.dumps(
+            {
+                "id": "svc",
+                "transport": "stdio",
+                "command": "npx",
+                "requiresEnv": ["A_TOKEN", "B_SECRET"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_mcp_configs(tmp_path)[0]
+    assert config.requires_env == ("A_TOKEN", "B_SECRET")

@@ -79,6 +79,13 @@ class McpServerConfig:
     args: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
+    requires_env: tuple[str, ...] = ()
+    """启动前必须存在的环境变量（凭据）。
+
+    ★ 这个字段以前只写在 JSON 里、没有任何代码读它 —— 于是缺凭据时
+      子进程照样启动，然后以一个看不懂的错误失败（或更糟：静默返回空工具）。
+      **使用者会以为是配置写错了，而实际只是没设 token。**
+    """
 
     @staticmethod
     def from_json(raw: dict[str, Any]) -> McpServerConfig | None:
@@ -100,6 +107,20 @@ class McpServerConfig:
             args=tuple(str(a) for a in raw.get("args", ())),
             env={str(k): str(v) for k, v in (raw.get("env") or {}).items()},
             enabled=bool(raw.get("enabled", True)),
+            requires_env=tuple(str(k) for k in raw.get("requiresEnv", ())),
+        )
+
+    def missing_env(self) -> tuple[str, ...]:
+        """返回缺失的凭据变量名。
+
+        ★ 同时看进程环境与配置里的 env —— 使用者可以二选一：
+          写进本机环境变量，或直接填在配置的 env 字段里。
+        """
+
+        return tuple(
+            name
+            for name in self.requires_env
+            if not (self.env.get(name) or os.environ.get(name))
         )
 
 

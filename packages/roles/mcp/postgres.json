@@ -1,25 +1,25 @@
 {
   "schemaVersion": 1,
-  "id": "github",
-  "name": "GitHub",
+  "id": "postgres",
+  "name": "PostgreSQL",
   "category": "third-party-app",
-  "purpose": "代码托管：仓库、Issue、PR、提交历史",
+  "purpose": "数据库：只读查询与 schema 检查",
   "transport": "stdio",
   "command": "npx",
   "args": [
     "-y",
-    "@modelcontextprotocol/server-github"
+    "@modelcontextprotocol/server-postgres"
   ],
   "env": {},
   "enabled": false,
   "requiresEnv": [
-    "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "POSTGRES_CONNECTION_STRING"
   ],
-  "credentialHowTo": "GitHub → Settings → Developer settings → Personal access tokens，勾选 repo 权限",
-  "docs": "https://github.com/modelcontextprotocol/servers",
+  "credentialHowTo": "连接串形如 postgresql://user:pass@host:5432/db；★ 建议用只读账号",
+  "docs": "https://github.com/modelcontextprotocol/servers-archived",
   "status": "disconnected",
   "authentication": "missing",
   "tools": [],
-  "configSource": "packages/roles/mcp/github.json",
+  "configSource": "packages/roles/mcp/postgres.json",
   "error": "未启用。配置凭据后把 enabled 改为 true 即可接入；工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
 }
