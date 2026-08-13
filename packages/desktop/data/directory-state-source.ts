@@ -22,7 +22,11 @@ import type {
 import type { StateListener, StateSource } from './state-source'
 
 const DEFAULT_POLL_INTERVAL_MS = 1_000
-const DEFAULT_STALE_AFTER_MS = 2 * 60_000
+// ★ 引擎单次模型/工具调用超时是 180s（service.py 的 model_timeout_seconds），
+//   一个 worker 在跑长调用时可能长时间没有事件写入。阈值必须显著高于 180s，
+//   否则会把「还在干活的 worker」误判成 stale。10 分钟既能兜住慢调用，
+//   又能及时揪出真死掉的 worker。
+const DEFAULT_STALE_AFTER_MS = 10 * 60_000
 const READ_ATTEMPTS = 3
 const MAX_STATE_FILE_BYTES = 4 * 1024 * 1024
 const MAX_STATE_FILES = 5_000
