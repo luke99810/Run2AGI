@@ -66,7 +66,7 @@ loader 会校验引用的 Skill manifest 必须存在、id 与目录名一致，
 | `filesystem` | connected | read_file · write_file · list_directory | 本地项目文件入口；实际读写仍由 RoleSpec / ToolSurface 限制 |
 | `git` | connected | read_diff · create_diff · merge_changes | Git 工作区入口；不绕过路径锁和评审门禁 |
 | `browser` | disconnected | open_page · inspect_dom · capture_screenshot | 只投影清单，尚未启动浏览器 MCP server |
-| `agentteams` | disconnected / missing auth | create_worker · inspect_worker · collect_result | 只投影 Team-mode 能力清单，仍需 endpoint 与凭据 |
+| `agentteams` | disconnected / missing auth | create_worker · inspect_worker · dispatch_task · collect_result | 只投影 Team-mode 能力清单，仍需 endpoint 与凭据 |
 
 引擎启动时会把 `mcp/*.json` 投影到 `.codentum/mcp/*.json`。C 的 MCP 页只读这个
 运行时投影，不自行猜连接状态。`connected` 也只代表服务入口在项目状态中可见；

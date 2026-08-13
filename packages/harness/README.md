@@ -71,15 +71,18 @@ JSON hash 派生。它实现 exact / structural / lexical 三个确定性检索�
 百炼默认价格表来自 `codentum_harness.model_gateway.bailian_pricing`，以人民币/百万 Token
 归因；缺价格或超出已审计价格阶梯时 fail-closed，不把真实调用记成 0 成本。
 
-`TeamWorkerRuntime` 目前是 AgentTeams 适配的最小壳：从同一个 `SpawnRequest` 写 manifest /
-checkpoint-0 / Prompt Bundle，再通过官方 `agt` CLI 创建并检查 AgentTeams Worker 资源。
-每次创建/检查得到的 `status.json` 会同步投影成 Worker `progress` 事件，payload 使用
-`moduleId=agentteams.worker`、`moduleLabel=AgentTeams Worker`、`moduleState` 与
-`status_ref=file:agentteams/status.json`，因此桌面端现有执行中心可以直接展示 Team-mode
-资源状态，不需要读取 AgentTeams 私有目录。
-在任务派发和结果回收接上之前，`settle()` 会返回 `WorkerFailed(runtime_error)`，
-并附上 `file:agentteams/status.json` 或 `file:agentteams/error.json` 证据，避免把“Worker 资源已 Running”
-误报成“Codentum 任务已完成”。
+`TeamWorkerRuntime` 是 AgentTeams 适配器：从同一个 `SpawnRequest` 写 manifest /
+checkpoint-0 / Prompt Bundle，通过官方 `agt` CLI 创建并检查 AgentTeams Worker 资源，
+再把 Codentum task spec 交给可注入的 `AgentTeamsClient` 派发并回收结果。
+创建/检查得到的 `status.json`、任务派发 `dispatch.json`、终局回收 `result.json`
+都会同步投影成 Worker `progress` / `finished` 事件，因此桌面端现有执行中心可以直接展示
+Team-mode 资源、派发和结果状态，不需要读取 AgentTeams 私有目录。
+
+默认 `AgentTeamsDockerCLIClient` 负责资源管理和 Matrix Manager 派发：它从环境或
+`~/agentteams-manager.env` 读取本机 AgentTeams 管理员凭据，向 Manager DM 房间发送包含
+PromptBundle digest 的任务消息，并只在观察到 `CODENTUM_RESULT {...}` 终局标记时认定
+完成或失败。缺凭据、Worker 未 Running、派发失败或超时未见终局标记都会 fail-closed，
+避免把“Worker 资源已 Running”误报成“Codentum 任务已完成”。
 
 ---
 

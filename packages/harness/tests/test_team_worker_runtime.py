@@ -4,18 +4,29 @@ import asyncio
 import json
 from pathlib import Path
 
-from codentum_contracts.state import RoleSkill
+import codentum_harness.worker.team as team_worker
 from codentum_contracts import (
     BudgetGrantRuntime,
+    EvidenceRef,
+    FailureCode,
     ModelRouting,
     PacketId,
     RoleSpec,
     SpawnRequest,
+    WorkerCompleted,
     WorkerFailed,
 )
 from codentum_contracts.interfaces import WorkerEvent, WorkerHandle
+from codentum_contracts.state import RoleSkill
 from codentum_harness.runtime import TeamWorkerRuntimeConfig, build_team_worker_runtime
-from codentum_harness.worker import AgentTeamsWorkerSpec, AgentTeamsWorkerStatus, TeamWorkerRuntime
+from codentum_harness.worker import (
+    AgentTeamsDispatchReceipt,
+    AgentTeamsTaskResult,
+    AgentTeamsTaskSpec,
+    AgentTeamsWorkerSpec,
+    AgentTeamsWorkerStatus,
+    TeamWorkerRuntime,
+)
 
 
 def request(workspace: Path) -> SpawnRequest:
@@ -76,7 +87,7 @@ def test_team_spawn_creates_agentteams_worker_and_prompt_bundle(tmp_path: Path) 
     }
 
 
-def test_team_settle_fails_closed_until_dispatch_is_implemented(tmp_path: Path) -> None:
+def test_team_settle_dispatches_task_and_collects_completed_result(tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     client = FakeAgentTeamsClient()
     runtime = TeamWorkerRuntime(repo_root=tmp_path, client=client, role_specs=(role_spec(),))
@@ -84,17 +95,106 @@ def test_team_settle_fails_closed_until_dispatch_is_implemented(tmp_path: Path) 
     handle = asyncio.run(runtime.spawn(request(workspace)))
     outcome = asyncio.run(runtime.settle(handle))
 
-    assert isinstance(outcome, WorkerFailed)
-    assert outcome.status == "failed"
-    assert "task dispatch and result collection are not implemented yet" in outcome.detail
-    assert tuple(outcome.evidence) == ("file:agentteams/status.json",)
+    assert isinstance(outcome, WorkerCompleted)
+    assert outcome.status == "completed"
+    assert tuple(outcome.evidence) == (
+        "file:agentteams/status.json",
+        "file:agentteams/dispatch.json",
+        "file:agentteams/result.json",
+        "file:agentteams/team-result.md",
+    )
+    assert outcome.spent_cny == 0.12
+    assert outcome.touched_paths == ("src/app.py",)
+    assert len(client.dispatched) == 1
+    task = client.dispatched[0]
+    assert task.task_id == "wp-abcdef-attempt-1"
+    assert task.worker_name == "codentum-coder-wp-abcdef-a1"
+    assert task.prompt_ref == "file:prompt/manifest.json"
+    assert task.prompt_digest.startswith("sha256:")
+
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    dispatch = json.loads((evidence_dir / "agentteams" / "dispatch.json").read_text(encoding="utf-8"))
+    result = json.loads((evidence_dir / "agentteams" / "result.json").read_text(encoding="utf-8"))
+    assert dispatch["transport"] == "fake-matrix"
+    assert result["status"] == "completed"
+    assert result["spent_cny"] == 0.12
 
     events = asyncio.run(_collect_events(runtime, handle))
-    assert [event.kind for event in events] == ["started", "checkpoint", "progress", "progress", "finished"]
+    assert [event.kind for event in events] == [
+        "started",
+        "checkpoint",
+        "progress",
+        "progress",
+        "progress",
+        "progress",
+        "finished",
+    ]
     assert events[3].payload["status_ref"] == "file:agentteams/status.json"
     assert events[3].payload["moduleId"] == "agentteams.worker"
-    assert events[4].payload["reason"] == "team_dispatch_missing"
-    assert events[4].payload["moduleState"] == "failed"
+    assert events[4].payload["moduleId"] == "agentteams.dispatch"
+    assert events[4].payload["dispatch_ref"] == "file:agentteams/dispatch.json"
+    assert events[5].payload["moduleId"] == "agentteams.result"
+    assert events[5].payload["result_ref"] == "file:agentteams/result.json"
+    assert events[6].payload["reason"] == "team_result_collected"
+    assert events[6].payload["moduleState"] == "completed"
+
+
+def test_team_settle_returns_failed_when_agentteams_result_fails(tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    client = FakeAgentTeamsClient(
+        result=AgentTeamsTaskResult(
+            status="failed",
+            detail="worker reported blocked",
+            reason_code=FailureCode.RUNTIME_ERROR,
+            evidence=(EvidenceRef("file:agentteams/blocker.md"),),
+            spent_cny=0.03,
+        )
+    )
+    runtime = TeamWorkerRuntime(repo_root=tmp_path, client=client, role_specs=(role_spec(),))
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    outcome = asyncio.run(runtime.settle(handle))
+
+    assert isinstance(outcome, WorkerFailed)
+    assert outcome.detail == "worker reported blocked"
+    assert outcome.reason_code == "runtime_error"
+    assert tuple(outcome.evidence) == (
+        "file:agentteams/status.json",
+        "file:agentteams/dispatch.json",
+        "file:agentteams/result.json",
+        "file:agentteams/blocker.md",
+    )
+    assert outcome.spent_cny == 0.03
+    events = asyncio.run(_collect_events(runtime, handle))
+    assert events[-1].payload["reason"] == "team_result_failed"
+    assert events[-1].payload["moduleState"] == "failed"
+
+
+def test_agentteams_result_marker_parses_completed_result() -> None:
+    payload: dict[str, object] = {
+        "chunk": [
+            {
+                "content": {
+                    "body": (
+                        "manager note\n"
+                        'CODENTUM_RESULT {"taskId":"wp-abcdef-attempt-1",'
+                        '"status":"completed","detail":"done",'
+                        '"spentCny":"0.05","touchedPaths":["src/app.py"],'
+                        '"evidence":["file:agentteams/team-result.md"]}'
+                    )
+                }
+            }
+        ]
+    }
+
+    result = team_worker._extract_codentum_result(payload, "wp-abcdef-attempt-1")
+
+    assert result is not None
+    assert result.status == "completed"
+    assert result.detail == "done"
+    assert result.spent_cny == 0.05
+    assert result.touched_paths == ("src/app.py",)
+    assert result.evidence == ("file:agentteams/team-result.md",)
 
 
 def test_team_spawn_reads_active_skill_prompt_from_project_shared_space(tmp_path: Path) -> None:
@@ -193,10 +293,23 @@ def _write_shared_skill(root: Path, skill_id: str, body: str) -> None:
 
 
 class FakeAgentTeamsClient:
-    def __init__(self, *, create_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        create_error: Exception | None = None,
+        result: AgentTeamsTaskResult | None = None,
+    ) -> None:
         self.created: list[AgentTeamsWorkerSpec] = []
+        self.dispatched: list[AgentTeamsTaskSpec] = []
         self.create_error = create_error
         self.statuses: dict[str, AgentTeamsWorkerStatus] = {}
+        self.result = result or AgentTeamsTaskResult(
+            status="completed",
+            detail="team completed task",
+            evidence=(EvidenceRef("file:agentteams/team-result.md"),),
+            spent_cny=0.12,
+            touched_paths=("src/app.py",),
+        )
 
     def create_worker(self, spec: AgentTeamsWorkerSpec) -> None:
         if self.create_error is not None:
@@ -215,6 +328,26 @@ class FakeAgentTeamsClient:
 
     def worker_status(self, name: str) -> AgentTeamsWorkerStatus:
         return self.statuses[name]
+
+    def dispatch_task(self, spec: AgentTeamsTaskSpec) -> AgentTeamsDispatchReceipt:
+        self.dispatched.append(spec)
+        return AgentTeamsDispatchReceipt(
+            task_id=spec.task_id,
+            worker_name=spec.worker_name,
+            transport="fake-matrix",
+            target="!room:matrix-local.agentteams.io:18080",
+            external_id="$event",
+            submitted_at="2026-08-13T00:00:00+00:00",
+            detail="fake dispatch accepted",
+        )
+
+    def collect_result(
+        self,
+        spec: AgentTeamsTaskSpec,
+        receipt: AgentTeamsDispatchReceipt,
+    ) -> AgentTeamsTaskResult:
+        assert spec.task_id == receipt.task_id
+        return self.result
 
 
 async def _collect_events(runtime: TeamWorkerRuntime, handle: WorkerHandle) -> list[WorkerEvent]:

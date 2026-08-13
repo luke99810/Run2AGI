@@ -164,7 +164,15 @@ class TeamWorkerRuntimeConfig:
     worker_name_prefix: str = "codentum"
     create_wait_timeout_seconds: float = 300.0
     controller_container: str = "agentteams-controller"
+    manager_container: str = "agentteams-manager"
     docker_executable: str | None = None
+    env_file: str | None = None
+    matrix_url: str | None = None
+    matrix_domain: str | None = None
+    admin_user: str | None = None
+    admin_password: str | None = None
+    result_wait_timeout_seconds: float = 300.0
+    result_poll_seconds: float = 5.0
 
 
 def build_runner(
@@ -285,10 +293,22 @@ def build_team_worker_runtime(
         raise ValueError("context_char_budget must be positive")
     if config.create_wait_timeout_seconds <= 0:
         raise ValueError("create_wait_timeout_seconds must be positive")
+    if config.result_wait_timeout_seconds <= 0:
+        raise ValueError("result_wait_timeout_seconds must be positive")
+    if config.result_poll_seconds <= 0:
+        raise ValueError("result_poll_seconds must be positive")
     resolved_client = client or AgentTeamsDockerCLIClient(
         AgentTeamsDockerCLIConfig(
             controller_container=config.controller_container,
+            manager_container=config.manager_container,
             docker_executable=config.docker_executable,
+            env_file=config.env_file,
+            matrix_url=config.matrix_url,
+            matrix_domain=config.matrix_domain,
+            admin_user=config.admin_user,
+            admin_password=config.admin_password,
+            result_wait_timeout_seconds=config.result_wait_timeout_seconds,
+            result_poll_seconds=config.result_poll_seconds,
         )
     )
     return TeamWorkerRuntime(
