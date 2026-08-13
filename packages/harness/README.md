@@ -31,7 +31,8 @@
 
 | 目录 | 职责 |
 |---|---|
-| `context-broker/` | 可见性矩阵 + 配方 + 预算降级链 + 检索确定性梯度 |
+| `context_broker/` | 可见性矩阵 + 配方 + 预算降级链 |
+| `memory_index/` | 冻结 `MemoryIndex` 的本地持久实现；消费被授权的知识资源并产出可复现 `indexVersion` |
 | `tool-surface/` | 从 RoleSpec 派生工具面。**角色看不见的工具不出现在列表里** |
 | `worker/` | 执行体封装：Solo 的 Git worktree 隔离、Team 的 AgentTeams Worker 资源适配、生命周期 |
 | `runner/` | Worker 的真实执行适配器；P0 先提供本地命令 Runner 与 ModelGatewayRunner，后续接百炼 / Hermes / Claude Code |
@@ -57,6 +58,13 @@ state 为空或 `active` 的 Skill 正文。运行时优先使用项目共享空
 `packages/roles/skills/<id>/SKILL.md`。写出的 `prompt/manifest.json` 记录
 `skill_refs` 与 `skill_source`，便于桌面端和评审只看证据就知道这次 Worker 实际带了哪些
 Skill，以及这些 Skill 来自项目共享副本还是内置源。
+
+`PersistentMemoryIndex` 是当前 B 侧的最小真实记忆索引：entry 以内容寻址
+`mem:sha256:*` 存到 `.codentum/memory/index/entries/`，`version()` 由 entries 的稳定
+JSON hash 派生。它实现 exact / structural / lexical 三个确定性检索档位；semantic
+目前只作为 degraded fallback 标记，不伪装已有向量库。engine 已能消费
+`codentum.resource-selection.v1` 中 `kind=knowledge` 的本地文件/目录，索引后把
+`indexVersion` 与 memory ref 注入 ContextBundle。
 
 `ModelGatewayRunner` 则读取同一份 Prompt Bundle，经冻结的 `ModelGateway` 发起一次模型调用，
 并把模型响应、usage、tool_calls 与 prompt digest 写入 `model/` 证据目录。

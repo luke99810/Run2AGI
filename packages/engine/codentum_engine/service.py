@@ -64,6 +64,13 @@ from codentum_control_plane.reconcile import ReconcileLoop
 from codentum_control_plane.state_machine import TransitionTable
 from codentum_delivery.protocol import CAPABILITY_NAMES, PROTOCOL_VERSION, JsonValue
 from codentum_harness.context_broker import ContextCandidate
+from codentum_harness.memory_index import (
+    PersistentMemoryIndex,
+    ResourceSelectionError,
+    index_knowledge_sources_now,
+    knowledge_sources_from_payload,
+    memory_context_candidates_now,
+)
 from codentum_harness.model_gateway import audited_bailian_pricing
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
@@ -426,7 +433,7 @@ class EngineService:
         budget = payload.get("budgetCny")
         packet_budget = (
             float(budget)
-            if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0
+            if isinstance(budget, int | float) and not isinstance(budget, bool) and budget > 0
             else self.config.packet_budget_cny
         )
 
@@ -634,10 +641,11 @@ class EngineService:
           被 char_budget 裁掉的话，模型又会收到一份没有任务的 prompt。
         """
 
-        text = self._requirements.text_for(str(request.packet_id))
+        requirement_record = self._requirements.record_for(str(request.packet_id))
+        text = requirement_record.get("text") if requirement_record is not None else None
         if not text:
             return ()
-        return (
+        candidates: list[ContextCandidate] = [
             ContextCandidate(
                 ref=f"requirement:{request.packet_id}",
                 artifact_path=f"requirements/{request.packet_id}.json",
@@ -646,7 +654,35 @@ class EngineService:
                 summary="操作者提交的需求原文",
                 priority=0,
             ),
-        )
+        ]
+        payload = requirement_record.get("payload") if requirement_record is not None else {}
+        submitted_at = requirement_record.get("submittedAt") if requirement_record is not None else None
+        try:
+            sources = knowledge_sources_from_payload(
+                payload if isinstance(payload, dict) else {},
+                packet_id=request.packet_id,
+                role=role_spec.id,
+            )
+            if sources:
+                index = PersistentMemoryIndex(self.config.resolved_state_dir() / "memory" / "index")
+                index_knowledge_sources_now(
+                    index,
+                    sources,
+                    created_at=submitted_at if isinstance(submitted_at, str) else _now_iso(),
+                )
+                candidates.extend(
+                    memory_context_candidates_now(
+                        index,
+                        query_text=text,
+                        role_spec=role_spec,
+                        packet_id=request.packet_id,
+                        limit=5,
+                        char_budget=max(1, self.config.context_char_budget // 2),
+                    )
+                )
+        except ResourceSelectionError as exc:
+            logger.warning("MemoryIndex 资源选择被拒绝：%s", exc)
+        return tuple(candidates)
 
     # ══════════════════════════════════════════════════════════
 

@@ -180,6 +180,20 @@ class RequirementStore:
         return path
 
     def text_for(self, packet_id: str) -> str | None:
+        record = self.record_for(packet_id)
+        if record is None:
+            return None
+        text = record.get("text")
+        return text if isinstance(text, str) and text else None
+
+    def payload_for(self, packet_id: str) -> dict[str, Any] | None:
+        record = self.record_for(packet_id)
+        if record is None:
+            return None
+        payload = record.get("payload")
+        return payload if isinstance(payload, dict) else None
+
+    def record_for(self, packet_id: str) -> dict[str, Any] | None:
         path = self._root / f"{packet_id}.json"
         if not path.exists():
             return None
@@ -187,8 +201,7 @@ class RequirementStore:
             raw = json.loads(path.read_text("utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
-        text = raw.get("text")
-        return text if isinstance(text, str) and text else None
+        return raw if isinstance(raw, dict) else None
 
 
 def choose_acceptance_author(

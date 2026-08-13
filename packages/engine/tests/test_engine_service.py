@@ -215,6 +215,55 @@ def test_requirement_reaches_the_model_context(project: Path, fake_key: None) ->
     assert candidates[0].required is True
 
 
+def test_knowledge_resource_selection_is_indexed_into_memory_context(
+    project: Path,
+    fake_key: None,
+) -> None:
+    """★ C 已经把知识资源放进 resourceSelections；B 必须真的消费它。
+
+    这条不是证明 RAG 完整产品化，而是钉住最关键的运行时事实：
+    本地知识文件会进入 MemoryIndex，生成 indexVersion，并作为 ContextCandidate
+    进入 Harness，而不是只躺在 requirement payload 里。
+    """
+
+    knowledge = project / "domain-notes.md"
+    knowledge.write_text("订阅费用页面必须展示 CNY 成本归因和模型用量。\n", encoding="utf-8")
+    service = _service(project)
+    service.command(
+        _command(
+            "submit_requirement",
+            service.run_id,
+            project,
+            requirement="实现订阅费用页面",
+            resourceSelectionContract="codentum.resource-selection.v1",
+            resourceSelections=[
+                {
+                    "id": "managed:00000000-0000-0000-0000-000000000001",
+                    "kind": "knowledge",
+                    "scope": "project",
+                    "sourceKind": "file",
+                    "localPath": str(knowledge),
+                }
+            ],
+        )
+    )
+    packet_id = next(iter(service.packets()))
+
+    class _Request:
+        pass
+
+    request = _Request()
+    request.packet_id = packet_id  # type: ignore[attr-defined]
+
+    candidates = service._context_loader(request, service._role_specs[0])
+    memory_candidates = [candidate for candidate in candidates if candidate.ref.startswith("memory:")]
+
+    assert memory_candidates, "知识资源没有进入 MemoryIndex context"
+    assert "indexVersion: sha256:" in memory_candidates[0].text
+    assert "CNY 成本归因" in memory_candidates[0].text
+    assert list((project / ".codentum" / "memory" / "index" / "entries").glob("*.json"))
+
+
 def test_unknown_payload_fields_are_archived_not_dropped(project: Path, fake_key: None) -> None:
     """★ C 的桌面端会往 payload 里塞 taskId / taskHistory / connectivityMode
     等字段。引擎现在还不消费它们 —— 但「丢掉」和「存着没用」是两回事：
