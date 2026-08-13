@@ -168,6 +168,17 @@ class ReconcileLoop:
     _tick_count: int = field(default=0, init=False)
     _dirty: bool = field(default=False, init=False)
 
+    _state_dir_ensured: bool = field(default=False, init=False)
+    """是否已经铺过一次状态目录。
+
+    ★ 用来区分「初始化」与「运行中自愈」：第一次什么都不存在是正常的，
+      把它也报成 warning 会让每次正常启动都刷一条，真出事那条就淹没在噪音里。
+      **告警的价值来自它的稀有。**
+
+    ★ 它**不能**由 `load_state()` 重置 —— 第一版就是加在那里，
+      于是每次重新加载状态都把标志清掉，自愈告警再也不响。
+    """
+
     _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False, repr=False)
     """Persistent event loop shared between spawn() and settle() calls.
     
@@ -368,6 +379,26 @@ class ReconcileLoop:
             "utf-8",
         )
 
+    def _heal_state_dir_if_missing(self) -> None:
+        """常态下只做几次 stat；确实缺东西了才走完整的补齐流程。
+
+        ★ 把「检查」与「补齐」分开，是因为两者的频率差着几个数量级：
+          检查每轮都要做，补齐几乎永远不触发。
+          把它们绑在一起的代价是每轮一次文件写入 —— 实测 25 倍的总耗时。
+        """
+
+        root = Path(self.state_dir)
+        required = (
+            root / "graph.json",
+            root / "decisions.jsonl",
+            root / "packets",
+            root / "evidence",
+            root / "knowledge",
+        )
+        if all(path.exists() for path in required):
+            return
+        self.ensure_state_dir()
+
     def ensure_state_dir(self) -> None:
         """把 `.codentum/` 铺成一份**完整且连贯的空状态**。
 
@@ -392,16 +423,25 @@ class ReconcileLoop:
           evidence/ 本身就是合法状态，这里不是造数据。
         """
         root = Path(self.state_dir)
+        healed: list[str] = []
+
+        if not root.exists():
+            healed.append(".codentum/")
         root.mkdir(parents=True, exist_ok=True)
         for directory in ("evidence", "knowledge", "packets"):
-            (root / directory).mkdir(parents=True, exist_ok=True)
+            target = root / directory
+            if not target.is_dir():
+                healed.append(f"{directory}/")
+            target.mkdir(parents=True, exist_ok=True)
 
         decisions = root / "decisions.jsonl"
         if not decisions.exists():
+            healed.append("decisions.jsonl")
             decisions.write_text("", encoding="utf-8")
 
         graph = root / "graph.json"
         if not graph.exists():
+            healed.append("graph.json")
             graph.write_text(
                 json.dumps(
                     {
@@ -416,10 +456,44 @@ class ReconcileLoop:
                 encoding="utf-8",
             )
 
+        budget_was_missing = not (root / "budget.json").exists()
+
         # ★ budget.json 仍然遵守「没有 budget_tracker 就不写」——
         #   凭空造一个预算数字比缺文件更糟，缺文件只是缺，造出来的数字会被当真。
         #   （`_write_budget` 在这种情况下会打 warning，那是有意的。）
         self._write_budget(root)
+
+        # ★ 只有**真的写出来了**才算补齐。
+        #
+        #   第一版直接在写之前 append("budget.json")，于是没有 budget_tracker 时
+        #   日志每轮都说「已自动补齐：budget.json」—— 而 `_write_budget` 那种
+        #   情况下根本不写，文件依旧不存在。
+        #   **声称补了、其实没补** —— 正是这套系统一路在拆的那个病，
+        #   这次出现在了修它的代码里。判据是「补完之后它在不在」。
+        if budget_was_missing and (root / "budget.json").exists():
+            healed.append("budget.json")
+
+        # ★ 补过东西就**出声**。
+        #
+        #   静默自愈会把「有人在删你的状态」这件事藏起来 —— 而那是个真问题：
+        #   2026-08-12 就发生过一次（另一个进程把 .codentum/ 当调试残留清掉，
+        #   运行中的桌面端立刻排出六条 [missing]，而引擎毫无察觉，
+        #   直到重启才恢复）。
+        #
+        #   自愈让系统能继续跑，出声让人知道刚才发生过异常。**两者都要。**
+        # ★ 只有**已经铺过一次之后**再缺失才算自愈。
+        #
+        #   第一次调用是初始化 —— 那时什么都不存在是正常的，
+        #   把它也报成「已自动补齐」会让每次正常启动都刷一条 warning，
+        #   而真出事那条就淹没在噪音里了。
+        #   **告警的价值来自它的稀有。**
+        if healed and self._state_dir_ensured:
+            logger.warning(
+                "状态目录在运行中缺失，已自动补齐：%s"
+                "（这通常意味着有别的进程动了 .codentum/）",
+                "、".join(healed),
+            )
+        self._state_dir_ensured = True
 
     # ════════════════════════════════════════════════════════════
     #  调和主循环
@@ -475,6 +549,24 @@ class ReconcileLoop:
         返回本轮实际发生的状态变更。
         """
         self._tick_count += 1
+
+        # ★ 每轮都补一次状态目录 —— **自愈，而不是等重启**。
+        #
+        #   `ensure_state_dir()` 原来只在引擎启动时跑一次。文件一旦在运行中
+        #   消失（别的进程清理、误删、外部同步工具），引擎毫无察觉，
+        #   桌面端就一直排着 [missing]，**直到有人重启它**。
+        #
+        #   2026-08-12 实际发生了一次：另一个进程把 `.codentum/` 当调试残留删了，
+        #   运行中的界面立刻出现六条 [missing]，而引擎照常 tick、照常写 packet ——
+        #   写进了一个已经不存在的目录。
+        #
+        #   ★ 常态路径只做几次 stat，什么都不缺就直接返回 ——
+        #     **不能每轮都调 `ensure_state_dir()`**：它里面的 `_write_budget`
+        #     是无条件重写，等于每轮一次文件写入。第一版就是这么干的，
+        #     全量测试从 140 秒变成 3395 秒（25 倍）。
+        #     自愈本身没错，错在把「补缺」和「重写」绑在了一起。
+        self._heal_state_dir_if_missing()
+
         transitions: list[PacketTransition] = []
         errors: list[str] = []
 
