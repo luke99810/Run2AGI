@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "alipay",
+  "name": "支付宝",
+  "category": "third-party-app",
+  "transport": "stdio",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@alipay/mcp-server-alipay"
+  ],
+  "env": {},
+  "enabled": false,
+  "requiresEnv": [
+    "AP_APP_ID",
+    "AP_APP_KEY",
+    "AP_PUB_KEY"
+  ],
+  "docs": "https://www.npmjs.com/package/@alipay/mcp-server-alipay",
+  "note": "支付宝开放平台 MCP server。需在开放平台创建应用并配置密钥；★ 涉及资金操作，接入前请确认 RoleSpec 的 riskLevel 与人工审批链路已就绪——这类工具不应默认对所有角色可见。",
+  "status": "disconnected",
+  "authentication": "missing",
+  "tools": [],
+  "configSource": "packages/roles/mcp/alipay.json",
+  "error": "尚未配置凭据，未连接。★ 涉及资金操作：接入前请确认 riskLevel 与人工审批链路已就绪，这类工具不应默认对所有角色可见。 工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
+}

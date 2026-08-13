@@ -53,6 +53,7 @@ from codentum_contracts.state import EvidenceRef
 from codentum_harness.prompt_bundle import load_worker_prompt_bundle
 
 from .acceptance import split_command, vacuity_check
+from .mcp_toolbox import build_mcp_toolbox
 from .tools import ToolExecutor, tool_schemas_for
 
 __all__ = ["AgentRunnerConfig", "build_agent_runner"]
@@ -76,6 +77,12 @@ class AgentRunnerConfig:
     acceptance_predicate: str = "python -m pytest workspace -q"
     """会被门禁真的执行的那条谓词。写进 prompt 是为了让「完成」有唯一定义。"""
 
+    mcp_config_dir: Path | None = None
+    """MCP 配置目录。**主 Agent 接一次，所有已连服务的工具自动进入工具面。**
+
+    ★ 为 None 时不连任何 MCP —— 内置工具照常可用，不影响主链路。
+    """
+
 
 def build_agent_runner(config: AgentRunnerConfig):  # type: ignore[no-untyped-def]
     """造一个 `WorkerRunner`（`Callable[[SpawnRequest], WorkerOutcome]`）。"""
@@ -97,7 +104,11 @@ class _AgentRun:
             f"{req.packet_id}-attempt-{req.attempt}"
         )
         self._model_dir = self._evidence_root / "model"
-        self._tools = ToolExecutor(self._workspace)
+        # ★ MCP 在这里接入：连不上的 server 不阻断内置工具。
+        self._mcp = (
+            build_mcp_toolbox(config.mcp_config_dir) if config.mcp_config_dir is not None else None
+        )
+        self._tools = ToolExecutor(self._workspace, mcp=self._mcp)
         self._transcript: list[dict[str, Any]] = []
         self._spent = 0.0
         self._acceptance_predicate = acceptance_predicate
@@ -123,6 +134,13 @@ class _AgentRun:
     async def _run(self) -> WorkerOutcome:
         prompt = load_worker_prompt_bundle(self._evidence_root)
         tools = tool_schemas_for(tuple(self._req.tools))
+        if self._mcp is not None:
+            # ★ 第三方工具与内置工具并入同一个工具面。
+            #   名字带 server 前缀，不会与内置工具冲突。
+            mcp_schemas = self._mcp.schemas()
+            if mcp_schemas:
+                logger.info("已接入 MCP 工具 %d 个\n%s", len(mcp_schemas), self._mcp.summary())
+            tools = tools + mcp_schemas
         if not tools:
             # ★ 没有可用工具时**不要静默退化成 one-shot** —— 那会让
             #   「模型没写文件」看起来像模型的问题，实际是配置问题。

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "github",
+  "name": "GitHub",
+  "category": "third-party-app",
+  "transport": "stdio",
+  "command": "docker",
+  "args": [
+    "run",
+    "-i",
+    "--rm",
+    "-e",
+    "GITHUB_PERSONAL_ACCESS_TOKEN",
+    "ghcr.io/github/github-mcp-server"
+  ],
+  "env": {},
+  "enabled": false,
+  "requiresEnv": [
+    "GITHUB_PERSONAL_ACCESS_TOKEN"
+  ],
+  "docs": "https://github.com/github/github-mcp-server",
+  "note": "GitHub 官方 MCP server。设置 GITHUB_PERSONAL_ACCESS_TOKEN 环境变量后把 enabled 改为 true 即可接入；工具清单由 server 在 tools/list 时提供，此处不预先罗列——预列会在 server 版本变化后变成谎报。",
+  "status": "disconnected",
+  "authentication": "missing",
+  "tools": [],
+  "configSource": "packages/roles/mcp/github.json",
+  "error": "尚未配置凭据，未连接。设置 GITHUB_PERSONAL_ACCESS_TOKEN 后把 enabled 改为 true 即可接入。 工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
+}
