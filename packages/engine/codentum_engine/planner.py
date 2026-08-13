@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -187,6 +188,7 @@ def build_packets_from_plan(
     effort: str,
     total_budget_cny: float,
     with_integration: bool = True,
+    model_by_role: Mapping[str, str] | None = None,
 ) -> tuple[WorkPacket, ...]:
     """任务列表 → packet 列表（含 QA 前置与集成收尾）。
 
@@ -195,6 +197,15 @@ def build_packets_from_plan(
         [qa: 写 M 的验收测试] ──→ [coder: 实现 M] ──┐
         [qa: 写 N 的验收测试] ──→ [coder: 实现 N] ──┼──→ [integrator: 集成]
                                                     ┘
+
+    ★ `model_by_role` 必须传：每个角色在 RoleSpec 里声明了自己的
+      `modelPolicy.defaultModel`，而 qa / reviewer 还声明了
+      `mustDifferFrom: [coder]`。给所有 packet 用同一个模型会被准入
+      以 `MODEL_ISOLATION` 拒绝 —— **同一模型既出题又做题，盲区重叠，
+      评审失效**，而那正是 QA 前置要修的问题的另一面。
+
+      ★ 第一版就是这么写的（所有 packet 同一个 model），
+        端到端跑时被准入当场拦下。**不变量拦住了实现它的人。**
 
     ★ 三条硬约束，全部在这里确定性地保证：
 
@@ -246,6 +257,7 @@ def build_packets_from_plan(
                 ),
                 kind="test",
                 role="qa",
+                model=_role_model("qa", model_by_role, model),
             )
         )
 
@@ -266,6 +278,7 @@ def build_packets_from_plan(
                 ),
                 kind="impl",
                 role="coder",
+                model=_role_model("coder", model_by_role, model),
                 deps=(test_id,),
             )
         )
@@ -290,6 +303,7 @@ def build_packets_from_plan(
                 ),
                 kind="integrate",
                 role="integrator",
+                model=_role_model("integrator", model_by_role, model),
                 deps=tuple(impl_ids),
             )
         )
@@ -300,11 +314,23 @@ def build_packets_from_plan(
 # ── 内部 ────────────────────────────────────────────────
 
 
+def _role_model(role: str, table: Mapping[str, str] | None, fallback: str) -> str:
+    """取角色自己的默认模型。
+
+    ★ 不能所有角色共用一个模型：qa / reviewer 声明了
+      `mustDifferFrom: [coder]`，共用会被准入以 MODEL_ISOLATION 拒绝。
+      **这条不变量的意义正是「同一模型既写又审等于没审」。**
+    """
+
+    return (table or {}).get(role) or fallback
+
+
 def _retag(
     packet: WorkPacket,
     *,
     kind: str,
     role: str,
+    model: str | None = None,
     deps: tuple[PacketId, ...] = (),
 ) -> WorkPacket:
     """改写 kind / role / deps。
@@ -315,7 +341,10 @@ def _retag(
       重新构造一遍等于把它们重踩一次。
     """
 
-    return packet.model_copy(update={"kind": kind, "role": role, "deps": deps})
+    update: dict[str, Any] = {"kind": kind, "role": role, "deps": deps}
+    if model is not None and packet.routing is not None:
+        update["routing"] = packet.routing.model_copy(update={"model": model})
+    return packet.model_copy(update=update)
 
 
 def _slugify(raw: str) -> str:

@@ -291,3 +291,58 @@ def test_prompt_states_the_hard_constraints() -> None:
     assert "做一个待办应用" in prompt
     assert "互不相同" in prompt
     assert str(MAX_TASKS) in prompt
+
+
+# ══════════════════════════════════════════════════════════════
+#  模型隔离
+# ══════════════════════════════════════════════════════════════
+
+
+def test_each_role_gets_its_own_model() -> None:
+    """★ 不能所有 packet 共用一个模型。
+
+    qa / reviewer 在 RoleSpec 里声明了 `mustDifferFrom: [coder]`。
+    共用同一模型会被准入以 `MODEL_ISOLATION` 拒绝 ——
+    **同一模型既出题又做题，盲区重叠，评审失效**，
+    而那正是 QA 前置要修的问题的另一面。
+
+    ★ 第一版就是共用一个模型写的，端到端跑时被准入当场拦下。
+      **不变量拦住了实现它的人** —— 而单元测试当时全绿，
+      因为它们没有一条覆盖模型隔离。
+    """
+
+    packets = build_packets_from_plan(
+        _sample_tasks(),
+        requirement="做一个待办应用",
+        model="fallback-model",
+        effort="medium",
+        total_budget_cny=7.0,
+        model_by_role={
+            "coder": "qwen-coder-plus-1106",
+            "qa": "qwen-plus-2025-07-14",
+            "integrator": "qwen-plus-2025-07-14",
+        },
+    )
+
+    by_role = {p.role: p.routing.model for p in packets if p.routing is not None}
+    assert by_role["coder"] == "qwen-coder-plus-1106"
+    assert by_role["qa"] == "qwen-plus-2025-07-14"
+    # ★ 关键：出题方与做题方的模型必须不同
+    assert by_role["qa"] != by_role["coder"], "QA 与 coder 同模型 —— 等于自己给自己出题"
+
+
+def test_missing_role_model_falls_back_without_crashing() -> None:
+    """★ 表里没有某个角色时退回默认模型，不能崩 ——
+    崩了会让整个需求失败，而这是一个可降级的情况。"""
+
+    packets = build_packets_from_plan(
+        _sample_tasks(),
+        requirement="x",
+        model="fallback-model",
+        effort="medium",
+        total_budget_cny=7.0,
+        model_by_role={"coder": "only-coder-listed"},
+    )
+    qa = next(p for p in packets if p.role == "qa")
+    assert qa.routing is not None
+    assert qa.routing.model == "fallback-model"

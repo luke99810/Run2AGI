@@ -629,6 +629,10 @@ class EngineService:
             model=self.config.model,
             effort=self.config.effort,
             total_budget_cny=budget_cny * len(tasks),
+            # ★ 必须按角色取模型：qa / reviewer 声明了 mustDifferFrom: [coder]，
+            #   共用一个模型会被准入以 MODEL_ISOLATION 拒绝。
+            #   这条不变量的意义正是「同一模型既写又审等于没审」。
+            model_by_role=self._model_by_role(),
         )
         logger.info(
             "需求拆成 %d 个任务 / %d 个 packet：%s",
@@ -663,6 +667,21 @@ class EngineService:
                 await session.close()
 
         return parse_plan(asyncio.run(asyncio.wait_for(run(), timeout=120.0)))
+
+    def _model_by_role(self) -> dict[str, str]:
+        """从 RoleSpec 读各角色的默认模型。
+
+        ★ 真源是 B 的 `modelPolicy.defaultModel`，不是引擎的配置 ——
+          引擎的 `config.model` 只是**降级用的兜底**。
+        """
+
+        table: dict[str, str] = {}
+        for spec in self._role_specs:
+            policy = getattr(spec, "modelPolicy", None)
+            default = getattr(policy, "defaultModel", None) if policy else None
+            if isinstance(default, str) and default:
+                table[str(spec.id)] = default
+        return table
 
     def _single_packet(
         self,
