@@ -970,3 +970,47 @@ class TestStateDirSelfHeals:
             loop.tick()
 
         assert not [r for r in caplog.records if "已自动补齐" in r.message]
+
+
+class TestIncrementalPersistence:
+    """★ 每个 transition 立刻落盘，不等整轮结束。
+
+    `_try_running_to_review` 里的 settle() 是阻塞的：多个 running packet
+    在同一轮里顺序 settle，若落盘在整轮之后，磁盘状态会停在最慢那个
+    worker 的进度上。
+
+    2026-08-13 实测：两个 worker 已失败 8 分钟，磁盘上仍是 8 个 running。
+    """
+
+    def test_state_is_written_before_the_tick_finishes(self, tmp_path: Path) -> None:
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+        loop.ensure_state_dir()
+
+        # 两个无依赖的 packet：第一个推进后、处理第二个时，磁盘上就该能看到第一个
+        seen_during_tick: list[str] = []
+
+        original = loop.save_state
+
+        def spy() -> None:
+            original()
+            packets_dir = state_dir / "packets"
+            states = []
+            for path in sorted(packets_dir.glob("*.json")):
+                states.append(json.loads(path.read_text(encoding="utf-8"))["state"])
+            seen_during_tick.append(",".join(states))
+
+        loop.save_state = spy  # type: ignore[method-assign]
+
+        for index in range(2):
+            _inject(loop, _make_packet(f"wp-inc{index:08d}", owns=(f"workspace/m{index}/",)))
+        original()
+        seen_during_tick.clear()
+
+        loop.tick()
+
+        # ★ 关键：tick 过程中至少落盘过 2 次（每个 transition 一次），
+        #   而不是只在最后落一次
+        assert len(seen_during_tick) >= 2, (
+            f"整轮只落盘了 {len(seen_during_tick)} 次 —— 慢 worker 会让状态长时间不可见"
+        )

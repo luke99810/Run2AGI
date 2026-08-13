@@ -55,7 +55,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codentum_contracts.state import RoleSpec, WorkPacket, dump_state
+from codentum_contracts.state import ModelRouting, PacketId, RoleSpec, WorkPacket, dump_state
 from codentum_control_plane.admission import AdmissionChecker
 from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.gates import GateRunner, register_builtin_gates
@@ -72,6 +72,7 @@ from codentum_harness.memory_index import (
     memory_context_candidates_now,
 )
 from codentum_harness.model_gateway import audited_bailian_pricing
+from codentum_contracts.interfaces import ModelMessage, ModelRequest
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
     ModelGatewayConfig,
@@ -90,6 +91,7 @@ from codentum_roles.loader import (
 )
 
 from .acceptance import build_executing_acceptance_gate
+from .planner import PlannedTask, build_packets_from_plan, parse_plan, plan_prompt
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
@@ -162,6 +164,15 @@ class EngineConfig:
     model_timeout_seconds: float = 180.0
 
     context_char_budget: int = 8000
+
+    enable_planner: bool = True
+    """是否把需求拆成多个 packet。
+
+    ★ 默认 True —— 这是「多 Agent 协同」的落点。设为 False 会退回
+      一个需求一个 coder packet：产出上限是「一个模块」。
+
+    ★ 拆解失败时**自动降级为单 packet 并出声**，不会让整个需求失败。
+    """
 
     enable_tool_loop: bool = True
     """是否使用带工具循环的 runner（模型能真的写文件）。
@@ -437,26 +448,25 @@ class EngineService:
             else self.config.packet_budget_cny
         )
 
-        packet = build_packet_for_requirement(
-            packet_id=packet_id,
+        packets = self._plan_or_single(
             requirement=requirement,
-            owns_paths=owns,
-            reads_paths=reads,
-            model=self.config.model,
-            effort=self.config.effort,
+            packet_id=packet_id,
+            owns=owns,
+            reads=reads,
             budget_cny=packet_budget,
-            acceptance_author=choose_acceptance_author(
-                [str(spec.id) for spec in self._role_specs], packet_role="coder"
-            ),
         )
 
         # ★ 准入校验在写盘之前跑。写完再校验等于「先污染再检查」——
         #   一个违规 packet 一旦落进 packets/，下次 load_state 就会把它读回来。
-        verdict = AdmissionChecker(role_specs=self._role_specs).check(packet)
-        if not verdict:
-            codes = ",".join(v.code for v in verdict.violations)
-            logger.warning("packet %s 未通过准入：%s", packet_id, codes)
-            return self._receipt(command_id, "rejected", reason=f"admission_rejected:{codes}"[:512])
+        checker = AdmissionChecker(role_specs=self._role_specs)
+        for candidate in packets:
+            verdict = checker.check(candidate)
+            if not verdict:
+                codes = ",".join(v.code for v in verdict.violations)
+                logger.warning("packet %s 未通过准入：%s", candidate.id, codes)
+                return self._receipt(
+                    command_id, "rejected", reason=f"admission_rejected:{codes}"[:512]
+                )
 
         self._requirements.save(
             RequirementRecord(
@@ -474,7 +484,8 @@ class EngineService:
             # ★ 走公开的 admit()，不再直接写 loop 的私有字段（待办 27 已修）。
             #   admit 只负责纳入，准入校验由上面那几行负责 —— 顺序不能反：
             #   先校验再纳入，否则违规 packet 会先进内存再被落盘。
-            loop.admit(packet)
+            for candidate in packets:
+                loop.admit(candidate)
             loop.save_state()
             revision = self._session.bump()
 
@@ -576,6 +587,131 @@ class EngineService:
         )
         loop.worker_runtime = self._build_worker_runtime()
         return loop
+
+    def _plan_or_single(
+        self,
+        *,
+        requirement: str,
+        packet_id: PacketId,
+        owns: tuple[str, ...],
+        reads: tuple[str, ...],
+        budget_cny: float,
+    ) -> tuple[WorkPacket, ...]:
+        """走 Planner 拆成多个 packet；拆不了就退回单 packet。
+
+        ★ 降级不是可选项，是必需：拆解依赖一次模型调用，
+          而模型调用会失败（5xx、超时、输出不是 JSON）。
+          让整个需求因为「拆解失败」而失败，是把一个**可降级**的故障
+          变成了终局 —— 单 packet 虽然产出上限低，但它一直是能用的。
+
+        ★ 降级要出声。静默退回单 packet，使用者会以为多 Agent 生效了，
+          而实际只有一个 coder 在干活。
+        """
+
+        if not self.config.enable_planner:
+            return (self._single_packet(requirement, packet_id, owns, reads, budget_cny),)
+
+        try:
+            tasks = self._decompose(requirement)
+        except Exception as exc:  # noqa: BLE001 —— 见上方注释
+            logger.warning("需求拆解失败，降级为单 packet：%s", exc)
+            return (self._single_packet(requirement, packet_id, owns, reads, budget_cny),)
+
+        if len(tasks) < 2:
+            # ★ 只拆出一个任务时不值得走多 packet 流程 ——
+            #   QA + impl + 集成三个 packet 去做一件事，成本翻三倍而产出不变。
+            logger.info("需求只拆出 1 个任务，按单 packet 处理")
+            return (self._single_packet(requirement, packet_id, owns, reads, budget_cny),)
+
+        packets = build_packets_from_plan(
+            tasks,
+            requirement=requirement,
+            model=self.config.model,
+            effort=self.config.effort,
+            total_budget_cny=budget_cny * len(tasks),
+            # ★ 必须按角色取模型：qa / reviewer 声明了 mustDifferFrom: [coder]，
+            #   共用一个模型会被准入以 MODEL_ISOLATION 拒绝。
+            #   这条不变量的意义正是「同一模型既写又审等于没审」。
+            model_by_role=self._model_by_role(),
+        )
+        logger.info(
+            "需求拆成 %d 个任务 / %d 个 packet：%s",
+            len(tasks),
+            len(packets),
+            "、".join(t.module for t in tasks),
+        )
+        return packets
+
+    def _decompose(self, requirement: str) -> tuple[PlannedTask, ...]:
+        """调一次模型把需求拆成任务列表。"""
+
+        import asyncio
+
+        gateway = build_model_gateway(self._gateway_config())
+
+        async def run() -> str:
+            session = await gateway.open(
+                "planner",
+                ModelRouting(model=self.config.model, effort=self.config.effort),  # type: ignore[arg-type]
+                self.config.packet_budget_cny,
+            )
+            try:
+                response = await session.invoke(
+                    ModelRequest(
+                        system="你是研发规划者。只输出 JSON，不要任何解释性文字。",
+                        messages=(ModelMessage(role="user", content=plan_prompt(requirement)),),
+                    )
+                )
+                return response.text or ""
+            finally:
+                await session.close()
+
+        return parse_plan(asyncio.run(asyncio.wait_for(run(), timeout=120.0)))
+
+    def _model_by_role(self) -> dict[str, str]:
+        """从 RoleSpec 读各角色的默认模型。
+
+        ★ 真源是 B 的 `modelPolicy.defaultModel`，不是引擎的配置 ——
+          引擎的 `config.model` 只是**降级用的兜底**。
+        """
+
+        table: dict[str, str] = {}
+        for spec in self._role_specs:
+            policy = getattr(spec, "modelPolicy", None)
+            default = getattr(policy, "defaultModel", None) if policy else None
+            if isinstance(default, str) and default:
+                table[str(spec.id)] = default
+        return table
+
+    def _single_packet(
+        self,
+        requirement: str,
+        packet_id: PacketId,
+        owns: tuple[str, ...],
+        reads: tuple[str, ...],
+        budget_cny: float,
+    ) -> WorkPacket:
+        return build_packet_for_requirement(
+            packet_id=packet_id,
+            requirement=requirement,
+            owns_paths=owns,
+            reads_paths=reads,
+            model=self.config.model,
+            effort=self.config.effort,
+            budget_cny=budget_cny,
+            acceptance_author=choose_acceptance_author(
+                [str(spec.id) for spec in self._role_specs], packet_role="coder"
+            ),
+        )
+
+    def _gateway_config(self) -> ModelGatewayConfig:
+        return ModelGatewayConfig.bailian(
+            pricing={
+                model: TokenPricingConfig.from_pricing(price)
+                for model, price in audited_bailian_pricing().items()
+            },
+            api_key_env=self._key_env or "",
+        )
 
     def _workers_root(self) -> Path:
         """worker 工作区的父目录 —— 必须与 `_build_spawn_request` 算出来的一致。
