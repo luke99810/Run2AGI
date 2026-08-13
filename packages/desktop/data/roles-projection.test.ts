@@ -122,12 +122,14 @@ describe('RoleSpec 项目投影', () => {
     try {
       const snapshot = await source.read()
       expect(snapshot.warnings).toEqual([])
-      expect(snapshot.mcpServices.map((service) => service.id).sort()).toEqual([
-        'agentteams',
-        'browser',
-        'filesystem',
-        'git'
-      ])
+      // ★ 守「四个基础服务都被读成投影」而非「恰好只有这四个」。
+      //   第三方应用（github / feishu / sentry / …）会随需求增删，
+      //   写死清单不会因为多一个文件而更有保障，只会让每次加应用都要改测试。
+      //   —— 与 Python 侧 test_loader.py 的三处同一个修法。
+      const ids = snapshot.mcpServices.map((service) => service.id)
+      for (const required of ['agentteams', 'browser', 'filesystem', 'git']) {
+        expect(ids).toContain(required)
+      }
       expect(snapshot.mcpServices.find((service) => service.id === 'filesystem')?.tools).toEqual([
         'read_file',
         'write_file',
