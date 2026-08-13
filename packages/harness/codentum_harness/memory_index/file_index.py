@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, assert_never
 
 from codentum_contracts import (
     MemoryEntry,
@@ -285,7 +285,11 @@ def _scope_matches(entry_scope: MemoryScope, query_scope: MemoryScope) -> bool:
             or (entry_scope.kind == "role" and entry_scope.role == query_scope.role)
             or (entry_scope.kind == "packet" and entry_scope.packet_id == query_scope.packet_id)
         )
-    return False
+    # ★ MemoryScope.kind 是三值 Literal，上面已穷尽 —— 原来的 `return False`
+    #   永远不可达（mypy unreachable）。改用 assert_never：
+    #   契约将来加第四种 kind 时，**这里会在类型检查阶段报错**，
+    #   而不是静默返回 False 把新 scope 全部判为不匹配。
+    assert_never(query_scope.kind)
 
 
 def _exact_keys(entry: MemoryEntry) -> tuple[str, ...]:
