@@ -143,6 +143,7 @@ class _AgentRun:
                 self._req.role, self._req.routing, self._req.budget.limit_cny
             )
             for turn in range(1, self._config.max_turns + 1):
+                response: ModelResponse
                 try:
                     response = await self._invoke_with_retry(
                         session,

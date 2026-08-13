@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -858,3 +859,114 @@ class TestBookkeepingPathsDoNotCountAsWork:
 
         empty_loop.run_until_stable(max_ticks=20)
         assert empty_loop.packet(PacketId("wp-bk000003")).state == "accepted"
+
+
+# ══════════════════════════════════════════════════════════════
+#  状态目录自愈
+# ══════════════════════════════════════════════════════════════
+
+
+class TestStateDirSelfHeals:
+    """★ 状态文件在**运行中**消失时，下一轮 tick 要自己补回来。
+
+    2026-08-12 实际发生过：另一个进程把 `.codentum/` 当调试残留删了，
+    运行中的桌面端立刻排出六条 `[missing]`，而引擎毫无察觉 ——
+    照常 tick、照常写 packet，写进一个已经不存在的目录，
+    **直到有人重启它才恢复**。
+
+    `ensure_state_dir()` 原来只在启动时跑一次，这就是缺口。
+    """
+
+    def test_deleted_state_files_come_back_on_next_tick(self, tmp_path: Path) -> None:
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+        loop.ensure_state_dir()
+
+        # 模拟「别的进程把状态删了」
+        shutil.rmtree(state_dir)
+        assert not state_dir.exists()
+
+        loop.tick()
+
+        assert (state_dir / "graph.json").is_file(), "graph.json 没有被补回来"
+        assert (state_dir / "decisions.jsonl").is_file()
+        assert (state_dir / "packets").is_dir()
+        assert (state_dir / "evidence").is_dir()
+
+    def test_partial_deletion_is_healed_too(self, tmp_path: Path) -> None:
+        """★ 半个状态目录比没有状态目录更坏 —— 桌面端会显示一串错误
+        而不是「尚未初始化」。所以部分缺失也要补。"""
+
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+        loop.ensure_state_dir()
+
+        (state_dir / "graph.json").unlink()
+        shutil.rmtree(state_dir / "packets")
+
+        loop.tick()
+
+        assert (state_dir / "graph.json").is_file()
+        assert (state_dir / "packets").is_dir()
+
+    def test_healing_does_not_overwrite_surviving_state(self, tmp_path: Path) -> None:
+        """★ 自愈只补缺，**绝不覆盖**。
+
+        补的时候顺手把幸存的 packet 冲掉，比不自愈严重得多 ——
+        前者丢数据，后者只是显示异常。
+        """
+
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+        loop.ensure_state_dir()
+
+        survivor = state_dir / "packets" / "wp-survivor01.json"
+        survivor.write_text('{"id": "wp-survivor01"}', encoding="utf-8")
+        (state_dir / "decisions.jsonl").write_text('{"kept": true}\n', encoding="utf-8")
+        (state_dir / "graph.json").unlink()  # 只删这一个
+
+        loop.tick()
+
+        assert survivor.read_text(encoding="utf-8") == '{"id": "wp-survivor01"}'
+        assert (state_dir / "decisions.jsonl").read_text(encoding="utf-8") == '{"kept": true}\n'
+        assert (state_dir / "graph.json").is_file()
+
+    def test_healing_is_reported_not_silent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """★ 自愈必须**出声**。
+
+        静默自愈会把「有人在删你的状态」这件事藏起来 —— 而那是个真问题。
+        自愈让系统能继续跑，出声让人知道刚才发生过异常。**两者都要。**
+        """
+
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+        loop.ensure_state_dir()
+        shutil.rmtree(state_dir)
+
+        with caplog.at_level(logging.WARNING):
+            loop.tick()
+
+        assert any("已自动补齐" in record.message for record in caplog.records), (
+            "状态被补回来了，但没有任何日志 —— 下次再发生就查不到了"
+        )
+
+    def test_steady_state_stays_quiet(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """★ 对照组：什么都没缺时不该有任何 warning。
+
+        没有它，上面那条用「每轮都 warning」也能绿 ——
+        而那会让日志里全是噪音，真出事时反而看不见。
+        """
+
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+        loop.ensure_state_dir()
+
+        with caplog.at_level(logging.WARNING):
+            loop.tick()
+            loop.tick()
+
+        assert not [r for r in caplog.records if "已自动补齐" in r.message]
