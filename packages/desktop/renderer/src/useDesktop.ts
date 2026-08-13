@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   CommandReceipt,
+  AgentConfiguration,
+  AgentConfigurationPatch,
+  ConnectorConfiguration,
+  ConnectorConfigurationInput,
   DraftAttachment,
   EngineHandshake,
+  ManagedResource,
+  ManagedResourceKind,
+  ManagedResourcePatch,
+  McpConfiguration,
+  McpConfigurationInput,
   OperatorCommand,
   ProjectSelectionKind,
   RequirementDraftSnapshot,
@@ -37,6 +46,22 @@ export interface DesktopState {
   readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
   readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
   readonly exportTaskRecord: (suggestedName: string, markdown: string) => Promise<boolean>
+  readonly listManagedResources: (kind?: ManagedResourceKind) => Promise<readonly ManagedResource[]>
+  readonly selectManagedResources: (kind: ManagedResourceKind, sourceKind: 'file' | 'folder') => Promise<readonly ManagedResource[]>
+  readonly addManagedResourceUrl: (kind: ManagedResourceKind, url: string) => Promise<ManagedResource>
+  readonly updateManagedResource: (id: string, patch: ManagedResourcePatch) => Promise<ManagedResource>
+  readonly removeManagedResource: (id: string) => Promise<boolean>
+  readonly listConnectors: () => Promise<readonly ConnectorConfiguration[]>
+  readonly saveConnector: (input: ConnectorConfigurationInput) => Promise<ConnectorConfiguration>
+  readonly removeConnector: (id: string) => Promise<boolean>
+  readonly listAgentConfigurations: () => Promise<readonly AgentConfiguration[]>
+  readonly saveAgentConfiguration: (roleId: string, patch: AgentConfigurationPatch) => Promise<AgentConfiguration>
+  readonly removeAgentConfiguration: (roleId: string) => Promise<boolean>
+  readonly selectAgentSystemDocument: (roleId: string) => Promise<AgentConfiguration>
+  readonly clearAgentSystemDocument: (roleId: string) => Promise<AgentConfiguration>
+  readonly listMcpConfigurations: () => Promise<readonly McpConfiguration[]>
+  readonly saveMcpConfiguration: (input: McpConfigurationInput) => Promise<McpConfiguration>
+  readonly removeMcpConfiguration: (id: string) => Promise<boolean>
   readonly refresh: () => Promise<void>
   readonly sendCommand: (command: OperatorCommand) => Promise<CommandReceipt>
 }
@@ -208,6 +233,87 @@ export function useDesktop(): DesktopState {
     }
   }, [bridge])
 
+  const listManagedResources = useCallback(async (kind?: ManagedResourceKind) => {
+    if (bridge === undefined) return []
+    try {
+      return await bridge.listManagedResources(kind)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const selectManagedResources = useCallback(async (kind: ManagedResourceKind, sourceKind: 'file' | 'folder') => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.selectManagedResources(kind, sourceKind)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const addManagedResourceUrl = useCallback(async (kind: ManagedResourceKind, url: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.addManagedResourceUrl(kind, url)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const updateManagedResource = useCallback(async (id: string, patch: ManagedResourcePatch) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.updateManagedResource(id, patch)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const removeManagedResource = useCallback(async (id: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.removeManagedResource(id)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const listConnectors = useCallback(async () => bridge?.listConnectors() ?? [], [bridge])
+  const saveConnector = useCallback(async (input: ConnectorConfigurationInput) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.saveConnector(input)
+  }, [bridge])
+  const removeConnector = useCallback(async (id: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.removeConnector(id)
+  }, [bridge])
+  const listAgentConfigurations = useCallback(async () => bridge?.listAgentConfigurations() ?? [], [bridge])
+  const saveAgentConfiguration = useCallback(async (roleId: string, patch: AgentConfigurationPatch) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.saveAgentConfiguration(roleId, patch)
+  }, [bridge])
+  const removeAgentConfiguration = useCallback(async (roleId: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.removeAgentConfiguration(roleId)
+  }, [bridge])
+  const selectAgentSystemDocument = useCallback(async (roleId: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.selectAgentSystemDocument(roleId)
+  }, [bridge])
+  const clearAgentSystemDocument = useCallback(async (roleId: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.clearAgentSystemDocument(roleId)
+  }, [bridge])
+  const listMcpConfigurations = useCallback(async () => bridge?.listMcpConfigurations() ?? [], [bridge])
+  const saveMcpConfiguration = useCallback(async (input: McpConfigurationInput) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.saveMcpConfiguration(input)
+  }, [bridge])
+  const removeMcpConfiguration = useCallback(async (id: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.removeMcpConfiguration(id)
+  }, [bridge])
+
   const refresh = useCallback(async () => {
     if (bridge === undefined) return
     setError(null)
@@ -253,7 +359,23 @@ export function useDesktop(): DesktopState {
     moveRequirementDraft,
     discardDraftAttachment,
     exportTaskRecord,
+    listManagedResources,
+    selectManagedResources,
+    addManagedResourceUrl,
+    updateManagedResource,
+    removeManagedResource,
+    listConnectors,
+    saveConnector,
+    removeConnector,
+    listAgentConfigurations,
+    saveAgentConfiguration,
+    removeAgentConfiguration,
+    selectAgentSystemDocument,
+    clearAgentSystemDocument,
+    listMcpConfigurations,
+    saveMcpConfiguration,
+    removeMcpConfiguration,
     refresh,
     sendCommand
-  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, refresh, sendCommand])
+  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, listManagedResources, selectManagedResources, addManagedResourceUrl, updateManagedResource, removeManagedResource, listConnectors, saveConnector, removeConnector, listAgentConfigurations, saveAgentConfiguration, removeAgentConfiguration, selectAgentSystemDocument, clearAgentSystemDocument, listMcpConfigurations, saveMcpConfiguration, removeMcpConfiguration, refresh, sendCommand])
 }

@@ -36,7 +36,7 @@ export const NAVIGATION: readonly NavigationItem[] = [
   { id: 'home', label: '新任务', icon: 'plus' },
   { id: 'execution', label: '执行中心', icon: 'pulse' },
   { id: 'conversations', label: '对话', icon: 'chat' },
-  { id: 'plugins', label: '插件', icon: 'plug' },
+  { id: 'plugins', label: '连接器', icon: 'plug' },
   { id: 'knowledge', label: '知识库', icon: 'book' },
   { id: 'skills', label: 'Skills', icon: 'spark' },
   { id: 'mcp', label: 'MCP', icon: 'server' },

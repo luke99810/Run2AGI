@@ -32,7 +32,10 @@ const SCREENSHOTS = [
   { name: '05-cost.png', navigation: '成本', heading: '成本' },
   { name: '06-team.png', navigation: '研发团队', heading: '研发团队' },
   { name: '07-evidence.png', navigation: '证据与审计', heading: '证据与审计' },
-  { name: '10-mcp.png', navigation: 'MCP', heading: 'MCP 服务' }
+  { name: '08-skills.png', navigation: 'Skills', heading: 'Skills' },
+  { name: '09-plugins.png', navigation: '连接器', heading: '连接器' },
+  { name: '11-knowledge.png', navigation: '知识库', heading: '知识库' },
+  { name: '10-mcp.png', navigation: 'MCP', heading: 'MCP' }
 ]
 
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
@@ -223,7 +226,9 @@ async function startPageErrorMonitor(client) {
     }
     if (method === 'Runtime.consoleAPICalled' && ['error', 'assert'].includes(params.type)) {
       const values = (params.args ?? []).map((value) => value.description ?? value.value ?? value.type)
-      errors.push(`console.${params.type}: ${values.join(' ')}`)
+      const text = values.join(' ')
+      const electronSandboxDebuggerNoise = text.includes('sandboxed_renderer.bundle.js script failed to run') || text.includes("preloadScripts' of 'binding.startupData")
+      if (!electronSandboxDebuggerNoise) errors.push(`console.${params.type}: ${text}`)
     }
     if (method === 'Runtime.exceptionThrown') {
       const detail = params.exceptionDetails?.exception?.description
@@ -261,6 +266,26 @@ async function selectFixture(client, fixtureId) {
 }
 
 async function clickNavigation(client, label, expectedHeading) {
+  if (label === 'MCP') {
+    const openedSettings = await evaluate(client, `(() => {
+      const normalize = (value) => (value ?? '').replace(/\\s+/g, ' ').trim()
+      const button = [...document.querySelectorAll('.sidebar-utility-nav button')].find((candidate) => normalize(candidate.querySelector(':scope > span')?.textContent) === '设置')
+      if (!(button instanceof HTMLButtonElement)) return false
+      button.click()
+      return true
+    })()`, 'open settings for MCP')
+    if (!openedSettings) throw new Error('Settings entry was not visible for MCP navigation')
+    await waitFor(client, `document.querySelector('.content-scroll h1')?.textContent?.trim() === '设置' && document.querySelector('.settings-link-row') instanceof HTMLButtonElement`, 'MCP settings entry')
+    const openedMcp = await evaluate(client, `(() => {
+      const button = document.querySelector('.settings-link-row')
+      if (!(button instanceof HTMLButtonElement)) return false
+      button.click()
+      return true
+    })()`, 'open MCP from settings')
+    if (!openedMcp) throw new Error('Agent tools and MCP settings entry was not clickable')
+    await waitFor(client, `document.querySelector('.content-scroll h1')?.textContent?.trim() === 'MCP'`, 'MCP view to become active')
+    return
+  }
   const clicked = await evaluate(client, `(() => {
     const normalize = (value) => (value ?? '').replace(/\\s+/g, ' ').trim()
     const visible = (element) => {
@@ -341,6 +366,44 @@ async function verifyViewport(client, width, height, filename) {
     }
   }
   await captureScreenshot(client, filename)
+}
+
+async function verifyScrollableView(client, navigation, heading) {
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 900, height: 600, screenWidth: 900, screenHeight: 600, deviceScaleFactor: 1, mobile: false })
+  await clickNavigation(client, navigation, heading)
+  const result = await evaluate(client, `(() => {
+    const scroller = document.querySelector('.content-scroll')
+    if (!(scroller instanceof HTMLElement)) return null
+    scroller.scrollTop = 0
+    const start = scroller.scrollTop
+    scroller.scrollTop = scroller.scrollHeight
+    const footer = document.querySelector('.content-footer')?.getBoundingClientRect()
+    return { start, end: scroller.scrollTop, clientHeight: scroller.clientHeight, scrollHeight: scroller.scrollHeight, footerBottom: footer?.bottom ?? null }
+  })()`, `verify ${navigation} scrolling`)
+  if (result === null || result.scrollHeight <= result.clientHeight || result.end <= result.start || result.footerBottom === null || result.footerBottom > 601) {
+    throw new Error(`${navigation} cannot scroll to its footer at 900x600: ${JSON.stringify(result)}`)
+  }
+  await client.send('Emulation.clearDeviceMetricsOverride')
+}
+
+async function verifySidebarScrolling(client) {
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 600, screenWidth: 1100, screenHeight: 600, deviceScaleFactor: 1, mobile: false })
+  const result = await evaluate(client, `(() => {
+    const sidebar = document.querySelector('.sidebar')
+    if (!(sidebar instanceof HTMLElement)) return null
+    sidebar.scrollTop = 0
+    const start = sidebar.scrollTop
+    sidebar.scrollTop = sidebar.scrollHeight
+    const settings = [...document.querySelectorAll('.sidebar-utility-nav button span')].find((node) => node.textContent?.trim() === '设置')?.parentElement?.getBoundingClientRect()
+    const help = [...document.querySelectorAll('.sidebar-utility-nav button span')].find((node) => node.textContent?.trim() === '帮助')?.parentElement?.getBoundingClientRect()
+    const footer = document.querySelector('.sidebar-footer')?.getBoundingClientRect()
+    const brand = document.querySelector('.brand-row')?.getBoundingClientRect()
+    return { start, end: sidebar.scrollTop, clientHeight: sidebar.clientHeight, scrollHeight: sidebar.scrollHeight, settingsBottom: settings?.bottom ?? null, helpBottom: help?.bottom ?? null, footerBottom: footer?.bottom ?? null, brandTop: brand?.top ?? null }
+  })()`, 'verify whole sidebar scrolling')
+  if (result === null || result.scrollHeight <= result.clientHeight || result.end <= result.start || result.settingsBottom === null || result.settingsBottom > 601 || result.helpBottom === null || result.helpBottom > 601 || result.footerBottom === null || result.footerBottom > 601 || result.brandTop !== 0) {
+    throw new Error(`Sidebar cannot scroll to settings/help/footer at 1100x600: ${JSON.stringify(result)}`)
+  }
+  await client.send('Emulation.clearDeviceMetricsOverride')
 }
 
 async function exerciseInteractiveDetails(client, navigation) {
@@ -441,9 +504,13 @@ async function exerciseInteractiveDetails(client, navigation) {
     })()`, 'open a dependency node')
     if (!clicked) throw new Error('The dependency graph did not expose a clickable task node.')
     await waitFor(client, `document.querySelector('.graph-inspector')?.innerText.includes('任务节点')`, 'dependency inspector')
+    const packetDetails = await evaluate(client, `document.querySelector('.graph-inspector')?.innerText ?? ''`, 'audit packet and lock details')
+    if (!packetDetails.includes('验收判据') || !packetDetails.includes('任务预算') || !packetDetails.includes('所有权锁') || !packetDetails.includes('锁版本')) {
+      throw new Error(`Dependency inspector does not expose the A/B packet and ownership projection: ${JSON.stringify(packetDetails)}`)
+    }
   }
   if (navigation === '成本') {
-    await waitFor(client, `document.querySelector('.budget-hero') !== null && document.body.innerText.includes('本项目已发生成本')`, 'cost budget content')
+    await waitFor(client, `document.querySelector('.budget-hero') !== null && document.body.innerText.includes('本项目已发生成本') && [...document.querySelectorAll('.primary-nav button')].some((button) => button.textContent?.trim() === '成本')`, 'cost budget content and primary navigation')
   }
   if (navigation === '研发团队') {
     const roster = await evaluate(client, `(() => ({
@@ -454,6 +521,86 @@ async function exerciseInteractiveDetails(client, navigation) {
     if (roster.cards !== 11 || !roster.labels.includes('产品需求经理') || !roster.labels.includes('安全守护')) {
       throw new Error(`Role roster is incomplete: ${JSON.stringify(roster)}`)
     }
+    const projectionCopy = await evaluate(client, `document.querySelector('.page-header')?.textContent ?? ''`, 'audit role projection wording')
+    if (!projectionCopy.includes('RoleSpec 模板 11') || !projectionCopy.includes('项目投影') || !projectionCopy.includes('真实 Worker')) {
+      throw new Error(`Role projection wording is incomplete: ${JSON.stringify(projectionCopy)}`)
+    }
+    const addMenu = await evaluate(client, `(() => {
+      const menu = document.querySelector('.team-agent-add-row .round-action-menu')
+      if (!(menu instanceof HTMLDetailsElement)) return null
+      const initiallyClosed = !menu.open
+      menu.open = true
+      const options = [...menu.querySelectorAll('button')].map((button) => button.textContent?.trim())
+      menu.open = false
+      return { initiallyClosed, options }
+    })()`, 'audit local Agent add menu')
+    if (addMenu === null || !addMenu.initiallyClosed || !addMenu.options.some((label) => label?.includes('新建本地 Agent 配置'))) {
+      throw new Error(`Local Agent add menu is incomplete: ${JSON.stringify(addMenu)}`)
+    }
+    const customBoundary = await evaluate(client, `document.querySelector('.custom-agent-section')?.textContent ?? ''`, 'audit custom Agent runtime boundary')
+    if (!customBoundary.includes('当前不代表运行实例') || !customBoundary.includes('真实运行仍需 A/B')) {
+      throw new Error(`Custom Agent boundary is incomplete: ${JSON.stringify(customBoundary)}`)
+    }
+    async function createCustomAgent(name) {
+      const opened = await evaluate(client, `(() => {
+        const menu = document.querySelector('.team-agent-add-row .round-action-menu')
+        if (!(menu instanceof HTMLDetailsElement)) return false
+        menu.open = true
+        const button = menu.querySelector('button')
+        if (!(button instanceof HTMLButtonElement)) return false
+        button.click()
+        return true
+      })()`, `open custom Agent editor for ${name}`)
+      if (!opened) throw new Error('Custom Agent editor entry is missing.')
+      await waitFor(client, `document.querySelector('.agent-config-dialog input:not([type="password"])') !== null`, 'custom Agent name field')
+      const filled = await evaluate(client, `(() => {
+        const dialog = document.querySelector('.agent-config-dialog')
+        const input = dialog?.querySelector('input:not([type="password"])')
+        const textarea = dialog?.querySelector('textarea')
+        if (!(input instanceof HTMLInputElement) || !(textarea instanceof HTMLTextAreaElement)) return false
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(name)})
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(textarea, '只处理授权的前端任务。')
+        textarea.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`, `fill custom Agent ${name}`)
+      if (!filled) throw new Error('Could not fill custom Agent configuration.')
+      await evaluate(client, `document.querySelector('.agent-config-dialog .primary-button')?.click()`, `save custom Agent ${name}`)
+      await waitFor(client, `[...document.querySelectorAll('.custom-agent-card h2')].some((node) => node.textContent?.trim() === ${JSON.stringify(name)})`, `saved custom Agent ${name}`)
+    }
+    await createCustomAgent('待删除 Agent')
+    const deleteOpened = await evaluate(client, `(() => {
+      const card = [...document.querySelectorAll('.custom-agent-card')].find((item) => item.querySelector('h2')?.textContent?.trim() === '待删除 Agent')
+      const menu = card?.querySelector('.row-action-menu')
+      if (!(menu instanceof HTMLDetailsElement)) return false
+      menu.open = true
+      const button = [...menu.querySelectorAll('button')].find((item) => item.textContent?.includes('删除配置'))
+      if (!(button instanceof HTMLButtonElement)) return false
+      button.click()
+      return true
+    })()`, 'open custom Agent delete confirmation')
+    if (!deleteOpened) throw new Error('Custom Agent delete entry is missing.')
+    await waitFor(client, `document.querySelector('.agent-delete-dialog')?.textContent?.includes('不会删除项目文件')`, 'custom Agent delete boundary')
+    await evaluate(client, `document.querySelector('.agent-delete-dialog .danger-button')?.click()`, 'confirm custom Agent deletion')
+    await waitFor(client, `![...document.querySelectorAll('.custom-agent-card h2')].some((node) => node.textContent?.trim() === '待删除 Agent')`, 'deleted custom Agent')
+    await createCustomAgent('界面验证 Agent')
+    const customRuntime = await evaluate(client, `(() => {
+      const card = [...document.querySelectorAll('.custom-agent-card')].find((item) => item.querySelector('h2')?.textContent?.trim() === '界面验证 Agent')
+      return card?.textContent ?? ''
+    })()`, 'audit saved custom Agent boundary')
+    if (!customRuntime.includes('A/B 未接入，不可运行') || !customRuntime.includes('0 当前 Worker')) {
+      throw new Error(`Custom Agent overclaims runtime state: ${JSON.stringify(customRuntime)}`)
+    }
+    const agentMenuClosed = await evaluate(client, `!document.querySelector('.team-agent-add-row .round-action-menu')?.hasAttribute('open')`, 'verify Agent add menu closes after selection')
+    if (!agentMenuClosed) throw new Error('Agent add menu stayed open after creating a configuration.')
+    const embeddedCost = await evaluate(client, `document.body.innerText.includes('成本由预算树和模型路由确定性治理')`, 'verify standalone cost placement')
+    if (embeddedCost) {
+      throw new Error('Cost governance must stay on the standalone cost page, not the team page.')
+    }
+    const opened = await evaluate(client, `(() => { const button = document.querySelector('.role-config-button'); if (!(button instanceof HTMLButtonElement)) return false; button.click(); return true })()`, 'open Agent configuration')
+    if (!opened) throw new Error('Agent configuration entry is missing.')
+    await waitFor(client, `document.querySelector('.agent-config-dialog')?.textContent?.includes('系统提示词') && document.querySelector('.agent-config-dialog')?.textContent?.includes('系统文档') && document.querySelector('.agent-config-dialog')?.textContent?.includes('API Key')`, 'Agent configuration fields')
+    await evaluate(client, `document.querySelector('.agent-config-dialog .icon-button')?.click()`, 'close Agent configuration')
   }
   if (navigation === '证据与审计') {
     const audit = await evaluate(client, `(() => ({
@@ -464,22 +611,101 @@ async function exerciseInteractiveDetails(client, navigation) {
     if (audit.evidence < 1 || audit.decisions < 1 || !audit.disclosed) {
       throw new Error(`Evidence view is incomplete or overclaims fixture state: ${JSON.stringify(audit)}`)
     }
+    await waitFor(client, `document.body.innerText.includes('产物引用')`, 'evidence artifact references')
+  }
+  if (navigation === '知识库') {
+    const rag = await evaluate(client, `(() => ({
+      pending: document.body.innerText.includes('RAG 未连接'),
+      boundary: document.body.innerText.includes('不能把登记文件全文直接塞入 Prompt'),
+      indexUnavailable: document.body.innerText.includes('索引版本') && document.body.innerText.includes('未提供'),
+      projection: document.body.innerText.includes('知识关系') && document.body.innerText.includes('溯源关系')
+    }))()`, 'audit knowledge RAG boundary')
+    if (!rag.pending || !rag.boundary || !rag.indexUnavailable || !rag.projection) {
+      throw new Error(`Knowledge view overclaims or omits the RAG boundary: ${JSON.stringify(rag)}`)
+    }
   }
   if (navigation === 'MCP') {
     const mcp = await evaluate(client, `(() => ({
+      sidebarEntryAbsent: ![...document.querySelectorAll('.sidebar button span')].some((node) => node.textContent?.trim() === 'MCP'),
+      settingsSelected: document.querySelector('.sidebar-utility-nav button.active span')?.textContent?.trim() === '设置',
       services: document.querySelector('.mcp-summary > div:first-child strong')?.textContent?.trim(),
-      runtimeAvailable: document.body.innerText.includes('运行时已返回 MCP 投影'),
-      runtimeUnavailable: document.body.innerText.includes('运行时未提供 MCP 投影'),
-      emptyState: document.body.innerText.includes('尚未配置 MCP 服务'),
+      addMenu: (() => {
+        const add = document.querySelector('.mcp-service-section .round-action-menu')
+        if (!(add instanceof HTMLDetailsElement)) return null
+        const initiallyClosed = !add.open
+        add.open = true
+        return { initiallyClosed, options: [...add.querySelectorAll('button')].map((button) => button.textContent?.trim()) }
+      })(),
+      runtimeSection: document.body.innerText.includes('运行时投影'),
       hasFilesystem: document.body.innerText.includes('项目文件系统'),
       hasAgentTeams: document.body.innerText.includes('AgentTeams 编排'),
       boundary: document.body.innerText.includes('RoleSpec、ToolSurface 与 Guardian 收紧')
     }))()`, 'audit MCP projection')
-    const realProjection = mcp.services === '4' && mcp.runtimeAvailable && !mcp.emptyState && mcp.hasFilesystem && mcp.hasAgentTeams
-    const honestEmptyProjection = mcp.services === '0' && mcp.runtimeUnavailable && mcp.emptyState
-    if ((!realProjection && !honestEmptyProjection) || !mcp.boundary) {
+    if (!mcp.sidebarEntryAbsent || !mcp.settingsSelected || mcp.addMenu === null || !mcp.addMenu.initiallyClosed || !['stdio', 'HTTP', 'SSE'].every((transport) => mcp.addMenu.options.some((label) => label?.includes(transport))) || !mcp.runtimeSection || !mcp.boundary) {
       throw new Error(`MCP view is incomplete or claims unavailable runtime state: ${JSON.stringify(mcp)}`)
     }
+  }
+  if (navigation === 'Skills') {
+    const initial = await evaluate(client, `(() => {
+      const add = document.querySelector('.resource-add-menu')
+      if (!(add instanceof HTMLDetailsElement)) return null
+      add.open = true
+      return {
+        builtIns: document.querySelectorAll('.resource-list label').length,
+        menu: [...add.querySelectorAll('button')].map((button) => button.textContent?.trim())
+      }
+    })()`, 'audit Skills catalog and add menu')
+    if (initial === null || initial.builtIns !== 12 || !initial.menu.some((label) => label?.includes('上传文件')) || !initial.menu.some((label) => label?.includes('上传文件夹')) || !initial.menu.some((label) => label?.includes('Git URL'))) {
+      throw new Error(`Skills catalog or add menu is incomplete: ${JSON.stringify(initial)}`)
+    }
+    await evaluate(client, `(() => {
+      const button = [...document.querySelectorAll('.resource-add-menu button')].find((item) => item.textContent?.includes('Git URL'))
+      if (!(button instanceof HTMLButtonElement)) return false
+      button.click()
+      return true
+    })()`, 'open Git Skill form')
+    await waitFor(client, `document.querySelector('.resource-git-form input') instanceof HTMLInputElement`, 'Git Skill form')
+    await evaluate(client, `(() => {
+      const input = document.querySelector('.resource-git-form input')
+      const form = document.querySelector('.resource-git-form')
+      if (!(input instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, 'https://example.com/codentum-ui-skill.git')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      form.requestSubmit()
+      return true
+    })()`, 'register Git Skill')
+    await waitFor(client, `document.querySelector('.managed-resource-list')?.textContent?.includes('codentum-ui-skill')`, 'registered Git Skill')
+    const custom = await evaluate(client, `(() => ({
+      text: document.querySelector('.managed-resource-list')?.textContent ?? '',
+      exposedUrl: document.querySelector('.managed-resource-list')?.textContent?.includes('https://') ?? false,
+      scope: document.querySelector('.managed-resource-controls select')?.value
+    }))()`, 'audit registered Git Skill')
+    if (!custom.text.includes('待 A/B 运行时接入') || custom.exposedUrl || custom.scope !== 'role') {
+      throw new Error(`Registered Git Skill state is incorrect: ${JSON.stringify(custom)}`)
+    }
+    await evaluate(client, `(() => {
+      const menu = document.querySelector('.resource-add-menu')
+      const input = document.querySelector('.page-search input')
+      if (menu instanceof HTMLDetailsElement) menu.open = false
+      if (!(input instanceof HTMLInputElement)) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, 'codentum-ui-skill')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`, 'focus custom Git Skill for screenshot')
+    await waitFor(client, `document.querySelectorAll('.resource-list label').length === 0 && document.querySelectorAll('.managed-resource-list article').length === 1`, 'filtered custom Git Skill')
+  }
+  if (navigation === '连接器') {
+    const connectorAudit = await evaluate(client, `(() => {
+      const menu = document.querySelector('.connector-add-row .round-action-menu')
+      if (!(menu instanceof HTMLDetailsElement)) return null
+      const initiallyClosed = !menu.open
+      menu.open = true
+      const page = document.querySelector('.connector-page')
+      return { initiallyClosed, addOption: menu.textContent?.includes('新建本地配置') ?? false, genericOnly: ['飞书', '企业微信', 'GitHub', '钉钉'].every((name) => !page?.textContent?.includes(name)), emptyTruth: page?.textContent?.includes('当前不会连接任何第三方应用') ?? false, overclaimsConnected: [...document.querySelectorAll('.connector-state')].some((node) => node.textContent?.includes('已连接')) }
+    })()`, 'audit generic connector management')
+    if (connectorAudit === null || !connectorAudit.initiallyClosed || !connectorAudit.addOption || !connectorAudit.genericOnly || !connectorAudit.emptyTruth || connectorAudit.overclaimsConnected) throw new Error(`Connector management overclaims unsupported applications: ${JSON.stringify(connectorAudit)}`)
   }
 }
 
@@ -578,6 +804,9 @@ async function main() {
     await verifyViewport(client, 1366, 768, '08-home-1366x768.png')
     await verifyViewport(client, 1920, 1080, '09-home-1920x1080.png')
     await client.send('Emulation.clearDeviceMetricsOverride')
+    await verifyScrollableView(client, '研发团队', '研发团队')
+    await verifyScrollableView(client, 'Skills', 'Skills')
+    await verifySidebarScrolling(client)
     await monitor.assertClean('completed smoke test')
     process.stdout.write(`verified fixture sources: ${FIXTURE_IDS.join(', ')}\n`)
     process.stdout.write(`screenshot smoke passed: ${outputDirectory}\n`)

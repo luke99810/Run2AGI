@@ -15,13 +15,14 @@ import { RolesView } from '../../views/RolesView'
 import { DeliveryView } from '../../views/DeliveryView'
 import { EvidenceView } from '../../views/EvidenceView'
 import { McpView } from '../../views/McpView'
+import { ConnectorsView } from '../../views/ConnectorsView'
 import { ConversationsView, HelpView, ResourceLibraryView, SettingsView } from '../../views/WorkbenchViews'
 import {
   createTaskSession,
   historyForAgent,
   loadTaskSessions,
   loadWorkbenchPreferences,
-  pluginOptionsFromMcpServices,
+  PLUGIN_OPTIONS,
   saveTaskSessions,
   saveWorkbenchPreferences,
   skillOptionsFromRoles,
@@ -82,7 +83,7 @@ export function App(): ReactNode {
   const activeTask = sourceTasks.find((task) => task.id === activeTaskId)
   const validationEnabled = activeTask !== undefined && taskRequestsValidation(activeTask)
   const visibleWarnings = warningsForDisplay(desktop.snapshot?.warnings ?? [])
-  const pluginOptions = pluginOptionsFromMcpServices(desktop.snapshot?.mcpServices)
+  const pluginOptions = PLUGIN_OPTIONS
   const skillOptions = skillOptionsFromRoles(desktop.snapshot?.roles)
 
   useEffect(() => {
@@ -291,7 +292,7 @@ export function App(): ReactNode {
     case 'roles':
       view = (
         <div className="team-combined-view">
-          <RolesView snapshot={desktop.snapshot} />
+          <RolesView snapshot={desktop.snapshot} listConfigurations={desktop.listAgentConfigurations} saveConfiguration={desktop.saveAgentConfiguration} removeConfiguration={desktop.removeAgentConfiguration} selectSystemDocument={desktop.selectAgentSystemDocument} clearSystemDocument={desktop.clearAgentSystemDocument} />
           <ExecutionView
             snapshot={desktop.snapshot}
             handshake={desktop.handshake}
@@ -310,15 +311,31 @@ export function App(): ReactNode {
       view = <ConversationsView tasks={sourceTasks} activeTaskId={activeTask?.id ?? null} onSelectTask={selectTask} onNewTask={createNewTask} />
       break
     case 'plugins':
+      view = <ConnectorsView list={desktop.listConnectors} save={desktop.saveConnector} remove={desktop.removeConnector} />
+      break
     case 'knowledge':
     case 'skills':
-      view = <ResourceLibraryView kind={navigation} task={activeTask} pluginOptions={pluginOptions} skillOptions={skillOptions} onContextChange={updateActiveContext} />
+      view = (
+        <ResourceLibraryView
+          kind={navigation}
+          task={activeTask}
+          pluginOptions={pluginOptions}
+          skillOptions={skillOptions}
+          snapshot={desktop.snapshot}
+          onContextChange={updateActiveContext}
+          listManagedResources={desktop.listManagedResources}
+          selectManagedResources={desktop.selectManagedResources}
+          addManagedResourceUrl={desktop.addManagedResourceUrl}
+          updateManagedResource={desktop.updateManagedResource}
+          removeManagedResource={desktop.removeManagedResource}
+        />
+      )
       break
     case 'mcp':
-      view = <McpView services={desktop.snapshot?.mcpServices ?? []} />
+      view = <McpView services={desktop.snapshot?.mcpServices ?? []} listConfigurations={desktop.listMcpConfigurations} saveConfiguration={desktop.saveMcpConfiguration} removeConfiguration={desktop.removeMcpConfiguration} />
       break
     case 'settings':
-      view = <SettingsView preferences={preferences} onChange={setPreferences} />
+      view = <SettingsView preferences={preferences} onChange={setPreferences} onOpenMcp={() => setNavigation('mcp')} />
       break
     case 'help':
       view = <HelpView snapshot={desktop.snapshot} onOpenAgents={() => setNavigation('roles')} />

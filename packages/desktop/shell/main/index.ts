@@ -15,9 +15,23 @@ import {
 } from 'electron'
 import { StateHub } from '../../data'
 import { IPC_CHANNELS } from '../../shared/ipc'
-import { MAX_DRAFT_ATTACHMENTS, type EngineHandshake, type OperatorAction, type OperatorCommand, type ProjectSelectionKind } from '../../shared/protocol'
+import {
+  MAX_DRAFT_ATTACHMENTS,
+  type EngineHandshake,
+  type ManagedResourceKind,
+  type ManagedResourcePatch,
+  type ManagedResourceSourceKind,
+  type AgentConfigurationPatch,
+  type ConnectorConfigurationInput,
+  type McpConfigurationInput,
+  type OperatorAction,
+  type OperatorCommand,
+  type ProjectSelectionKind
+} from '../../shared/protocol'
 import { SidecarManager } from './python-engine/SidecarManager'
+import { ManagedResourceStore } from './managed-resource-store'
 import { RequirementDraftStore } from './requirement-draft-store'
+import { WorkspaceConfigurationStore } from './workspace-configuration-store'
 
 const ALLOWED_ACTIONS = new Set<OperatorAction>([
   'submit_requirement',
@@ -36,6 +50,8 @@ let tray: Tray | undefined
 let stateHub: StateHub | undefined
 let sidecar: SidecarManager | undefined
 let draftStore: RequirementDraftStore | undefined
+let resourceStore: ManagedResourceStore | undefined
+let configurationStore: WorkspaceConfigurationStore | undefined
 let shutdownStarted = false
 let shutdownComplete = false
 const watchers = new Map<number, () => void>()
@@ -59,6 +75,31 @@ function assertSourceId(value: unknown): asserts value is string {
 
 function assertProjectSelectionKind(value: unknown): asserts value is ProjectSelectionKind {
   if (value !== 'file' && value !== 'folder') throw new TypeError('A valid project selection kind is required')
+}
+
+function assertManagedResourceKind(value: unknown): asserts value is ManagedResourceKind {
+  if (value !== 'plugin' && value !== 'knowledge' && value !== 'skill') {
+    throw new TypeError('A valid managed resource kind is required')
+  }
+}
+
+function assertManagedResourceSourceKind(value: unknown): asserts value is Extract<ManagedResourceSourceKind, 'file' | 'folder'> {
+  if (value !== 'file' && value !== 'folder') throw new TypeError('A valid local resource source kind is required')
+}
+
+function assertManagedResourceId(value: unknown): asserts value is string {
+  if (typeof value !== 'string' || !/^managed:[0-9a-f-]{36}$/u.test(value)) {
+    throw new TypeError('A valid managed resource id is required')
+  }
+}
+
+function assertManagedResourcePatch(value: unknown): asserts value is ManagedResourcePatch {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new TypeError('Invalid managed resource patch')
+  const patch = value as Record<string, unknown>
+  if (Object.keys(patch).some((key) => !['enabled', 'scope', 'roleId'].includes(key))) throw new TypeError('Invalid managed resource patch')
+  if ('enabled' in patch && typeof patch['enabled'] !== 'boolean') throw new TypeError('Invalid managed resource enabled state')
+  if ('scope' in patch && patch['scope'] !== 'global' && patch['scope'] !== 'role' && patch['scope'] !== 'project') throw new TypeError('Invalid managed resource scope')
+  if ('roleId' in patch && typeof patch['roleId'] !== 'string') throw new TypeError('Invalid managed resource role')
 }
 
 function assertCommand(value: unknown): asserts value is OperatorCommand {
@@ -134,6 +175,24 @@ async function chooseDraftFolders(scopeId: string): Promise<Awaited<ReturnType<R
   })
   if (result.canceled) return draftStore.load(scopeId)
   return draftStore.addFolders(scopeId, result.filePaths)
+}
+
+async function chooseManagedResources(
+  kind: ManagedResourceKind,
+  sourceKind: Extract<ManagedResourceSourceKind, 'file' | 'folder'>
+): Promise<Awaited<ReturnType<ManagedResourceStore['addLocal']>>> {
+  if (resourceStore === undefined) throw new Error('Managed resource store is unavailable')
+  if (mainWindow === undefined) return []
+  const selectingFile = sourceKind === 'file'
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: selectingFile ? '添加本地文件' : '添加本地文件夹',
+    buttonLabel: '添加',
+    properties: selectingFile
+      ? ['openFile', 'multiSelections', 'dontAddToRecent']
+      : ['openDirectory', 'multiSelections', 'dontAddToRecent']
+  })
+  if (result.canceled) return []
+  return resourceStore.addLocal(kind, result.filePaths, sourceKind)
 }
 
 async function exportTaskRecord(suggestedName: unknown, markdown: unknown): Promise<boolean> {
@@ -213,6 +272,101 @@ function registerIpc(): void {
     assertTrustedSender(event)
     return exportTaskRecord(suggestedName, markdown)
   })
+  ipcMain.handle(IPC_CHANNELS.listManagedResources, async (event, kind: unknown) => {
+    assertTrustedSender(event)
+    if (kind !== undefined) assertManagedResourceKind(kind)
+    if (resourceStore === undefined) throw new Error('Managed resource store is unavailable')
+    return resourceStore.list(kind)
+  })
+  ipcMain.handle(IPC_CHANNELS.selectManagedResources, async (event, kind: unknown, sourceKind: unknown) => {
+    assertTrustedSender(event)
+    assertManagedResourceKind(kind)
+    assertManagedResourceSourceKind(sourceKind)
+    return chooseManagedResources(kind, sourceKind)
+  })
+  ipcMain.handle(IPC_CHANNELS.addManagedResourceUrl, async (event, kind: unknown, url: unknown) => {
+    assertTrustedSender(event)
+    assertManagedResourceKind(kind)
+    if (typeof url !== 'string' || url.length < 1 || url.length > 2_048) throw new TypeError('A valid Git URL is required')
+    if (resourceStore === undefined) throw new Error('Managed resource store is unavailable')
+    return resourceStore.addGit(kind, url)
+  })
+  ipcMain.handle(IPC_CHANNELS.updateManagedResource, async (event, id: unknown, patch: unknown) => {
+    assertTrustedSender(event)
+    assertManagedResourceId(id)
+    assertManagedResourcePatch(patch)
+    if (resourceStore === undefined) throw new Error('Managed resource store is unavailable')
+    return resourceStore.update(id, patch)
+  })
+  ipcMain.handle(IPC_CHANNELS.removeManagedResource, async (event, id: unknown) => {
+    assertTrustedSender(event)
+    assertManagedResourceId(id)
+    if (resourceStore === undefined) throw new Error('Managed resource store is unavailable')
+    return resourceStore.remove(id)
+  })
+  ipcMain.handle(IPC_CHANNELS.listConnectors, (event) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.listConnectors()
+  })
+  ipcMain.handle(IPC_CHANNELS.saveConnector, async (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.saveConnector(input as ConnectorConfigurationInput)
+  })
+  ipcMain.handle(IPC_CHANNELS.removeConnector, async (event, id: unknown) => {
+    assertTrustedSender(event)
+    if (typeof id !== 'string') throw new TypeError('Invalid connector id')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.removeConnector(id)
+  })
+  ipcMain.handle(IPC_CHANNELS.listAgentConfigurations, (event) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.listAgents()
+  })
+  ipcMain.handle(IPC_CHANNELS.saveAgentConfiguration, async (event, roleId: unknown, patch: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string' || typeof patch !== 'object' || patch === null || Array.isArray(patch)) throw new TypeError('Invalid Agent configuration')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.saveAgent(roleId, patch as AgentConfigurationPatch)
+  })
+  ipcMain.handle(IPC_CHANNELS.removeAgentConfiguration, async (event, roleId: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string') throw new TypeError('Invalid Agent id')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.removeAgent(roleId)
+  })
+  ipcMain.handle(IPC_CHANNELS.selectAgentSystemDocument, async (event, roleId: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string') throw new TypeError('Invalid Agent role')
+    if (configurationStore === undefined || mainWindow === undefined) throw new Error('Configuration store is unavailable')
+    const result = await dialog.showOpenDialog(mainWindow, { title: '选择 Agent 系统文档', buttonLabel: '添加 Markdown', properties: ['openFile', 'dontAddToRecent'], filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }] })
+    if (result.canceled || result.filePaths[0] === undefined) return configurationStore.saveAgent(roleId, {})
+    return configurationStore.setAgentDocument(roleId, result.filePaths[0])
+  })
+  ipcMain.handle(IPC_CHANNELS.clearAgentSystemDocument, async (event, roleId: unknown) => {
+    assertTrustedSender(event)
+    if (typeof roleId !== 'string') throw new TypeError('Invalid Agent role')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.setAgentDocument(roleId)
+  })
+  ipcMain.handle(IPC_CHANNELS.listMcpConfigurations, (event) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.listMcp()
+  })
+  ipcMain.handle(IPC_CHANNELS.saveMcpConfiguration, async (event, input: unknown) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.saveMcp(input as McpConfigurationInput)
+  })
+  ipcMain.handle(IPC_CHANNELS.removeMcpConfiguration, async (event, id: unknown) => {
+    assertTrustedSender(event)
+    if (typeof id !== 'string') throw new TypeError('Invalid MCP id')
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.removeMcp(id)
+  })
   ipcMain.handle(IPC_CHANNELS.watchSource, async (event, sourceId: unknown) => {
     assertTrustedSender(event)
     assertSourceId(sourceId)
@@ -239,6 +393,8 @@ function registerIpc(): void {
       const draftScope = command.payload['draftScope']
       if (typeof draftScope !== 'string') throw new TypeError('Requirement command is missing its draft scope')
       prepared = await draftStore.prepareRequirementCommand(command, stateHub.projectRoot(draftScope))
+      if (resourceStore === undefined) throw new Error('Managed resource store is unavailable')
+      prepared = await resourceStore.prepareCommand(prepared)
     }
     return sidecar.command(prepared)
   })
@@ -267,7 +423,7 @@ function createApplicationMenu(): void {
 }
 
 function createTray(): void {
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="10" fill="#12b886"/><path d="M9 11h14v4H13v6h10v4H9z" fill="white"/></svg>'
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#171918"/><path d="M19 8a9 9 0 1 0 0 16M17 12l6-4m-6 8h7m-7 4 6 4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="25" cy="8" r="1.8" fill="#fff"/><circle cx="26" cy="16" r="1.8" fill="#fff"/><circle cx="25" cy="24" r="1.8" fill="#fff"/></svg>'
   const icon = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
   if (icon.isEmpty()) return
   tray = new Tray(icon.resize({ width: 16, height: 16 }))
@@ -325,6 +481,10 @@ void app.whenReady().then(async () => {
   })
   draftStore = new RequirementDraftStore(resolve(app.getPath('userData'), 'requirement-drafts'))
   await draftStore.initialize()
+  resourceStore = new ManagedResourceStore(resolve(app.getPath('userData'), 'managed-resources'))
+  await resourceStore.initialize()
+  configurationStore = new WorkspaceConfigurationStore(resolve(app.getPath('userData'), 'workspace-configurations'))
+  await configurationStore.initialize()
   sidecar = new SidecarManager(app)
   registerIpc()
   createApplicationMenu()

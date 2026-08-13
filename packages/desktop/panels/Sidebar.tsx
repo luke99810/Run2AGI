@@ -4,8 +4,8 @@ import { NAVIGATION, type NavigationKey, roleLabel } from '../renderer/src/domai
 import type { TaskSession } from '../renderer/src/task-library'
 import { Icon } from './Common'
 
-const PRIMARY_NAV = new Set<NavigationKey>(['conversations', 'plugins', 'knowledge', 'skills', 'mcp', 'roles', 'delivery'])
-const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'cost', 'evidence'])
+const PRIMARY_NAV = new Set<NavigationKey>(['conversations', 'plugins', 'knowledge', 'skills', 'cost', 'roles', 'delivery'])
+const PROJECT_NAV = new Set<NavigationKey>(['execution', 'waves', 'dependency', 'evidence'])
 
 export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabled, onNavigate, onSelectWorker, onNewTask, onSelectTask, collapsed, onToggle }: {
   readonly active: NavigationKey
@@ -24,7 +24,13 @@ export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabl
   return (
     <aside className={`sidebar${collapsed ? ' collapsed' : ''}`}>
       <div className="brand-row">
-        <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>
+        <div className="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32">
+            <path d="M20.5 8.3a9 9 0 1 0 0 15.4" />
+            <path d="M18.5 12.2 24 9m-5.5 6.9H25m-6.5 3.9L24 23" />
+            <circle cx="25" cy="8.5" r="1.7" /><circle cx="26" cy="16" r="1.7" /><circle cx="25" cy="23.5" r="1.7" />
+          </svg>
+        </div>
         <div className="brand-copy"><strong>Codentum</strong><span>软件研发团队</span></div>
         <button className="icon-button sidebar-toggle" type="button" onClick={onToggle} aria-label={collapsed ? '展开侧栏' : '收起侧栏'}>
           <Icon name="menu" size={20} />
@@ -103,7 +109,7 @@ export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabl
       </section>
 
       <nav className="sidebar-utility-nav" aria-label="设置与帮助">
-        <button type="button" className={active === 'settings' ? 'active' : ''} onClick={() => onNavigate('settings')} title={collapsed ? '设置' : undefined}><Icon name="settings" size={19} /><span>设置</span></button>
+        <button type="button" className={active === 'settings' || active === 'mcp' ? 'active' : ''} onClick={() => onNavigate('settings')} title={collapsed ? '设置' : undefined}><Icon name="settings" size={19} /><span>设置</span></button>
         <button type="button" className={active === 'help' ? 'active' : ''} onClick={() => onNavigate('help')} title={collapsed ? '帮助' : undefined}><Icon name="help" size={19} /><span>帮助</span></button>
       </nav>
       <div className="sidebar-footer">

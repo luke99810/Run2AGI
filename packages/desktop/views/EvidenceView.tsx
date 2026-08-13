@@ -16,6 +16,12 @@ function EvidenceRow({ evidence }: { readonly evidence: Evidence }): ReactNode {
       <div className="audit-row-main">
         <div><strong>{evidence.gate ?? evidence.kind}</strong><span>{roleLabel(evidence.role)}</span></div>
         <p>{evidence.detail ?? '状态源没有提供补充说明。'}</p>
+        {evidence.artifacts.length === 0 ? null : (
+          <details className="evidence-artifacts">
+            <summary>产物引用 {evidence.artifacts.length}</summary>
+            <ul>{evidence.artifacts.map((artifact) => <li key={artifact}><code title={artifact}>{artifact}</code></li>)}</ul>
+          </details>
+        )}
         <small>{shortPacketId(evidence.packetId)} · {new Date(evidence.at).toLocaleString('zh-CN')}</small>
       </div>
       <dl className="audit-hashes">
