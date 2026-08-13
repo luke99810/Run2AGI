@@ -46,6 +46,8 @@ from typing import Any
 
 from codentum_contracts.interfaces import ToolSchema
 
+from .mcp_toolbox import McpToolbox
+
 __all__ = [
     "MAX_READ_CHARS",
     "MAX_WRITE_BYTES",
@@ -158,9 +160,11 @@ def tool_schemas_for(tool_names: tuple[str, ...]) -> tuple[ToolSchema, ...]:
 class ToolExecutor:
     """在 worker 工作区内执行工具调用。**所有写入都被限制在工作区内。**"""
 
-    def __init__(self, workspace: Path | str) -> None:
+    def __init__(self, workspace: Path | str, mcp: McpToolbox | None = None) -> None:
         self._root = Path(workspace).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
+        self._mcp = mcp
+        """已连接的 MCP 工具箱。**主 Agent 接一次，所有第三方工具自动可用。**"""
         self.written_paths: list[str] = []
         """本次执行真正写出去的文件（相对路径）。★ 这是"干没干活"的第一手证据。"""
 
@@ -190,6 +194,10 @@ class ToolExecutor:
         """
 
         try:
+            # ★ MCP 工具名带 server 前缀（github__create_issue），
+            #   与内置工具在同一个命名空间里不会冲突。
+            if self._mcp is not None and self._mcp.owns(name):
+                return self._mcp.call(name, arguments)
             handler = getattr(self, f"_tool_{name}", None)
             if handler is None:
                 return ToolResult(False, f"未知工具：{name}")

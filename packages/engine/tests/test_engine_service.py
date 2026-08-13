@@ -571,7 +571,9 @@ def test_mcp_services_are_projected_into_project_state(
     mcp_dir = project / ".codentum" / "mcp"
     projected = sorted(p.name for p in mcp_dir.glob("*.json"))
 
-    assert projected == ["agentteams.json", "browser.json", "filesystem.json", "git.json"]
+    # ★ 守「四个基础服务都被投影」而非「恰好只有这四个」——
+    #   第三方应用会随需求增删，写死清单会让每次加应用都要改测试。
+    assert {"agentteams.json", "browser.json", "filesystem.json", "git.json"} <= set(projected)
     filesystem = json.loads((mcp_dir / "filesystem.json").read_text("utf-8"))
     agentteams = json.loads((mcp_dir / "agentteams.json").read_text("utf-8"))
     assert filesystem["status"] == "connected"

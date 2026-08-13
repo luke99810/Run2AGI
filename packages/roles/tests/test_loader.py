@@ -90,7 +90,10 @@ def test_builtin_mcp_services_load_and_say_connection_truth() -> None:
     services = load_builtin_mcp_services()
     by_id = {str(service["id"]): service for service in services}
 
-    assert sorted(by_id) == ["agentteams", "browser", "filesystem", "git"]
+    # ★ 断言守的是**性质**而不是清单：第三方应用（GitHub / 飞书 / 支付宝）
+    #   会随需求增删，把文件名写死会让每次加一个应用都要改测试 ——
+    #   而那条测试并不因此变得更有保障。
+    assert {"agentteams", "browser", "filesystem", "git"} <= set(by_id)
     assert by_id["filesystem"]["status"] == "connected"
     assert by_id["git"]["status"] == "connected"
     assert by_id["browser"]["status"] == "disconnected"
@@ -103,12 +106,11 @@ def test_project_mcp_services_writes_deterministic_project_projection(tmp_path: 
 
     written = project_mcp_services(target_dir)
 
-    assert [path.name for path in written] == [
-        "agentteams.json",
-        "browser.json",
-        "filesystem.json",
-        "git.json",
-    ]
+    written_names = [path.name for path in written]
+    # ★ 守两条性质，而不是写死清单：
+    #   ① 四个基础服务都被投影 ② 顺序是确定的（这条才是本测试的名字所指）
+    assert {"agentteams.json", "browser.json", "filesystem.json", "git.json"} <= set(written_names)
+    assert written_names == sorted(written_names), "投影顺序必须确定，否则每次投影都产生 diff"
     projected = json.loads((target_dir / "filesystem.json").read_text(encoding="utf-8"))
     assert projected["tools"] == ["read_file", "write_file", "list_directory"]
 

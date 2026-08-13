@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "sentry",
+  "name": "Sentry",
+  "category": "third-party-app",
+  "purpose": "线上错误追踪：查异常、堆栈、影响范围",
+  "transport": "stdio",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@sentry/mcp-server"
+  ],
+  "env": {},
+  "enabled": false,
+  "requiresEnv": [
+    "SENTRY_ACCESS_TOKEN"
+  ],
+  "credentialHowTo": "Sentry → Settings → Auth Tokens 创建，需 project:read 权限",
+  "docs": "https://github.com/getsentry/sentry-mcp",
+  "status": "disconnected",
+  "authentication": "missing",
+  "tools": [],
+  "configSource": "packages/roles/mcp/sentry.json",
+  "error": "未启用。配置凭据后把 enabled 改为 true 即可接入；工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
+}
