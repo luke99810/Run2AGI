@@ -53,6 +53,7 @@ from codentum_contracts.state import EvidenceRef
 from codentum_harness.prompt_bundle import load_worker_prompt_bundle
 
 from .acceptance import split_command, vacuity_check
+from .agent_graph import AgentGraphState, build_agent_graph
 from .mcp_toolbox import build_mcp_toolbox
 from .tools import ToolExecutor, tool_schemas_for
 
@@ -160,34 +161,90 @@ class _AgentRun:
             session = await self._config.gateway.open(
                 self._req.role, self._req.routing, self._req.budget.limit_cny
             )
-            for turn in range(1, self._config.max_turns + 1):
-                response: ModelResponse
-                try:
-                    response = await self._invoke_with_retry(
-                        session,
-                        ModelRequest(
-                            system=prompt.system,
-                            messages=tuple(messages),
-                            effort=self._req.routing.effort,
-                            tools=tools,
-                        ),
-                    )
-                except ValueError as exc:
-                    # ★ 工具调用的参数被**截断**（输出超长），JSON 不完整。
-                    #
-                    #   2026-08-12 实测：模型写一个较大的测试文件时，
-                    #   arguments 在 `result = add_subscription(` 处断掉。
-                    #   这不是解析器过严 —— JSON 是真的不完整，救不回来。
-                    #
-                    #   但模型自己能修：告诉它「上次被截断了，写小一点」。
-                    #   直接判失败等于把一个可恢复的情况当成终局。
-                    if "JSON object text" not in str(exc) or turn >= self._config.max_turns:
-                        raise
-                    logger.warning("工具调用参数被截断，回推让模型重写（第 %d 轮）", turn)
-                    messages.append(
-                        ModelMessage(role="assistant", content="（上一次工具调用输出被截断）")
-                    )
-                    messages.append(
+            # ★ 按 ADR-0004：执行平面的控制流由 LangGraph 图驱动。
+            #
+            #   改造前是手写的 `for turn in range(...)` 循环 —— 它跑得通，
+            #   但与 ADR-0004 的设计不符，而 langgraph 一直躺在依赖里、
+            #   README 也写着「执行平面采用 LangGraph 编排」，实际零 import。
+            #
+            #   ★ 这是**行为等价重构**：`test_agent_runner.py` 的 13 条测试
+            #     一条都没改。它们定义了必须保持的语义 ——
+            #     能在不改测试的前提下换掉实现，才说明这是重构而非改行为。
+            graph = build_agent_graph(
+                model_node=self._make_model_node(session, prompt, tools),
+                tools_node=self._tools_node,
+                verify_node=self._verify_node,
+                help_node=self._help_node,
+            )
+
+            final: AgentGraphState = await graph.ainvoke(
+                {
+                    "messages": list(messages),
+                    "transcript": [],
+                    "turn": 0,
+                    "response": None,
+                    "outcome": None,
+                    "detail": "",
+                    "helped_once": False,
+                },
+                # ★ 轮数上限交给图的递归上限执行。
+                #   每轮最多经过 model → tools/verify/help 两个节点，
+                #   留一倍余量避免图在到达业务上限前先被框架截断。
+                {"recursion_limit": self._config.max_turns * 2 + 8},
+            )
+
+            outcome = final.get("outcome")
+            if outcome == "help_requested":
+                return self._fail(
+                    FailureCode.ACCEPTANCE_NOT_MET, final["detail"], status="help_requested"
+                )
+            if outcome == "completed":
+                return self._finish(prompt.digest, final.get("response"), final.get("turn", 0))
+            # 图跑到头仍未收敛 = 撞上限
+            return self._finish(prompt.digest, None, self._config.max_turns, exhausted=True)
+        except Exception as exc:  # noqa: BLE001
+            return self._fail(FailureCode.MODEL_ERROR, str(exc), status="failed")
+        finally:
+            if session is not None:
+                await session.close()
+
+    # ════════════════════════════════════════════════════════
+    #  LangGraph 节点（ADR-0004：执行平面的控制流图）
+    # ════════════════════════════════════════════════════════
+
+    def _make_model_node(self, session: ModelSession, prompt: Any, tools: Any):  # type: ignore[no-untyped-def]
+        """模型节点：发一次请求，把响应放进状态。
+
+        ★ 截断恢复在这里：工具参数被截断时 JSON 不完整、救不回来，
+          但模型自己能修 —— 告诉它「上次被截断了，写短一点」。
+          直接判失败等于把一个可恢复的情况当成终局。
+        """
+
+        async def model_node(state: AgentGraphState) -> dict[str, Any]:
+            turn = state.get("turn", 0) + 1
+            if turn > self._config.max_turns:
+                # ★ 撞上限不算完成 —— 模型没说「我做完了」，我们不能替它说。
+                return {"turn": turn, "outcome": "max_turns_exhausted", "response": None}
+
+            try:
+                response = await self._invoke_with_retry(
+                    session,
+                    ModelRequest(
+                        system=prompt.system,
+                        messages=tuple(state["messages"]),
+                        effort=self._req.routing.effort,
+                        tools=tools,
+                    ),
+                )
+            except ValueError as exc:
+                if "JSON object text" not in str(exc) or turn >= self._config.max_turns:
+                    raise
+                logger.warning("工具调用参数被截断，回推让模型重写（第 %d 轮）", turn)
+                return {
+                    "turn": turn,
+                    "response": None,
+                    "messages": [
+                        ModelMessage(role="assistant", content="（上一次工具调用输出被截断）"),
                         ModelMessage(
                             role="user",
                             content=(
@@ -195,87 +252,93 @@ class _AgentRun:
                                 "请重新调用，并把内容写短一些 —— "
                                 "例如一次只写一个文件、去掉冗长注释。"
                             ),
-                        )
-                    )
-                    continue
-                self._spent = max(self._spent, _session_spent(session))
-                self._record_turn(turn, response)
+                        ),
+                    ],
+                }
 
-                if not response.tool_calls:
-                    # ★ 模型说完事了 —— 但**先把验收谓词跑一遍再放它走**。
-                    #
-                    #   验收谓词就是「完成」的定义。让模型在谓词不过时收尾，
-                    #   等于让它自己宣布达标 —— 那正是本项目一路在拆的那个病。
-                    #
-                    #   2026-08-12 实测：模型写完实现就停手/求助，测试文件从来没写过。
-                    #   把真实的失败输出喂回去之后，它才知道自己还没做完。
-                    verdict = self._verify()
-                    if verdict is None or turn >= self._config.max_turns:
-                        return self._finish(prompt.digest, response, turn)
+            self._spent = max(self._spent, _session_spent(session))
+            self._record_turn(turn, response)
+            return {"turn": turn, "response": response}
 
-                    messages.append(
-                        ModelMessage(role="assistant", content=response.text or "（我认为已完成）")
-                    )
-                    messages.append(ModelMessage(role="user", content=verdict))
-                    continue
+        return model_node
 
-                if any(call.name == "request_help" for call in response.tool_calls):
-                    reason = next(
-                        str(call.input.get("reason", "")).strip()
-                        for call in response.tool_calls
-                        if call.name == "request_help"
-                    )
-                    self._run_tool_calls(response)
-                    pushback = self._verify() if not self._helped_once else None
+    def _tools_node(self, state: AgentGraphState) -> dict[str, Any]:
+        """工具节点：执行本轮全部调用，结果作为 user 消息回传。
 
-                    if pushback is None or turn >= self._config.max_turns:
-                        # ★ 求助**终止**循环：它的语义是「我需要人来决定」，
-                        #   不该再让模型自己往下猜。
-                        #   （第一版把 request_help 也返回 ok=True，等于告诉它
-                        #   「求助成功了，你继续」，于是它每轮重复求助、
-                        #   12 轮烧完、一个文件没写。）
-                        return self._fail(
-                            FailureCode.ACCEPTANCE_NOT_MET,
-                            f"模型请求人工介入：{reason or '(未说明原因)'}",
-                            status="help_requested",
-                        )
+        ★ 不能发 content="" 的 assistant 消息 —— 模型只调工具不说话时
+          `response.text` 是空的，而空 content 会被百炼判成畸形请求
+          （实测连续两次 500，都在多轮的第 2–3 轮）。
+        """
 
-                    # ★ 但**第一次**求助先给一次事实性回推。
-                    #
-                    #   2026-08-12 实测：模型写完实现就求助「需要具体的验收条件」——
-                    #   而验收条件一直在 prompt 里，它只是没把「谓词跑不过」
-                    #   当成自己的事。把谓词的真实输出摆给它看，
-                    #   比重复一遍要求有效得多。
-                    #
-                    #   只回推一次：再求助就是真的卡住了，那就交给人。
-                    self._helped_once = True
-                    messages.append(
-                        ModelMessage(role="assistant", content=response.text or f"（请求协助：{reason}）")
-                    )
-                    messages.append(ModelMessage(role="user", content=pushback))
-                    continue
+        response = state["response"]
+        assert response is not None
+        return {
+            "messages": [
+                ModelMessage(
+                    role="assistant",
+                    content=response.text
+                    or "（调用工具：" + "、".join(c.name for c in response.tool_calls) + "）",
+                ),
+                ModelMessage(role="user", content=self._run_tool_calls(response)),
+            ]
+        }
 
-                # ★ 不能发 content="" 的 assistant 消息。
-                #   模型只调工具、不说话时 response.text 是空的，而空 content
-                #   会被百炼判成畸形请求（2026-08-12 实测连续两次 500
-                #   internal_error，都发生在多轮的第 2–3 轮）。
-                #   补一句它自己做了什么，既合法，也让下一轮有上下文。
-                messages.append(
-                    ModelMessage(
-                        role="assistant",
-                        content=response.text
-                        or "（调用工具：" + "、".join(c.name for c in response.tool_calls) + "）",
-                    )
-                )
-                messages.append(
-                    ModelMessage(role="user", content=self._run_tool_calls(response))
-                )
-            return self._finish(prompt.digest, None, self._config.max_turns, exhausted=True)
-        except Exception as exc:  # noqa: BLE001
-            return self._fail(FailureCode.MODEL_ERROR, str(exc), status="failed")
-        finally:
-            if session is not None:
-                await session.close()
+    def _verify_node(self, state: AgentGraphState) -> dict[str, Any]:
+        """自验节点：模型说完事了，但先把验收谓词跑一遍再放它走。
+
+        ★ 验收谓词就是「完成」的定义。让模型在谓词不过时收尾，
+          等于让它自己宣布达标 —— 那正是本项目一路在拆的那个病。
+        """
+
+        verdict = self._verify()
+        if verdict is None or state.get("turn", 0) >= self._config.max_turns:
+            return {"outcome": "completed"}
+
+        response = state["response"]
+        return {
+            "messages": [
+                ModelMessage(
+                    role="assistant",
+                    content=(response.text if response else None) or "（我认为已完成）",
+                ),
+                ModelMessage(role="user", content=verdict),
+            ]
+        }
+
+    def _help_node(self, state: AgentGraphState) -> dict[str, Any]:
+        """求助节点：首次给一次事实性回推，再次即终止。
+
+        ★ 求助的语义是「我需要人来决定」，不该在求助后还让模型自己往下猜。
+          但首次求助常常只是「不知道验收标准」，而验收标准一直在 prompt 里 ——
+          把谓词的真实输出摆给它看，比重复一遍要求有效。
+        """
+
+        response = state["response"]
+        assert response is not None
+        reason = next(
+            str(call.input.get("reason", "")).strip()
+            for call in response.tool_calls
+            if call.name == "request_help"
+        )
+        self._run_tool_calls(response)
+
+        already = state.get("helped_once", False)
+        pushback = self._verify() if not already else None
+        if pushback is None or state.get("turn", 0) >= self._config.max_turns:
+            return {
+                "outcome": "help_requested",
+                "detail": f"模型请求人工介入：{reason or '(未说明原因)'}",
+            }
+
+        return {
+            "helped_once": True,
+            "messages": [
+                ModelMessage(
+                    role="assistant", content=response.text or f"（请求协助：{reason}）"
+                ),
+                ModelMessage(role="user", content=pushback),
+            ],
+        }
 
     async def _invoke_with_retry(
         self, session: ModelSession, req: ModelRequest
