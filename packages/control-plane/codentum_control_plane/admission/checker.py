@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,7 +19,7 @@ from codentum_contracts.state import (
     WorkPacket,
 )
 
-from .rules import DEFAULT_RULES, RuleFn, Violation
+from .rules import DEFAULT_RULES, JUDGEMENT_MODES, RuleFn, Violation
 
 __all__ = ["AdmissionChecker", "AdmissionVerdict"]
 
@@ -69,6 +69,26 @@ class AdmissionChecker:
     dep_graph: DependencyGraph | None = None
     """依赖图（用于 DAG 检查的另一个数据源）。"""
 
+    modes: Mapping[str, str] = field(default_factory=lambda: dict(JUDGEMENT_MODES))
+    """判据 → 档位。**没有登记的一律 enforcing**（见 rules.JUDGEMENT_MODES）。"""
+
+    recorder: Callable[[str, str, str, bool, str | None], None] | None = None
+    """命中记录回调 `(packet_id, rule_name, mode, fired, code)`。为 None 时不记录。
+
+    ★ packet_id 是必须的：缺口报告要回答「这个 packet 失败之前，
+      有没有任何判据 fired 过」—— 没有它，命中记录与失败记录**关联不起来**，
+      而那正是「判据缺口」的定义所在。
+
+    ★ 为什么是注入而不是在这里直接写文件：控制平面的承诺是
+      「确定性代码，零 LLM，不猜路径」。往哪写是装配点的决定 ——
+      让控制平面自己挑一个目录，就会和引擎的 state_dir 分叉成两处，
+      而两处各自看起来都正常工作。
+
+    ★ 为 None = 不记录，且这件事是**看得见的**：
+      资产负债表会把「从未有过命中记录」与「命中 0 次」分开显示。
+      两者完全不同 —— 前者是没人在记，后者是真的没命中。
+    """
+
     def check(self, packet: WorkPacket) -> AdmissionVerdict:
         """对单个 WorkPacket 执行全部准入规则。
 
@@ -85,7 +105,13 @@ class AdmissionChecker:
         for rule in self.rules:
             try:
                 v = rule(packet, **ctx)
-                if v is not None:
+                mode = self.modes.get(rule.__name__, "enforcing")
+                if self.recorder is not None:
+                    self.recorder(str(packet.id), rule.__name__, mode, v is not None, v.code if v else None)
+                # ★ shadow：评估了、记录了，**但不拦**。
+                #   一条新判据在没有真实数据支撑之前，你不知道它会不会误伤；
+                #   而第一次误拦就足以让人把它整条关掉，之后再也不会打开。
+                if v is not None and mode != "shadow":
                     violations.append(v)
             except Exception as exc:
                 # 规则本身出错不应阻断整个校验——

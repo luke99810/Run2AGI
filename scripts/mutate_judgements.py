@@ -46,6 +46,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -115,20 +116,147 @@ def _discover() -> tuple[list[str], list[str]]:
     return rules, collected
 
 
+_FULL_BASELINE_CHECKED: list[bool] = []
+
+
+def _ensure_full_baseline() -> bool:
+    """全量基线 —— 最多付一次，且只在真的需要判「存活」时才付。
+
+    ★ 「被杀死」一条反例就成立，快筛能杀死的根本用不着全量；
+      而「存活」是全称命题，必须跑遍所有测试才敢下结论。
+      两者代价不对称，跑法就不该对称。
+    """
+
+    if _FULL_BASELINE_CHECKED:
+        return _FULL_BASELINE_CHECKED[0]
+
+    print(f"{'[全量基线]':<38}", end="", flush=True)
+    t0 = time.monotonic()
+    green, summary = _run_pytest("none", [])
+    print(f"{'绿 ✅' if green else '红 ❌':<12}{time.monotonic() - t0:.0f}s  {summary}")
+    if not green:
+        print("\n★ 全量基线是红的 —— 快筛层的结论仍然有效（那一层基线是绿的），")
+        print("  但「存活」判断做不了：全量本来就红，变异后还是红，区分不出来。")
+    _FULL_BASELINE_CHECKED.append(green)
+    return green
+
+
+def _two_pass(targets: list[tuple[str, str]], *, phase: str) -> list[Outcome] | None:
+    """对一批变异体跑「先快筛、存疑者升全量」。targets 是 (变异标识, 显示名)。"""
+
+    print(f"\n{'═' * 68}\n{phase} · {len(targets)} 个变异体\n{'═' * 68}")
+    print(f"{'变异体':<38}{'结论':<12}{'耗时'}")
+    print("─" * 68)
+
+    results: list[Outcome] = []
+    pending: list[tuple[str, str]] = []
+    for spec, label in targets:
+        t0 = time.monotonic()
+        fast_green, summary = _run_pytest(spec, FAST_TIER)
+        elapsed = time.monotonic() - t0
+        if fast_green:
+            pending.append((spec, label))
+            print(f"{label:<38}{'快筛未杀死 →':<12}{elapsed:.0f}s", flush=True)
+        else:
+            results.append(Outcome(spec, True, "快筛", elapsed, summary))
+            print(f"{label:<38}{'被杀死 ✅':<12}{elapsed:.0f}s", flush=True)
+
+    if pending:
+        print(f"\n升级全量（{len(pending)} 个快筛未杀死）")
+        print("─" * 68)
+        if not _ensure_full_baseline():
+            return None
+        for spec, label in pending:
+            t0 = time.monotonic()
+            green_after, summary = _run_pytest(spec, [])
+            elapsed = time.monotonic() - t0
+            killed = not green_after
+            results.append(Outcome(spec, killed, "全量", elapsed, summary))
+            print(f"{label:<38}{'被杀死 ✅' if killed else '存活 ⚠️':<12}{elapsed:.0f}s", flush=True)
+
+    return results
+
+
+def _weak_targets() -> list[tuple[str, str]]:
+    """枚举全部弱变异点。
+
+    ★ 逐个点名而不是「每条判据随机改一处」：变异测试的结论要可复现，
+      随机采样会让今天的 92% 和明天的 85% 无法比较 ——
+      而这个数存在的意义就是**被跨时间比较**。
+    """
+
+    sys.path.insert(0, str(LIB))
+    from weak_mutations import enumerate_sites  # type: ignore[import-not-found]
+
+    from codentum_control_plane.admission.rules import DEFAULT_RULES
+    from codentum_control_plane.gates import builtin as gates_mod
+
+    functions = [*DEFAULT_RULES, *(
+        getattr(gates_mod, name)
+        for name in ("evidence_exists_gate", "self_test_gate", "acceptance_gate", "review_gate")
+    )]
+
+    from equivalent_mutants import KNOWN_EQUIVALENT  # type: ignore[import-not-found]
+
+    targets: list[tuple[str, str]] = []
+    for fn in functions:
+        for site in enumerate_sites(fn):
+            key = f"{fn.__name__}:{site.index}"
+            # ★ 已判定为等价的**不跑** —— 排除的依据是读代码的论证，
+            #   不是跑出来的。花 18 分钟去确认一个「行为上不可观测」的改动
+            #   仍然不可观测，是在给一个已经成立的结论买保险。
+            #   代价是这条不再有实证背书 —— 所以理由必须写进
+            #   equivalent_mutants.py，并且每次报告都打印出来。
+            if key in KNOWN_EQUIVALENT:
+                continue
+            targets.append((f"weak:{key}", f"{fn.__name__} [{site.detail}]"))
+    return targets
+
+
+def _report(results: list[Outcome], *, phase: str, meaning: str, exclude: bool = False) -> None:
+    excluded: dict[str, str] = {}
+    if exclude:
+        sys.path.insert(0, str(LIB))
+        from equivalent_mutants import KNOWN_EQUIVALENT
+
+        excluded = KNOWN_EQUIVALENT
+        # ★ 整张表每次都打印，不管有没有命中 —— 隐藏的排除项等于没有排除项。
+        #   看报告的人必须能看见「这个数是在排除了这些之后算出来的」。
+        print(f"\n已判定为等价变异体（{len(excluded)} 条 · 已排除，未运行）：")
+        for key, reason in excluded.items():
+            print(f"    · {key}\n      {reason}")
+
+    counted = [r for r in results if r.target.removeprefix("weak:") not in excluded]
+    survived = [r for r in counted if not r.killed]
+    rate = len(survived) / len(counted) * 100 if counted else 0.0
+
+    print(f"\n{phase}存活率：{len(survived)}/{len(counted)} = {rate:.0f}%")
+    print(f"（存活 = {meaning}）")
+    if survived:
+        print("\n⚠️  存活的变异体 —— 需要人看一眼：")
+        for r in survived:
+            print(f"    · {r.target}")
+
+
 def main() -> int:
+    mode = "both"
+    out_path = REPO / ".codentum" / "judgements" / "mutation.json"
+    for arg in sys.argv[1:]:
+        if arg.startswith("--mode="):
+            mode = arg.removeprefix("--mode=")
+        elif arg.startswith("--out="):
+            out_path = Path(arg.removeprefix("--out="))
+    if mode not in {"strong", "weak", "both"}:
+        print("用法：mutate_judgements.py [--mode=strong|weak|both]")
+        return 2
+
     rules, gates = _discover()
-    targets = [f"rule:{r}" for r in rules] + [f"gate:{g}" for g in gates]
 
     print("═" * 68)
     print(f" 判据因果检验 · {len(rules)} 条准入规则 + {len(gates)} 道门禁")
     print("═" * 68)
 
     # ── 控制点 1：基线 ─────────────────────────────────────────
-    #
-    # ★ 只跑快筛层（174 条 / 1.9 秒）。全量基线推迟到真的出现存活者时再付 ——
-    #   「被杀死」一条反例就成立，快筛能杀死的根本用不着全量；
-    #   而全量只在确认「存活」这个全称命题时才必要。
-    #   先付全量基线的钱，等于为一个可能根本用不上的判断预付。
     print("\n[控制点 1/3] 基线（不变异，快筛层）…", end=" ", flush=True)
     t0 = time.monotonic()
     green, summary = _run_pytest("none", FAST_TIER)
@@ -138,84 +266,73 @@ def main() -> int:
         print("  与变异无关。先修好基线再跑本脚本。")
         return 2
 
-    # ── 控制点 3：正对照（放在这里跑，因为它也用快筛层）──────────
+    # ── 控制点 3：正对照 ───────────────────────────────────────
     print("[控制点 3/3] 正对照 canary（塞一条无所谓的规则，应存活）…", end=" ", flush=True)
     t0 = time.monotonic()
     canary_green, _ = _run_pytest("canary", FAST_TIER)
-    canary_ok = canary_green  # 全绿 = 没被杀死 = 存活 = 符合预期
-    print(f"{'存活 ✅' if canary_ok else '被杀死 ❌'}  ({time.monotonic() - t0:.0f}s)")
-    if not canary_ok:
+    print(f"{'存活 ✅' if canary_green else '被杀死 ❌'}  ({time.monotonic() - t0:.0f}s)")
+    if not canary_green:
         print("\n★ 正对照被杀死了 —— 说明「往规则集里加一条空规则」本身就能让测试变红，")
         print("  多半是有测试在断言规则的**数量或名字列表**。")
         print("  那类结构断言会污染本脚本的全部结论，必须先排除。")
         return 2
 
-    # ── 第一遍：快筛全部 ───────────────────────────────────────
-    print(f"\n第一遍 · 快筛层\n{'判据':<34}{'结论':<12}{'耗时'}")
-    print("─" * 68)
+    all_results: list[Outcome] = []
 
-    results: list[Outcome] = []
-    pending: list[str] = []
-    for target in targets:
-        label = target.split(":", 1)[1]
-        t0 = time.monotonic()
-        fast_green, summary = _run_pytest(target, FAST_TIER)
-        elapsed = time.monotonic() - t0
-        if fast_green:
-            pending.append(target)
-            print(f"{label:<34}{'快筛未杀死 →':<12}{elapsed:.0f}s", flush=True)
-        else:
-            results.append(Outcome(target, True, "快筛", elapsed, summary))
-            print(f"{label:<34}{'被杀死 ✅':<12}{elapsed:.0f}s", flush=True)
-
-    # ── 第二遍：只有存疑的才升级到全量 ─────────────────────────
-    if pending:
-        print(f"\n第二遍 · 全量（{len(pending)} 条快筛未杀死，需确认是否真的无人看守）")
-        print("─" * 68)
-
-        # ★ 全量基线拖到这里才付 —— 只有真的要跑全量时它才有意义。
-        print(f"{'[全量基线]':<34}", end="", flush=True)
-        t0 = time.monotonic()
-        full_green, summary = _run_pytest("none", [])
-        print(f"{'绿 ✅' if full_green else '红 ❌':<12}{time.monotonic() - t0:.0f}s  {summary}")
-        if not full_green:
-            print("\n★ 全量基线是红的 —— 快筛层的结论仍然有效（那一层基线是绿的），")
-            print("  但「存活」判断做不了：全量本来就红，变异后还是红，区分不出来。")
+    if mode in {"strong", "both"}:
+        targets = [(f"rule:{r}", r) for r in rules] + [(f"gate:{g}", g) for g in gates]
+        strong = _two_pass(targets, phase="强变异（整条判据摘掉）")
+        if strong is None:
             return 2
+        all_results += strong
+        _report(strong, phase="强变异", meaning="摘掉它也没有任何测试变红 = 这条判据无人看守")
 
-        for target in pending:
-            label = target.split(":", 1)[1]
-            t0 = time.monotonic()
-            green_after, summary = _run_pytest(target, [])
-            elapsed = time.monotonic() - t0
-            killed = not green_after
-            results.append(Outcome(target, killed, "全量", elapsed, summary))
-            verdict = "被杀死 ✅" if killed else "存活 ⚠️"
-            print(f"{label:<34}{verdict:<12}{elapsed:.0f}s", flush=True)
+    if mode in {"weak", "both"}:
+        weak = _two_pass(_weak_targets(), phase="弱变异（边界挪一格）")
+        if weak is None:
+            return 2
+        all_results += weak
+        _report(
+            weak,
+            phase="弱变异",
+            meaning="边界挪了一格也没人发现 = 这一格没被测过",
+            exclude=True,
+        )
+        print("\n★ 弱变异的存活者是「**需要人看一眼**」，不是确定的缺陷 ——")
+        print("  有些变异在语义上与原代码等价（改的是走不到的分支），必然存活。")
+        print("  这是变异测试的固有噪声，把它算成缺陷和算成通过是同一种不诚实。")
 
-    # ── 控制点 2 + 汇总 ────────────────────────────────────────
-    killed_n = sum(1 for r in results if r.killed)
-    survived = [r for r in results if not r.killed]
+    # ── 落盘：这个数存在的意义就是**被跨时间比较** ──────────────
+    #
+    # ★ 只打印在终端里的话，它每次跑完就没了 —— 那样它只是个一次性的安慰。
+    #   写成文件之后，资产负债表才能把「变异检验」这一列填上，
+    #   而那一列正是区分「该删的判据」与「该留的判据」的依据。
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(
+            {
+                "mode": mode,
+                "results": [
+                    {"target": r.target, "killed": r.killed, "tier": r.tier} for r in all_results
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"\n变异结果已写入 {out_path}")
 
-    print("─" * 68)
-    print(f"\n[控制点 2/3] 至少一条被杀死：{'✅' if killed_n else '❌'}  ({killed_n}/{len(results)})")
+    # ── 控制点 2 ───────────────────────────────────────────────
+    killed_n = sum(1 for r in all_results if r.killed)
+    print(f"\n{'─' * 68}")
+    print(f"[控制点 2/3] 至少一条被杀死：{'✅' if killed_n else '❌'}  ({killed_n}/{len(all_results)})")
     if not killed_n:
         print("\n★ 一条都没被杀死 —— 先怀疑管道而不是判据集。")
         print("  最可能的原因是插件没被加载，每轮跑的都是未变异的代码。")
         return 2
-
-    rate = len(survived) / len(results) * 100
-    print(f"\n判据存活率：{len(survived)}/{len(results)} = {rate:.0f}%")
-    print("（存活 = 摘掉它也没有任何测试变红 = 这条判据无人看守）\n")
-
-    if survived:
-        print("⚠️  以下判据无人看守：")
-        for r in survived:
-            print(f"    · {r.target.split(':', 1)[1]}")
-        print("\n★ 这不代表它们没用 —— 它们可能在生产里拦下过东西。")
-        print("  它代表的是：**它们现在被改坏了不会有任何信号**。")
-    else:
-        print("✅ 每一条判据都至少有一条测试守着。")
 
     return 0
 

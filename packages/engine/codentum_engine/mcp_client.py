@@ -52,6 +52,7 @@ __all__ = [
     "McpServerConfig",
     "McpSession",
     "McpToolRef",
+    "describe_skipped",
     "load_mcp_configs",
 ]
 
@@ -310,6 +311,51 @@ class McpSession:
                 + "\n"
             )
             proc.stdin.flush()
+
+
+def describe_skipped(config_dir: Path | str) -> tuple[dict[str, str], ...]:
+    """列出目录里**没有被加载**的条目及原因。
+
+    ★ 为什么需要这个：`load_mcp_configs` 静默跳过声明式清单与
+      `enabled: false` 的条目 —— 这对加载本身是对的，但它让下面三种情况
+      从外面看**完全一样**：
+
+        1. 目录是空的 / 路径写错了
+        2. 目录里有配置，但全部处于关闭状态
+        3. 连上了，只是模型没调用
+
+      三者都表现为「MCP 好像没起作用」，而处理办法完全不同。
+      第 2 种尤其容易卡住人：仓库里的配置**出厂即关闭**
+      （靠 credentialHowTo 指导逐个打开），一个刚接手的人
+      把目录配对了却什么也没发生，会先去怀疑代码。
+    """
+
+    directory = Path(config_dir)
+    if not directory.is_dir():
+        return ({"file": str(directory), "reason": "配置目录不存在"},)
+
+    skipped: list[dict[str, str]] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            skipped.append({"file": path.name, "reason": f"解析失败：{exc}"})
+            continue
+        if raw.get("transport") != "stdio":
+            skipped.append({
+                "file": path.name,
+                "reason": f"声明式清单（transport={raw.get('transport')!r}），只作能力投影不启动",
+            })
+        elif not str(raw.get("command") or "").strip():
+            skipped.append({"file": path.name, "reason": "stdio 但没有 command，无法启动"})
+        elif not bool(raw.get("enabled", True)):
+            skipped.append({
+                "file": path.name,
+                # ★ 把配置自己写的指引原样带出来 —— 「怎么打开」的答案
+                #   就在那个字段里，让人再去翻文件是多余的一步。
+                "reason": f"enabled=false（未启用）。{raw.get('credentialHowTo') or ''}".strip(),
+            })
+    return tuple(skipped)
 
 
 def load_mcp_configs(config_dir: Path | str) -> tuple[McpServerConfig, ...]:

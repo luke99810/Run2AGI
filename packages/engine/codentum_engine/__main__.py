@@ -85,6 +85,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="装载 RoleSpec 派生的 TransitionTable（见 EngineConfig 里的说明：现在打开会让 coder packet 停在 review）",
     )
+    parser.add_argument(
+        "--mcp-config-dir",
+        default=None,
+        help=(
+            "MCP 配置目录（如 packages/roles/mcp）。不给则不接任何 MCP。"
+            "★ 目录里只有 enabled=true 的 stdio 条目会被启动；"
+            "连接结果与**被跳过的条目及原因**都写在 <state-dir>/mcp/connections.json"
+        ),
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -285,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key_env=args.api_key_env,
             model_timeout_seconds=args.model_timeout_seconds,
             enforce_role_transitions=args.enforce_role_transitions,
+            mcp_config_dir=Path(args.mcp_config_dir).resolve() if args.mcp_config_dir else None,
         )
     )
     logger.info("%s 就绪：run=%s revision=%d", ENGINE_VERSION, service.run_id, service.revision)

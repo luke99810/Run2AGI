@@ -11,7 +11,7 @@
     "@playwright/mcp@latest"
   ],
   "env": {},
-  "enabled": false,
+  "enabled": true,
   "requiresEnv": [],
   "credentialHowTo": "无需凭据；首次运行会下载浏览器内核",
   "docs": "https://github.com/microsoft/playwright-mcp",
@@ -19,5 +19,5 @@
   "authentication": "not_required",
   "tools": [],
   "configSource": "packages/roles/mcp/playwright.json",
-  "error": "未启用。配置凭据后把 enabled 改为 true 即可接入；工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
+  "error": "已启用（本目录唯一默认开启的 server —— 它是唯一零凭据的）。工具清单由 server 在 tools/list 时提供，此处刻意留空 —— 预先罗列会在 server 版本变化后变成谎报。"
 }

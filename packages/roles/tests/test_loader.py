@@ -88,6 +88,25 @@ def test_builtin_skill_manifests_cover_rolespec_bindings() -> None:
 
 
 def test_builtin_mcp_services_load_and_say_connection_truth() -> None:
+    """★ 这条测试原先自己就在锁一个谎。
+
+    它的名字是 "say connection truth"，内容却是：
+
+        assert by_id["filesystem"]["status"] == "connected"
+        assert by_id["git"]["status"] == "connected"
+
+    而那两份配置**根本没有 command** —— 不可能连上任何东西。
+    也就是说，测试把「声称已连接但无法启动」这个状态钉死了：
+    有人去修正它反而会让测试变红。
+
+    ★ 教训不是「写错了一个断言」，是**断言的对象选错了**：
+      它断言的是「这个字段等于这个值」，而该断言的是
+      「**这个字段没有说谎**」。前者会随实现漂移一起被锁住，
+      后者不会。
+
+    改成守性质：任何声称 connected 的条目，必须真的可启动。
+    """
+
     services = load_builtin_mcp_services()
     by_id = {str(service["id"]): service for service in services}
 
@@ -95,11 +114,40 @@ def test_builtin_mcp_services_load_and_say_connection_truth() -> None:
     #   会随需求增删，把文件名写死会让每次加一个应用都要改测试 ——
     #   而那条测试并不因此变得更有保障。
     assert {"agentteams", "browser", "filesystem", "git"} <= set(by_id)
-    assert by_id["filesystem"]["status"] == "connected"
-    assert by_id["git"]["status"] == "connected"
-    assert by_id["browser"]["status"] == "disconnected"
     assert by_id["agentteams"]["authentication"] == "missing"
     assert "error" in by_id["agentteams"]
+
+    for service_id, service in by_id.items():
+        launchable = (
+            service.get("transport") == "stdio"
+            and bool(str(service.get("command") or "").strip())
+            and bool(service.get("enabled", True))
+        )
+        if service.get("status") == "connected":
+            assert launchable, (
+                f"{service_id} 声称 connected，但它不可启动"
+                f"（transport={service.get('transport')!r} "
+                f"command={service.get('command')!r} enabled={service.get('enabled')!r}）。"
+                "状态字段谎报比没有状态字段更糟 —— 界面会把它显示成可用。"
+            )
+
+
+def test_every_stdio_entry_can_actually_be_launched() -> None:
+    """★ stdio 却没有 command = 一份**看起来是可执行配置、实际不是**的配置。
+
+    它比声明式清单更坏：声明式清单（transport=http）会被明确地跳过并说明原因，
+    而「stdio 但没 command」看上去就该能启动，只是永远不会。
+
+    filesystem / git / browser 三份原先正是这个状态。
+    """
+
+    for service in load_builtin_mcp_services():
+        if service.get("transport") != "stdio":
+            continue
+        assert str(service.get("command") or "").strip(), (
+            f"{service['id']} 声明 transport=stdio 却没有 command —— "
+            "要么补上 command，要么改成声明式清单（换一个 transport）。"
+        )
 
 
 def test_project_mcp_services_writes_deterministic_project_projection(tmp_path: Path) -> None:
@@ -113,7 +161,22 @@ def test_project_mcp_services_writes_deterministic_project_projection(tmp_path: 
     assert {"agentteams.json", "browser.json", "filesystem.json", "git.json"} <= set(written_names)
     assert written_names == sorted(written_names), "投影顺序必须确定，否则每次投影都产生 diff"
     projected = json.loads((target_dir / "filesystem.json").read_text(encoding="utf-8"))
-    assert projected["tools"] == ["read_file", "write_file", "list_directory"]
+    # ★ 投影必须**逐字保真** —— 这是这个函数唯一的职责，
+    #   投影过程中改内容会让界面看到的和磁盘上的不是一回事。
+    source = json.loads(
+        (Path(__file__).resolve().parents[1] / "mcp" / "filesystem.json").read_text(encoding="utf-8")
+    )
+    assert projected == source
+
+    # ★ 原先这里断言的是 tools == ["read_file", "write_file", "list_directory"]。
+    #   那是**预先罗列的工具清单**，而 playwright.json 里早就写清楚了为什么不能这么做：
+    #
+    #     「工具清单由 server 在 tools/list 时提供，此处刻意留空 ——
+    #       预先罗列会在 server 版本变化后变成谎报。」
+    #
+    #   这三份配置补上 command 变成真的可启动之后，预先罗列就正式成了那个隐患：
+    #   配置里写着三个工具，server 实际给出的是另一批，而**没有任何东西会发现**。
+    assert projected["tools"] == [], "可启动的 server 不该预先罗列工具 —— 那会随版本漂移变成谎报"
 
 
 def test_project_role_skills_writes_deterministic_shared_skill_space(tmp_path: Path) -> None:

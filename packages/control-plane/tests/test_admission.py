@@ -34,6 +34,7 @@ from codentum_control_plane.admission import (
     AdmissionVerdict,
     Violation,
     DEFAULT_RULES,
+    check_predicate_covers_owned_paths,
 )
 from codentum_control_plane.admission.rules import (
     check_self_review,
@@ -433,3 +434,175 @@ class TestAdmissionChecker:
         )
         verdict = checker.check(pkt)
         assert verdict.allowed, f"Violations: {[(v.code, v.detail) for v in verdict.violations]}"
+
+# ════════════════════════════════════════════════════════════
+#  弱变异检验补上的三条
+#
+#  ★ 来源：scripts/mutate_judgements.py --mode=weak。
+#    这三处在强变异（整条判据摘掉）下都是被杀死的 —— 说明有人碰过它们；
+#    但在弱变异（边界挪一格）下存活，说明**边界那一格没人测过**。
+#
+#    两个数测的是两件事：
+#      强变异存活率 = 有没有人**碰过**这条判据
+#      弱变异存活率 = 有没有人**测准**这条判据的边界
+# ════════════════════════════════════════════════════════════
+
+
+class TestJudgementBoundaries:
+    def test_small_but_valid_budget_is_accepted(self) -> None:
+        """★ 合法预算的**下边界**必须被测。
+
+        原先只有「0 无效」和「5.0 有效」两条 —— 中间那段没人测过。
+        后果是 `<= 0` 被改成 `<= 1` 时全套测试照样绿：
+        所有 0 到 1 元的合法预算会被静默拒绝，而没有任何信号。
+        """
+
+        assert check_budget_limit(_pkt(limitCny=0.5)) is None
+
+    def test_isolation_defers_when_role_is_unknown(self) -> None:
+        """★ packet.role 不在 role_specs 里时，模型隔离**让路**而不是报错。
+
+        这条卫语句的语义是分工：「角色不存在」由 ROLE_NOT_FOUND 负责报，
+        这里再报一次就是同一个问题出两条违规。
+
+        它原先无人覆盖 —— 把 `spec is None or spec.modelPolicy is None`
+        改成 `and` 之后没有任何测试变红，而那个改动会让这条路径直接
+        抛 AttributeError。
+        """
+
+        pkt = _pkt(role="architect", routing_model="qwen-plus")
+        assert check_role_model_isolation(pkt, role_specs=SPECS) is None
+
+    def test_isolation_skips_role_absent_from_the_given_specs(self) -> None:
+        """★ mustDifferFrom 指向的角色不在**本次传入的 role_specs** 里时跳过，不崩。
+
+        写这条测试时先试了另一个场景 —— 让 mustDifferFrom 指向一个
+        不存在的角色名 —— 发现**它在类型层面就不可表示**：
+        mustDifferFrom 是 Literal 枚举，pydantic 在构造时就拒了。
+
+        这正是本项目那条约束实现优先级的一个实例：
+        **不可见 > 无权限 > 被拦截 > 提示词劝阻**。
+        不可表示的东西不需要运行时检查。
+
+        所以这条卫语句真正守的是另一件事：角色名合法，但调用方传进来的
+        role_specs 是**不完整的**（被过滤过、或分批加载）。
+        这种情况下这条约束无法判定，应当跳过 ——
+        而不是让一个局部视图把整个准入流程炸掉。
+        """
+
+        partial = _reviewer_spec().model_copy(
+            update={"modelPolicy": ModelPolicy(
+                defaultModel="qwen-max", defaultEffort="high",
+                mustDifferFrom=("manager",),
+            )}
+        )
+        pkt = _pkt(role="reviewer", routing_model="qwen-plus")
+        # ★ 注意 role_specs 里**没有** manager
+        assert check_role_model_isolation(pkt, role_specs=(partial,)) is None
+
+
+# ════════════════════════════════════════════════════════════
+#  影子判据与晋级门（算子四）
+# ════════════════════════════════════════════════════════════
+
+
+class TestShadowJudgements:
+    def test_shadow_rule_fires_but_does_not_block(self) -> None:
+        """★ 影子档位的全部意义：**评估、记录，但不拦**。
+
+        一条新判据在没有真实数据支撑之前，你不知道它会不会误伤。
+        直接上线拦截，第一次误拦就会让人把它整条关掉 ——
+        **而关掉之后它再也不会被打开。** 影子期让它先攒证据。
+        """
+
+        from codentum_control_plane.admission.checker import AdmissionChecker
+
+        # ownsPaths 是 src/test/，谓词只写 "pytest" —— 那条影子规则会命中
+        packet = _pkt(ownsPaths=("src/test/",), acceptance_predicate="pytest")
+        assert check_predicate_covers_owned_paths(packet) is not None, "前提不成立：影子规则没命中"
+
+        verdict = AdmissionChecker(role_specs=SPECS).check(packet)
+        codes = {v.code for v in verdict.violations}
+        assert "PREDICATE_SCOPE_MISMATCH" not in codes, "影子判据拦人了"
+
+    def test_unregistered_rule_defaults_to_enforcing_not_shadow(self) -> None:
+        """★ 方向不能反。
+
+        默认 shadow → 新加的规则不生效，而这件事是**静默的**
+                      （它躺在判据集里，实际什么都不拦）
+        默认 enforcing → 可能误拦，但那是**响亮的**
+
+        响亮的失败优于静默的失败。这条钉住这个方向。
+        """
+
+        from codentum_control_plane.admission.checker import AdmissionChecker
+
+        def always_fires(_packet: object, **_ctx: object) -> Violation:
+            return Violation(code="BUDGET_ZERO_LIMIT", detail="没登记档位的新规则", field=None)
+
+        verdict = AdmissionChecker(rules=(always_fires,), role_specs=SPECS).check(_pkt())
+        assert not verdict.allowed, "没登记档位的规则被当成 shadow 放行了"
+
+    def test_shadow_hits_are_recorded(self) -> None:
+        """★ 影子期不记录 = 晋级永远无据可依。
+
+        晋级到 enforcing 的第一个条件是「在真实案例上命中过 ≥1 次」——
+        没有命中记录，这个条件**永远无法被满足**，
+        于是影子判据会永远停在影子里。那和不加这条判据是一样的。
+        """
+
+        from codentum_control_plane.admission.checker import AdmissionChecker
+
+        seen: list[tuple[str, str, bool, str | None]] = []
+        AdmissionChecker(
+            role_specs=SPECS,
+            recorder=lambda _pid, rule, mode, fired, code: seen.append((rule, mode, fired, code)),
+        ).check(_pkt(ownsPaths=("src/test/",), acceptance_predicate="pytest"))
+
+        shadow_hits = [row for row in seen if row[0] == "check_predicate_covers_owned_paths"]
+        assert shadow_hits == [("check_predicate_covers_owned_paths", "shadow", True, "PREDICATE_SCOPE_MISMATCH")]
+
+    def test_enforcing_rules_are_recorded_too(self) -> None:
+        """记录不能只记命中的 —— 「跑了但没命中」也是数据。
+
+        资产负债表要靠它区分「这条判据从没命中过」与「没人在记录」。
+        """
+
+        from codentum_control_plane.admission.checker import AdmissionChecker
+
+        seen: list[str] = []
+        AdmissionChecker(
+            role_specs=SPECS,
+            recorder=lambda _pid, rule, _mode, _fired, _code: seen.append(rule),
+        ).check(_pkt())
+        assert "check_budget_limit" in seen, "没命中的规则也该留下运行记录"
+
+
+class TestPredicateScopeShadowRule:
+    def test_predicate_on_the_same_path_chain_is_accepted(self) -> None:
+        """★ 用**路径链关系**而不是字符串包含。
+
+        谓词范围更大（workspace ⊃ workspace/alpha/src）算覆盖，
+        更小但在链上也算。
+        """
+
+        wider = _pkt(ownsPaths=("workspace/alpha/src/",), acceptance_predicate="pytest workspace -q")
+        narrower = _pkt(ownsPaths=("workspace/",), acceptance_predicate="pytest workspace/alpha -q")
+        assert check_predicate_covers_owned_paths(wider) is None
+        assert check_predicate_covers_owned_paths(narrower) is None
+
+    def test_sibling_path_is_flagged(self) -> None:
+        """★ 拥有 alpha 却去验 beta —— 谓词会绿，但它验的是别人的产出。"""
+
+        packet = _pkt(
+            ownsPaths=("workspace/alpha/",), acceptance_predicate="pytest workspace/beta -q"
+        )
+        assert check_predicate_covers_owned_paths(packet) is not None
+
+    def test_substring_lookalike_is_not_a_match(self) -> None:
+        """★ 纯 `in` 判断会让 workspace 匹配上 my-workspace-backup。"""
+
+        packet = _pkt(
+            ownsPaths=("workspace/",), acceptance_predicate="pytest my-workspace-backup -q"
+        )
+        assert check_predicate_covers_owned_paths(packet) is not None

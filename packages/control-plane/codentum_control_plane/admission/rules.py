@@ -45,6 +45,7 @@ ViolationCode = Literal[
     "ROLE_NOT_FOUND",
     "ROLE_AUTHOR_NOT_FOUND",
     "MODEL_ISOLATION",
+    "PREDICATE_SCOPE_MISMATCH",
 ]
 
 
@@ -240,6 +241,92 @@ def check_role_model_isolation(
     return None
 
 
+def _path_tokens(predicate: str) -> list[str]:
+    """从谓词里挑出「看起来是路径」的 token。选项（-q / --tb=short）不算。"""
+
+    return [
+        token.strip("\"'").strip("/").replace("\\", "/")
+        for token in predicate.split()
+        if not token.startswith("-")
+    ]
+
+
+def check_predicate_covers_owned_paths(packet: WorkPacket, **_ctx: object) -> Violation | None:
+    """★ 影子判据：验收谓词的作用域应当与 packet 拥有的路径有关。
+
+    如果一个 packet 拥有 `workspace/alpha/`，而它的验收谓词跑的是
+    `pytest workspace/beta -q` —— 那么它的「验收」验的是**别人写的东西**。
+    谓词会绿，而它与这个 packet 的产出毫无关系。
+
+    ★ 为什么这条是 shadow 而不是 enforcing：
+      它是**启发式**的。谓词的形态千变万化（`python -c "..."`、
+      自定义脚本、Makefile 目标），路径匹配必然有误判。
+      直接上线拦截，第一次误拦就会让人把它整条关掉 ——
+      而关掉之后它再也不会被打开。
+
+      影子期先攒证据：命中了哪些真实 packet、有没有误伤。
+      够格了再晋级（条件见 JUDGEMENT_MODES 的说明）。
+
+    ★ 匹配用的是**路径链关系**而不是字符串包含：
+      own=`workspace/alpha/src` 与 tok=`workspace/alpha` 算匹配（谓词范围更大），
+      own=`workspace` 与 tok=`workspace/alpha` 也算（谓词范围更小但在链上）。
+      纯 `in` 判断会让 `workspace` 匹配上 `my-workspace-backup`。
+    """
+
+    if packet.acceptance.kind != "test":
+        return None
+    owned = [path.strip("/") for path in packet.ownsPaths if path.strip()]
+    if not owned:
+        return None
+
+    tokens = [token for token in _path_tokens(packet.acceptance.predicate) if token]
+    for own in owned:
+        for token in tokens:
+            if own == token or own.startswith(f"{token}/") or token.startswith(f"{own}/"):
+                return None
+
+    return Violation(
+        code="PREDICATE_SCOPE_MISMATCH",
+        detail=(
+            f"验收谓词没有提到该 packet 拥有的任何路径（{owned}）："
+            f"{packet.acceptance.predicate[:120]}。"
+            "谓词可能在验别人的产出。"
+        ),
+        field="acceptance.predicate",
+    )
+
+
+JudgementMode = Literal["shadow", "enforcing"]
+"""一条判据的生效档位。
+
+★ `shadow` = **评估、记录，但不拦截**。
+
+  它存在的理由：一条新判据在没有真实数据支撑之前，你不知道它
+  会不会误伤。直接上线拦截，第一次误拦就会让人把整条判据关掉 ——
+  而关掉之后它再也不会被打开。影子期让它先积累证据。
+"""
+
+JUDGEMENT_MODES: dict[str, JudgementMode] = {
+    "check_predicate_covers_owned_paths": "shadow",
+}
+"""判据 → 档位。**没有登记的一律按 `enforcing`。**
+
+★ 默认 enforcing 而不是 shadow，这个方向是有意选的：
+
+  默认 shadow → 新加的规则不生效，而这件事是**静默的**
+                （它看起来在判据集里，实际什么都不拦）
+  默认 enforcing → 可能误拦，但那是**响亮的**
+
+  响亮的失败优于静默的失败。要影子就显式登记，
+  而登记这个动作本身会留下「这条还没准备好」的痕迹。
+
+★ 晋级到 enforcing 的条件（见 scripts/judgement_ledger.py）：
+  ① 在真实案例上**命中过 ≥1 次** —— 从没命中过的判据，
+     和没有这条判据在证据上不可区分
+  ② 变异检验能杀死它 —— 有测试守着
+"""
+
+
 DEFAULT_RULES: tuple[RuleFn, ...] = (
     check_self_review,
     check_owns_paths,
@@ -249,4 +336,5 @@ DEFAULT_RULES: tuple[RuleFn, ...] = (
     check_deps_dag,
     check_role_exists,
     check_role_model_isolation,
+    check_predicate_covers_owned_paths,
 )

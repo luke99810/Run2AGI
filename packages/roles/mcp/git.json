@@ -2,9 +2,27 @@
   "schemaVersion": 1,
   "id": "git",
   "name": "Git 工作区",
+  "category": "third-party-app",
+  "purpose": "读 diff、看历史、提交与分支操作",
   "transport": "stdio",
-  "status": "connected",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@cyanheads/git-mcp-server"
+  ],
+  "env": {},
+  "enabled": false,
+  "requiresEnv": [],
+  "riskLevel": "R3",
+  "bypasses": [
+    "控制平面的状态机（packet 状态由 ReconcileLoop 决定，不该由 Agent 直接 commit/merge 改写）",
+    "worktree 隔离（并行 packet 各自的 worktree 由控制平面分配）"
+  ],
+  "credentialHowTo": "无需凭据。★ 但这是本目录里风险最高的一个：它能 commit / merge / 切分支，而这些正是控制平面负责的事。并行 packet 的 worktree 隔离与状态转移都建立在「只有 ReconcileLoop 动 git」这个前提上。只读用途（read_diff / log）是安全的；写操作会与控制平面抢方向盘。",
+  "docs": "https://www.npmjs.com/package/@cyanheads/git-mcp-server",
+  "status": "disconnected",
   "authentication": "not_required",
-  "tools": ["read_diff", "create_diff", "merge_changes"],
-  "configSource": "packages/roles/mcp/git.json"
+  "tools": [],
+  "configSource": "packages/roles/mcp/git.json",
+  "error": "未启用。★ 含写操作，会与控制平面对 git 的独占产生冲突，开启前请读 credentialHowTo。"
 }

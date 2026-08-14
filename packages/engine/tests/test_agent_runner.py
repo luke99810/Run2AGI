@@ -557,3 +557,43 @@ def test_failed_tool_call_becomes_a_persisted_observation(prepared: Path, tmp_pa
 
     written = list((memory / "index").rglob("*.json"))
     assert written, "result.json 说沉淀了，磁盘上却没有 —— 这正是要防的那种「报告成功」"
+
+
+def test_mcp_tools_reach_the_model_tool_surface(prepared: Path, tmp_path: Path) -> None:
+    """★ 「第三方应用接进主 Agent」这句话的**实际含义**就是这一条：
+    MCP 的工具真的出现在模型看到的工具面上，和内置工具并排。
+
+    前面那几条守的是「连上了」「只连一次」「报告落盘」——
+    但全都连上了、模型却看不到，从结果上和没接是一样的。
+    这条是链路的最后一段：config → engine → runner → **模型请求**。
+
+    ★ 用真子进程 server（复用 test_mcp_client 的最小实现），不是打桩。
+      打桩能证明代码路径通，证明不了协议握手真的成立。
+    """
+
+    import sys
+
+    from codentum_engine.mcp_client import McpServerConfig
+    from codentum_engine.mcp_toolbox import McpToolbox
+    from test_mcp_client import _FAKE_SERVER
+
+    script = tmp_path / "fake_mcp_server.py"
+    script.write_text(_FAKE_SERVER, encoding="utf-8")
+
+    toolbox = McpToolbox()
+    toolbox.connect_all((
+        McpServerConfig(
+            id="github", name="GitHub", command=sys.executable, args=(str(script),)
+        ),
+    ))
+    try:
+        _, gateway = _run(
+            prepared,
+            [ModelResponse(text="不用工具", tool_calls=(), stop_reason="end", usage=_usage())],
+            mcp_toolbox=toolbox,
+        )
+        offered = {t.name for t in gateway.session.seen[0].tools}
+        assert "write_file" in offered, "内置工具不该因为接了 MCP 而消失"
+        assert "github__create_issue" in offered, f"MCP 工具没进工具面：{sorted(offered)}"
+    finally:
+        toolbox.close()

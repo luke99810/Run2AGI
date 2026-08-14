@@ -1,11 +1,25 @@
 {
   "schemaVersion": 1,
   "id": "browser",
-  "name": "浏览器自动化",
+  "name": "浏览器自动化（Puppeteer）",
+  "category": "third-party-app",
+  "purpose": "打开页面、操作 DOM、截图",
   "transport": "stdio",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@modelcontextprotocol/server-puppeteer"
+  ],
+  "env": {},
+  "enabled": false,
+  "requiresEnv": [],
+  "riskLevel": "R1",
+  "supersededBy": "playwright",
+  "credentialHowTo": "无需凭据；首次运行会下载 Chromium。★ 与 playwright 完全重叠，且 playwright 是目前更活跃的那个 —— 两个都开会让模型面对两套做同一件事的工具，选哪个全靠猜。建议只开 playwright；这份配置留着是为了「换一个实现」时有得换。",
+  "docs": "https://www.npmjs.com/package/@modelcontextprotocol/server-puppeteer",
   "status": "disconnected",
-  "authentication": "unknown",
-  "tools": ["open_page", "inspect_dom", "capture_screenshot"],
+  "authentication": "not_required",
+  "tools": [],
   "configSource": "packages/roles/mcp/browser.json",
-  "error": "本地 engine 只投影 MCP 清单，尚未启动浏览器 MCP server；工具保持不可调用。"
+  "error": "未启用。★ 功能已由 playwright 覆盖，同时开启两个会造成工具面重复。"
 }

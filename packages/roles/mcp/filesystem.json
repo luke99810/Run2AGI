@@ -2,9 +2,27 @@
   "schemaVersion": 1,
   "id": "filesystem",
   "name": "项目文件系统",
+  "category": "third-party-app",
+  "purpose": "跨目录读写、列目录、移动文件 —— 内置 read_file/write_file 之外的补充",
   "transport": "stdio",
-  "status": "connected",
+  "command": "npx",
+  "args": [
+    "-y",
+    "@modelcontextprotocol/server-filesystem",
+    "."
+  ],
+  "env": {},
+  "enabled": false,
+  "requiresEnv": [],
+  "riskLevel": "R2",
+  "bypasses": [
+    "工作区边界（内置 write_file 的 _resolve_inside 检查）"
+  ],
+  "credentialHowTo": "无需凭据。★ 但开启前必须改 args 最后一项：它是 server 允许访问的根目录，写 \".\" 会解析成引擎的**工作目录**，不一定是你以为的工作区。内置 write_file 有 _resolve_inside 拦路径穿越，这个 server 没有 —— 作用域只由这个参数决定。",
+  "docs": "https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem",
+  "status": "disconnected",
   "authentication": "not_required",
-  "tools": ["read_file", "write_file", "list_directory"],
-  "configSource": "packages/roles/mcp/filesystem.json"
+  "tools": [],
+  "configSource": "packages/roles/mcp/filesystem.json",
+  "error": "未启用。★ 内置 read_file/write_file 已覆盖常规读写**且带工作区边界**，接这个 server 主要是为了 list_directory / move_file 一类操作。开启前请确认 args 里的根目录范围。"
 }

@@ -102,3 +102,4 @@ temp/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+/.codentum/judgements/

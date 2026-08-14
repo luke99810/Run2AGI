@@ -101,6 +101,35 @@ def _mutate_gate(gate_id: str) -> None:
     GateRunner.register = patched_register  # type: ignore[assignment]
 
 
+def _resolve_judgement(name: str) -> Any:
+    """按名字找一条判据 —— 规则和门禁都在候选里。
+
+    ★ 不要求调用方说清楚它是规则还是门禁：弱变异改的是**函数体内部的逻辑**，
+      这一点对两者完全一样。强变异才必须分开，因为它们「放行」的表示不同
+      （规则返回 None，门禁返回 passed=True 的 GateVerdict）。
+    """
+
+    from codentum_control_plane.admission import rules as rules_mod
+    from codentum_control_plane.gates import builtin as gates_mod
+
+    for module in (rules_mod, gates_mod):
+        found = getattr(module, name, None)
+        if found is not None:
+            return found
+    raise SystemExit(f"[weak] 找不到判据函数：{name}")
+
+
+def _mutate_weak(spec: str) -> None:
+    """`<函数名>:<变异点序号>` —— 在 AST 层改一处逻辑。"""
+
+    # ★ scripts/lib 是运行时才挂上 sys.path 的（插件用 -p 加载，PYTHONPATH 指到那里），
+    #   mypy 静态看不到 —— 这个 ignore 标的是「解析路径」，不是「类型不对」。
+    from weak_mutations import apply_mutation  # type: ignore[import-not-found]
+
+    name, _, index = spec.rpartition(":")
+    apply_mutation(_resolve_judgement(name), int(index))
+
+
 def pytest_configure(config: object) -> None:
     """pytest 启动钩子。用 `-p` 加载，早于 conftest 与任何测试导入。"""
 
@@ -113,6 +142,8 @@ def pytest_configure(config: object) -> None:
         _mutate_rule(name)
     elif kind == "gate":
         _mutate_gate(name)
+    elif kind == "weak":
+        _mutate_weak(name)
     elif kind == "canary":
         _inject_noop_rule()
     else:
