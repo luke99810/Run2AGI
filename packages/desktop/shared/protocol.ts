@@ -4,6 +4,7 @@ import type {
   Evidence,
   GraphFile,
   KnowledgeFile,
+  PacketState,
   RoleId,
   RoleSpec,
   WorkPacket
@@ -230,6 +231,72 @@ export interface ArtifactPackageResult {
   readonly log: readonly string[]
 }
 
+/**
+ * Optional A-side projection. C reads it when present but never derives limits
+ * or queue order from the visible packet list.
+ */
+export interface SchedulingProjection {
+  readonly schemaVersion: 1
+  readonly revision?: number
+  readonly updatedAt?: string
+  readonly wipLimits: Readonly<Partial<Record<PacketState, number>>>
+  readonly readyQueue?: readonly string[]
+  readonly criticalPath?: readonly string[]
+}
+
+export type FlowActivityKind = 'waiting' | 'value'
+
+export interface PacketFlowSegmentProjection {
+  readonly state: PacketState
+  readonly kind: FlowActivityKind
+  readonly durationMs: number
+  readonly startedAt?: string
+  readonly endedAt?: string
+  readonly reason?: string
+}
+
+export interface PacketFlowProjection {
+  readonly packetId: string
+  readonly totalCycleMs: number
+  readonly efficiency?: number
+  readonly segments: readonly PacketFlowSegmentProjection[]
+}
+
+export interface FlowStageProjection {
+  readonly state: PacketState
+  readonly packetCount: number
+  readonly waitP50Ms?: number
+  readonly waitP80Ms?: number
+}
+
+export interface BottleneckProjection {
+  readonly state: PacketState
+  readonly waitP80Ms: number
+  readonly affectedPackets: number
+  readonly recommendation?: string
+}
+
+export interface AndonProjection {
+  readonly id: string
+  readonly packetId: string
+  readonly severity: 'warning' | 'critical'
+  readonly reason: string
+  readonly consecutiveFailures?: number
+  readonly evidenceRefs?: readonly string[]
+  readonly at: string
+}
+
+/** Optional deterministic flow metrics projected by A/B into flow.json. */
+export interface FlowProjection {
+  readonly schemaVersion: 1
+  readonly calculatedAt?: string
+  readonly efficiency?: number
+  readonly stages: readonly FlowStageProjection[]
+  readonly packets: readonly PacketFlowProjection[]
+  readonly bottleneck?: BottleneckProjection
+  readonly andons: readonly AndonProjection[]
+}
+
 export interface StateSnapshot {
   readonly source: SnapshotSourceDescriptor
   readonly revision: string
@@ -245,6 +312,8 @@ export interface StateSnapshot {
   readonly requirements: readonly RequirementProjection[]
   readonly mcpServices: readonly McpServiceProjection[]
   readonly workers: readonly WorkerProjection[]
+  readonly scheduling: SchedulingProjection | null
+  readonly flow: FlowProjection | null
   readonly warnings: readonly string[]
 }
 

@@ -407,6 +407,65 @@ async function verifySidebarScrolling(client) {
   await client.send('Emulation.clearDeviceMetricsOverride')
 }
 
+async function verifyLeanSchedulingLayout(client) {
+  await clickNavigation(client, '执行中心', '执行中心')
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 900, height: 600, screenWidth: 900, screenHeight: 600, deviceScaleFactor: 1, mobile: false })
+  await evaluate(client, `([...document.querySelectorAll('.execution-mode-tabs button')].find((button) => button.textContent?.trim() === '流动看板'))?.click()`, 'open responsive flow board')
+  await waitFor(client, `document.querySelectorAll('.kanban-column').length === 8`, 'responsive flow board columns')
+  const scrolling = await evaluate(client, `(() => {
+    const board = document.querySelector('.kanban-scroll')
+    const content = document.querySelector('.content-scroll')
+    if (!(board instanceof HTMLElement) || !(content instanceof HTMLElement)) return null
+    board.scrollLeft = 0
+    const boardStart = board.scrollLeft
+    board.scrollLeft = board.scrollWidth
+    content.scrollTop = 0
+    const contentStart = content.scrollTop
+    content.scrollTop = content.scrollHeight
+    return {
+      boardStart,
+      boardEnd: board.scrollLeft,
+      boardClientWidth: board.clientWidth,
+      boardScrollWidth: board.scrollWidth,
+      contentStart,
+      contentEnd: content.scrollTop,
+      contentClientHeight: content.clientHeight,
+      contentScrollHeight: content.scrollHeight
+    }
+  })()`, 'verify flow board scrolling')
+  if (scrolling === null || scrolling.boardScrollWidth <= scrolling.boardClientWidth || scrolling.boardEnd <= scrolling.boardStart || scrolling.contentScrollHeight <= scrolling.contentClientHeight || scrolling.contentEnd <= scrolling.contentStart) {
+    throw new Error(`Lean scheduling view cannot scroll at 900x600: ${JSON.stringify(scrolling)}`)
+  }
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 720, height: 700, screenWidth: 720, screenHeight: 700, deviceScaleFactor: 1, mobile: false })
+  await settleRenderer(client)
+  const selected = await evaluate(client, `(() => {
+    const card = document.querySelector('.kanban-cards > button')
+    if (!(card instanceof HTMLButtonElement)) return false
+    card.click()
+    return true
+  })()`, 'select a Packet in narrow flow board')
+  if (!selected) throw new Error('Narrow flow board did not expose a Packet card.')
+  await waitFor(client, `document.querySelector('.packet-flow-detail') instanceof HTMLElement`, 'narrow Packet flow detail')
+  const narrow = await evaluate(client, `(() => {
+    const shell = document.querySelector('.board-shell')
+    const detail = document.querySelector('.packet-flow-detail')
+    if (!(shell instanceof HTMLElement) || !(detail instanceof HTMLElement)) return null
+    const shellRect = shell.getBoundingClientRect()
+    const detailRect = detail.getBoundingClientRect()
+    return {
+      columns: getComputedStyle(shell).gridTemplateColumns,
+      shellLeft: shellRect.left,
+      shellRight: shellRect.right,
+      detailLeft: detailRect.left,
+      detailRight: detailRect.right
+    }
+  })()`, 'verify narrow flow board detail')
+  if (narrow === null || narrow.columns.trim().split(/\s+/u).length !== 1 || narrow.detailLeft < narrow.shellLeft - 1 || narrow.detailRight > narrow.shellRight + 1) {
+    throw new Error(`Lean scheduling detail does not stack at 720px: ${JSON.stringify(narrow)}`)
+  }
+  await client.send('Emulation.clearDeviceMetricsOverride')
+}
+
 async function exerciseInteractiveDetails(client, navigation) {
   if (navigation === '新对话') {
     await waitFor(
@@ -505,6 +564,35 @@ async function exerciseInteractiveDetails(client, navigation) {
   }
   if (navigation === '执行中心') {
     await waitFor(client, `document.body.innerText.includes('没有真实 Worker 投影') || document.querySelectorAll('.worker-card').length > 0`, 'an honest execution projection')
+    const tabs = await evaluate(client, `[...document.querySelectorAll('.execution-mode-tabs button')].map((button) => button.textContent?.trim())`, 'read execution center modes')
+    if (!['Agent 执行', '流动看板', '价值流', '瓶颈诊断'].every((label) => tabs.includes(label))) {
+      throw new Error(`Execution center modes are incomplete: ${JSON.stringify(tabs)}`)
+    }
+    const selectMode = async (label) => {
+      const clicked = await evaluate(client, `(() => {
+        const button = [...document.querySelectorAll('.execution-mode-tabs button')].find((item) => item.textContent?.trim() === ${JSON.stringify(label)})
+        if (!(button instanceof HTMLButtonElement)) return false
+        button.click()
+        return true
+      })()`, `select execution mode ${label}`)
+      if (!clicked) throw new Error(`Execution mode is not clickable: ${label}`)
+      await settleRenderer(client)
+    }
+    await selectMode('流动看板')
+    const board = await evaluate(client, `(() => ({
+      columns: document.querySelectorAll('.kanban-column').length,
+      disclosure: document.body.innerText.includes('A 尚未生成 scheduling.json'),
+      limits: [...document.querySelectorAll('.kanban-column > header small')].map((node) => node.textContent?.trim())
+    }))()`, 'audit lean flow board')
+    if (board.columns !== 8 || !board.disclosure || board.limits.some((value) => !value?.endsWith('/ —'))) {
+      throw new Error(`Lean flow board invents or omits scheduling data: ${JSON.stringify(board)}`)
+    }
+    await captureScreenshot(client, '13-flow-board.png')
+    await selectMode('价值流')
+    await waitFor(client, `document.body.innerText.includes('价值流数据尚未生成')`, 'honest value stream fallback')
+    await selectMode('瓶颈诊断')
+    await waitFor(client, `document.body.innerText.includes('瓶颈诊断尚未生成')`, 'honest bottleneck fallback')
+    await selectMode('Agent 执行')
   }
   if (navigation === '依赖关系') {
     const clicked = await evaluate(client, `(() => {
@@ -818,6 +906,7 @@ async function main() {
     await verifyScrollableView(client, '研发团队', '研发团队')
     await verifyScrollableView(client, 'Skills', 'Skills')
     await verifySidebarScrolling(client)
+    await verifyLeanSchedulingLayout(client)
     await monitor.assertClean('completed smoke test')
     process.stdout.write(`verified fixture sources: ${FIXTURE_IDS.join(', ')}\n`)
     process.stdout.write(`screenshot smoke passed: ${outputDirectory}\n`)

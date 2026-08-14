@@ -61,6 +61,13 @@ export function HomeView({
   const completedPackets = counts.accepted + counts.abandoned
   const currentStep = packets.length === 0 ? 0 : Math.min(completedPackets + 1, packets.length)
   const currentWorkers = snapshot?.workers.filter((worker) => worker.state === 'running' || worker.state === 'starting' || worker.state === 'waiting') ?? []
+  const runningLimit = snapshot?.scheduling?.wipLimits.running
+  const bottleneckState = snapshot?.flow?.bottleneck?.state
+  const progressSummary = [
+    completedPackets === packets.length ? '任务已完成' : currentWorkers.length > 0 ? `${currentWorkers.length} 个 Agent 正在工作` : '等待下一步',
+    runningLimit === undefined ? null : `WIP ${counts.running}/${runningLimit}`,
+    bottleneckState === undefined ? null : `瓶颈：${PACKET_STATE_LABELS[bottleneckState]}`
+  ].filter((item): item is string => item !== null).join(' · ')
   const budget = snapshot?.budget
   const stateDirectoryMissing = snapshot?.warnings.some((warning) => warning.startsWith('[missing] State directory is unavailable:')) ?? false
   const isProject = snapshot?.source.kind === 'project'
@@ -133,7 +140,7 @@ export function HomeView({
             <summary>
               <span className={`conversation-progress-wheel${currentWorkers.length > 0 ? ' active' : ''}`} aria-hidden="true" />
               <strong>第 {currentStep} / {packets.length} 步</strong>
-              <span>{completedPackets === packets.length ? '任务已完成' : currentWorkers.length > 0 ? `${currentWorkers.length} 个 Agent 正在工作` : '等待下一步'}</span>
+              <span>{progressSummary}</span>
               <span className="conversation-progress-more" aria-hidden="true">•••</span>
             </summary>
             <div className="conversation-progress-list">
