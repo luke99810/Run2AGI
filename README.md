@@ -120,6 +120,114 @@ Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻�
 
 ---
 
+---
+
+## 当前能力实况
+
+> 本节写**代码层面已验证的能力**，以及**已知未达成的部分**。
+> 判据是真机运行产物与测试，不是设计意图。
+
+### 已验证可用
+
+| 能力 | 验证方式 |
+|---|---|
+| **需求拆解为多 packet** | 一句需求 → 8 个模块 → 17 个 packet（QA 前置 + 集成收尾） |
+| **多 Agent 真实并行** | 8 个 packet 同一毫秒拿到 8 把互不冲突的路径锁 |
+| **模型真的写文件** | 工具循环（write_file / read_file / run_tests / run_build），产物见 `docs/experiments/first-real-development/` |
+| **验收谓词真的执行** | 门禁在 worker 工作区内运行谓词，退出码非 0 即拒 |
+| **空测试会被拦下** | 把实现移走再跑一遍，测试必须变红（因果检验，非模式匹配） |
+| **第三方应用接入** | MCP 客户端（零第三方依赖）；Playwright 24 工具零凭据、GitHub 26 工具配 token 后模型自主调用成功 |
+| **成本按真实价格计** | 真机调用返回真实金额；未定价模型**拒绝开会话**，不静默算 0 |
+
+### 已知未达成
+
+| 缺口 | 说明 |
+|---|---|
+| **打包 Agent 产出物** | 能产出代码，但**不能把它打成可分发制品**（wheel / exe / 镜像） |
+| **交付验证** | 缺「在干净环境安装并跑通」的环节 |
+| **并发限流** | 8 路并发调模型时出现过 `Connection error`，单 Key 并发上限是真实约束 |
+
+### ★ 一条必须说清楚的限定
+
+**「链路通」不等于「稳定产出合格软件」。**
+
+链路结构完整（拆解 → 出题 → 并行实现 → 集成），但单 packet 场景下
+五次真机 1 通 4 不通 —— **没有一次崩在管道上**，卡点全在模型引导层。
+用 `qwen-coder-plus` 做多轮工具循环，完成率约 20–40%，
+而多 packet 会**放大**这个问题：8 个 worker 里只要几个写出空测试或
+没写文件，集成阶段就拿不到完整输入。
+
+> 把「结构成立」写成「已能稳定交付」，是这个项目从设计之初就在防的那类失真。
+
+---
+
+## Skills 与工具接入
+
+### 分层
+
+```
+Agent   身份 · 职责边界 · 权限集 · 模型路由        谁来做
+ ├─ Skill  可复用能力包（判断规则 + 流程 + 校验）   怎么做   ← 共享
+ ├─ Tool   原子动作（read / write / exec）        做什么
+ └─ MCP    外部系统连接协议                       连到哪   ← 主 Agent 接一次
+```
+
+**Skill 是共享的**（跨角色、跨项目）；**MCP 与第三方应用由主 Agent 接入一次**，
+其工具自动进入工具面。新增一个第三方应用 = 加一个 JSON，**不改任何代码**。
+
+### 13 个内置 Skill
+
+`architecture` · `backend` · `cost-governance` · `debugging` · `delivery` ·
+`evolution` · `frontend` · `integration` · `planning` · `requirements` ·
+`review` · `security` · `testing`
+
+每个 Skill 由 `SKILL.md`（决策规则）+ `manifest.json`（权限、失败策略、复用声明）构成：
+
+```jsonc
+{
+  "id": "frontend", "scope": "role", "appliesTo": ["coder", "helper"],
+  "inputs": {…}, "outputs": {…}, "preconditions": […],
+  "failure": { "timeoutSeconds": 180, "silentDegrade": false },   // ★ 禁止静默降级
+  "permissions": {
+    "riskLevel": "R1",
+    "tools": ["read_file", "write_file", "run_tests", "create_diff"],
+    "writePaths": ["packages/desktop/**"]                          // ★ 最小权限
+  },
+  "reuse": { "crossRole": true, "crossProject": true }
+}
+```
+
+**复用率是架构健康度指标**：`testing` 被 4 个角色引用、`review` 被 3 个引用。
+若每个角色各有一套专属 Skill，说明抽象失败。
+
+### 第三方应用（使用者自配凭据）
+
+| id | 用途 | 需要的凭据 |
+|---|---|---|
+| `playwright` | 端到端测试、浏览器自动化 | **无需凭据** |
+| `github` | 仓库、Issue、PR、提交历史 | `GITHUB_PERSONAL_ACCESS_TOKEN` |
+| `sentry` | 线上错误追踪 | `SENTRY_ACCESS_TOKEN` |
+| `postgres` | 只读查询与 schema 检查 | `POSTGRES_CONNECTION_STRING` |
+| `notion` | 需求文档、技术方案 | `NOTION_TOKEN` |
+| `feishu` | 文档、消息、日程、审批 | `APP_ID` / `APP_SECRET` |
+
+启用三步：申请凭据 → 设环境变量（或填配置 `env`）→ `enabled` 改 `true`。
+
+**缺凭据时不会启动进程**，而是如实报出缺哪个变量：
+
+```
+✗ GitHub（github）：未配置凭据：GITHUB_PERSONAL_ACCESS_TOKEN
+  （设为环境变量或写入配置的 env 字段）
+```
+
+三条约定：`tools` 字段**刻意留空**（由 server 在 `tools/list` 时提供，预列会在
+版本变化后变成谎报）；`status` 如实写 `disconnected`；工具名带 `id` 前缀
+（GitHub 与 GitLab 都有 `create_issue`，不加前缀会静默覆盖）。
+
+详见 [`packages/roles/mcp/README.md`](packages/roles/mcp/README.md)。
+
+---
+
 ## 技术栈
 
 | 层次 | 技术选型 | 决策依据 |
