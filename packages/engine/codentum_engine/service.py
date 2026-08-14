@@ -64,6 +64,7 @@ from codentum_control_plane.reconcile import ReconcileLoop
 from codentum_control_plane.state_machine import TransitionTable
 from codentum_delivery.protocol import CAPABILITY_NAMES, PROTOCOL_VERSION, JsonValue
 from codentum_harness.context_broker import ContextCandidate
+from codentum_harness.evolution import experience_context_candidates_now
 from codentum_harness.memory_index import (
     PersistentMemoryIndex,
     ResourceSelectionError,
@@ -751,6 +752,10 @@ class EngineService:
                         gateway=build_model_gateway(gateway_config),
                         timeout_seconds=self.config.model_timeout_seconds,
                         max_turns=self.config.max_tool_turns,
+                        # ★ 由 service 传权威路径，而不是让 runner 按 workspace 猜 ——
+                        #   `resolved_state_dir()` 可被显式覆盖，猜错会分叉成两个
+                        #   记忆库，两边各自看起来都正常，只是谁也攒不够晋级次数。
+                        memory_dir=self.config.resolved_state_dir() / "memory",
                     )
                 ),
                 role_specs=self._role_specs,
@@ -799,23 +804,44 @@ class EngineService:
                 packet_id=request.packet_id,
                 role=role_spec.id,
             )
+            index = PersistentMemoryIndex(self.config.resolved_state_dir() / "memory" / "index")
             if sources:
-                index = PersistentMemoryIndex(self.config.resolved_state_dir() / "memory" / "index")
                 index_knowledge_sources_now(
                     index,
                     sources,
                     created_at=submitted_at if isinstance(submitted_at, str) else _now_iso(),
                 )
-                candidates.extend(
-                    memory_context_candidates_now(
-                        index,
-                        query_text=text,
-                        role_spec=role_spec,
-                        packet_id=request.packet_id,
-                        limit=5,
-                        char_budget=max(1, self.config.context_char_budget // 2),
-                    )
+            # ★ 检索必须在 `if sources` **外面**。
+            #
+            #   原先它嵌在里面，后果是：没有用户提供知识资源的那些执行，
+            #   记忆一次都不会被读。而进化层沉淀下来的经验恰恰是**系统自己攒的**，
+            #   它的存在不该以「用户这次顺便传了几篇文档」为条件。
+            #
+            #   这个缺陷是静默的：写入侧一直在攒 L0/L1，读取侧一次没读过，
+            #   从外面看就是「记忆系统在跑，只是好像没起作用」。
+            candidates.extend(
+                memory_context_candidates_now(
+                    index,
+                    query_text=text,
+                    role_spec=role_spec,
+                    packet_id=request.packet_id,
+                    limit=5,
+                    char_budget=max(1, self.config.context_char_budget // 2),
                 )
+            )
+            # ★ 经验要单独召回一次，不能和上面那次共用。
+            #   上面用**需求文本**做词法检索，对领域知识是对的；
+            #   而经验的相关性来自「你是这个角色」，与本次需求内容无关 ——
+            #   共用一次的话，词法得分为 0 会把经验全部丢掉，
+            #   于是写入侧一直在攒、读取侧一条都出不来。
+            candidates.extend(
+                experience_context_candidates_now(
+                    index,
+                    role_spec=role_spec,
+                    packet_id=request.packet_id,
+                    char_budget=max(1, self.config.context_char_budget // 4),
+                )
+            )
         except ResourceSelectionError as exc:
             logger.warning("MemoryIndex 资源选择被拒绝：%s", exc)
         return tuple(candidates)

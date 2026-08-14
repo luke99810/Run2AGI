@@ -495,3 +495,65 @@ def test_truncated_tool_arguments_are_recoverable_not_fatal(prepared: Path) -> N
     assert outcome.status == "completed", getattr(outcome, "detail", "")
     joined = "\n".join(m.content for m in gateway.session.seen[1].messages)
     assert "参数被截断" in joined
+
+
+# ══════════════════════════════════════════════════════════════
+#  进化层接线
+#
+#  ★ 这两条守的不是「进化层算得对不对」（那在 harness 那两组测），
+#    而是**它到底有没有被接上**。
+#
+#    这个仓库已经栽过两次同样的跟头：langgraph 装在依赖里零 import；
+#    mcp_config_dir 定义了但全仓库无人传。两次都是「结构完整、从未被调用」，
+#    而且两次都**没有任何测试会红** —— 因为大家测的都是模块本身。
+#    模块本身当然是对的，它只是没接上。
+# ══════════════════════════════════════════════════════════════
+
+
+def _failing_tool_script() -> list[ModelResponse]:
+    """让模型往工作区外面写 —— ToolExecutor 会拒绝，于是产生一条真实失败。"""
+
+    return [
+        ModelResponse(
+            text="",
+            tool_calls=(ToolCall(id="1", name="write_file", input={"path": "../outside.txt", "content": "x"}),),
+            stop_reason="tool_use",
+            usage=_usage(),
+        ),
+        ModelResponse(text="放弃", tool_calls=(), stop_reason="end", usage=_usage()),
+    ]
+
+
+def _result_json(workspace: Path) -> dict[str, Any]:
+    path = workspace / ".codentum" / "evidence" / "wp-toolloop01-attempt-1" / "model" / "result.json"
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def test_evolution_off_is_visible_not_silent(prepared: Path) -> None:
+    """★ 没配 memory_dir = 不沉淀经验，而这件事必须**看得见**。
+
+    静默关闭的后果：「忘了接线」和「还没攒够晋级次数」在外面完全不可区分，
+    而后者是正常状态 —— 于是前者可以躺很久没人发现。
+    """
+
+    _run(prepared, _failing_tool_script())
+    assert _result_json(prepared)["evolution"] == {"enabled": False, "reason": "memory_dir 未配置"}
+
+
+def test_failed_tool_call_becomes_a_persisted_observation(prepared: Path, tmp_path: Path) -> None:
+    """★ 端到端：一次真实的工具失败 → 磁盘上一条 L0。
+
+    断言落在**磁盘**而不是返回值上 —— 进化层的意义就是跨执行留下东西，
+    只在内存里对过一次的话，下一个 packet 什么也读不到。
+    """
+
+    memory = tmp_path / "mem"
+    _run(prepared, _failing_tool_script(), memory_dir=memory)
+
+    evolution = _result_json(prepared)["evolution"]
+    assert evolution["enabled"] is True
+    assert evolution["observations"] >= 1, f"工具失败没被沉淀：{evolution}"
+    assert evolution["promotions"] == 0, "只撞过一个 packet，不该晋级"
+
+    written = list((memory / "index").rglob("*.json"))
+    assert written, "result.json 说沉淀了，磁盘上却没有 —— 这正是要防的那种「报告成功」"
