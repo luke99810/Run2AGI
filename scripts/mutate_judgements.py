@@ -46,6 +46,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -239,9 +240,12 @@ def _report(results: list[Outcome], *, phase: str, meaning: str, exclude: bool =
 
 def main() -> int:
     mode = "both"
+    out_path = REPO / ".codentum" / "judgements" / "mutation.json"
     for arg in sys.argv[1:]:
         if arg.startswith("--mode="):
             mode = arg.removeprefix("--mode=")
+        elif arg.startswith("--out="):
+            out_path = Path(arg.removeprefix("--out="))
     if mode not in {"strong", "weak", "both"}:
         print("用法：mutate_judgements.py [--mode=strong|weak|both]")
         return 2
@@ -297,6 +301,29 @@ def main() -> int:
         print("\n★ 弱变异的存活者是「**需要人看一眼**」，不是确定的缺陷 ——")
         print("  有些变异在语义上与原代码等价（改的是走不到的分支），必然存活。")
         print("  这是变异测试的固有噪声，把它算成缺陷和算成通过是同一种不诚实。")
+
+    # ── 落盘：这个数存在的意义就是**被跨时间比较** ──────────────
+    #
+    # ★ 只打印在终端里的话，它每次跑完就没了 —— 那样它只是个一次性的安慰。
+    #   写成文件之后，资产负债表才能把「变异检验」这一列填上，
+    #   而那一列正是区分「该删的判据」与「该留的判据」的依据。
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(
+            {
+                "mode": mode,
+                "results": [
+                    {"target": r.target, "killed": r.killed, "tier": r.tier} for r in all_results
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"\n变异结果已写入 {out_path}")
 
     # ── 控制点 2 ───────────────────────────────────────────────
     killed_n = sum(1 for r in all_results if r.killed)

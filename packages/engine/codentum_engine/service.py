@@ -476,7 +476,7 @@ class EngineService:
 
         # ★ 准入校验在写盘之前跑。写完再校验等于「先污染再检查」——
         #   一个违规 packet 一旦落进 packets/，下次 load_state 就会把它读回来。
-        checker = AdmissionChecker(role_specs=self._role_specs)
+        checker = AdmissionChecker(role_specs=self._role_specs, recorder=self._record_judgement)
         for candidate in packets:
             verdict = checker.check(candidate)
             if not verdict:
@@ -866,6 +866,38 @@ class EngineService:
         return tuple(candidates)
 
     # ══════════════════════════════════════════════════════════
+
+    def _record_judgement(
+        self, packet_id: str, rule: str, mode: str, fired: bool, code: str | None
+    ) -> None:
+        """把一次判据评估追加到命中账本。
+
+        ★ 为什么连**没命中**的也记：资产负债表要靠它区分两件完全不同的事 ——
+          「这条判据跑过 N 次、一次没命中」与「根本没人在记录」。
+          前者说明它可能是多余的，后者说明观测本身坏了。
+          只记命中的话，两者在账本上都是「没有这条判据的行」。
+
+        ★ 追加而非覆盖：判据的命中是**跨天累积**的证据，
+          晋级条件（在真实案例上命中过 ≥1 次）要靠这段历史来判。
+        """
+
+        try:
+            ledger_dir = self.config.resolved_state_dir() / "judgements"
+            ledger_dir.mkdir(parents=True, exist_ok=True)
+            row = {
+                "at": _now_iso(),
+                "packet": packet_id,
+                "rule": rule,
+                "mode": mode,
+                "fired": fired,
+                "code": code,
+            }
+            with (ledger_dir / "hits.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        except OSError as exc:
+            # ★ 记账失败不能拖垮准入 —— 但也不能静默：
+            #   账本悄悄停止增长，会让资产负债表上的「命中 0 次」变成假数。
+            logger.warning("判据命中记录写入失败：%s", exc)
 
     def _ensure_mcp(self) -> McpToolbox | None:
         """连一次 MCP，之后所有 packet 共享。

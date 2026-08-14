@@ -802,3 +802,29 @@ def test_runner_config_cannot_connect_mcp_by_itself() -> None:
     fields = {f.name for f in dataclasses.fields(AgentRunnerConfig)}
     assert "mcp_toolbox" in fields
     assert "mcp_config_dir" not in fields, "收目录就等于把「自己连」这条路留着"
+
+
+def test_judgement_hits_are_recorded_to_disk(project: Path, fake_key: None) -> None:
+    """★ 影子期不落盘 = 晋级永远无据可依。
+
+    晋级到 enforcing 的第一个条件是「在真实案例上命中过 ≥1 次」。
+    没有这份账本，那个条件**永远无法被满足** ——
+    影子判据会永远停在影子里，那和不加这条判据是一样的。
+
+    ★ 同时守「没命中的也要记」：资产负债表要靠它区分
+      「跑过 N 次一次没命中」（可能多余）与「根本没人记录」（观测坏了）。
+      只记命中的话，两者在账本上长得一模一样。
+    """
+
+    service = _service(project)
+    service.command(_command("submit_requirement", service.run_id, project, requirement="实现登录页"))
+
+    ledger = project / ".codentum" / "judgements" / "hits.jsonl"
+    rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines() if line]
+    assert rows, "准入跑过了，却没有留下任何判据评估记录"
+
+    by_rule = {row["rule"] for row in rows}
+    assert "check_budget_limit" in by_rule, "没命中的规则也该留下运行记录"
+
+    shadow = [row for row in rows if row["mode"] == "shadow"]
+    assert shadow, "影子判据一条记录都没有 —— 影子期攒不到任何证据"

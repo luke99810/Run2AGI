@@ -18,11 +18,18 @@ owner: A ｜ 评审: B ｜ 详见 ../../README.md
 from __future__ import annotations
 
 from .checker import AdmissionChecker, AdmissionVerdict
-from .rules import DEFAULT_RULES, Violation
+from .rules import (
+    DEFAULT_RULES,
+    JUDGEMENT_MODES,
+    Violation,
+    check_predicate_covers_owned_paths,
+)
 
 __all__ = [
     "AdmissionChecker",
     "AdmissionVerdict",
     "DEFAULT_RULES",
+    "JUDGEMENT_MODES",
+    "check_predicate_covers_owned_paths",
     "Violation",
 ]
