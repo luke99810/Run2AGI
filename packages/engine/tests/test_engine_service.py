@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from collections.abc import Iterator
@@ -667,3 +668,130 @@ def test_sedimented_memory_is_retrieved_without_any_knowledge_sources(
     ]
     assert memory_candidates, "没有知识资源时，沉淀下来的经验一条都没被读到"
     assert any("ImportError" in c.text for c in memory_candidates)
+
+
+# ══════════════════════════════════════════════════════════════
+#  MCP 接线
+#
+#  ★ 在这组测试之前，`mcp_config_dir` **全仓库无人传** —— 定义了、
+#    文档写了、真机演示过，但在生产路径上根本没有办法把它打开。
+#    这与「langgraph 装了零 import」是同一个形状，而且同样
+#    **没有任何测试会红**：mcp_client 那 15 条测试全是绿的，
+#    它们测的是模块本身，模块本身当然是对的。
+#
+#  ★ 所以这组守的不是「MCP 能不能用」，是「它到底有没有被接上」。
+# ══════════════════════════════════════════════════════════════
+
+
+def _mcp_config_dir(tmp_path: Path) -> Path:
+    """铺一个**真的能连上**的 MCP 配置目录（子进程跑最小 JSON-RPC server）。"""
+
+    import sys
+
+    from test_mcp_client import _FAKE_SERVER  # 复用那边的真实假 server
+
+    script = tmp_path / "fake_mcp_server.py"
+    script.write_text(_FAKE_SERVER, encoding="utf-8")
+
+    config_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    (config_dir / "github.json").write_text(
+        json.dumps({
+            "schemaVersion": 1, "id": "github", "name": "GitHub",
+            "transport": "stdio", "command": sys.executable, "args": [str(script)],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # ★ 再放一个**关闭**的配置：仓库里真实的 mcp/ 目录就是出厂即关闭的，
+    #   夹具必须复现这一点，否则「全部被跳过」这条路径永远测不到。
+    (config_dir / "notion.json").write_text(
+        json.dumps({
+            "schemaVersion": 1, "id": "notion", "name": "Notion",
+            "transport": "stdio", "command": "npx", "args": ["-y", "notion-mcp"],
+            "enabled": False, "credentialHowTo": "去 Notion 建 integration",
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return config_dir
+
+
+def test_mcp_is_off_when_not_configured(project: Path) -> None:
+    """★ 不配 = 不连。而且不该留下任何痕迹让人误以为连过。"""
+
+    service = _service(project)
+    assert service._ensure_mcp() is None
+    # ★ 断言的是**报告文件**不存在，不是目录 ——  属于
+    #   状态目录的标准布局，ensure_state_dir() 本来就会建它。
+    #   拿目录存在与否当判据，测的是别人的行为，不是这里的。
+    assert not (project / ".codentum" / "mcp" / "connections.json").exists()
+
+
+def test_mcp_connects_once_and_is_shared(project: Path, tmp_path: Path) -> None:
+    """★ 「主 Agent 接一次」必须是**结构性**的，不是靠自觉。
+
+    原先 `_AgentRun.__init__` 每个 packet 连一遍 —— 8 路并行就是
+    48 个 npx 进程。现在 runner 只收已连好的工具箱，
+    **它已经不知道该怎么连了**，这个错误不可能再犯。
+
+    这条测同一个 service 反复要工具箱时拿到的是**同一个实例**。
+    """
+
+    service = _service(project, mcp_config_dir=_mcp_config_dir(tmp_path))
+    try:
+        first = service._ensure_mcp()
+        assert first is not None
+        assert first is service._ensure_mcp() is service._ensure_mcp(), "每次都重连了"
+        assert any("github__" in s.name for s in first.schemas()), "工具没进工具面"
+    finally:
+        if service._mcp is not None:
+            service._mcp.close()
+
+
+def test_mcp_connection_report_lands_on_disk(project: Path, tmp_path: Path) -> None:
+    """★ 没有这份报告，三种情况从外面看是同一个样子：
+
+    「没配置」「配了但一个都没连上」「连上了但模型没调用」——
+    都表现为「MCP 好像没起作用」。而它们的处理办法完全不同。
+    """
+
+    service = _service(project, mcp_config_dir=_mcp_config_dir(tmp_path))
+    try:
+        service._ensure_mcp()
+        report = json.loads(
+            (project / ".codentum" / "mcp" / "connections.json").read_text(encoding="utf-8")
+        )
+        assert report["toolCount"] >= 1
+        (server,) = report["servers"]
+        assert server["id"] == "github"
+        assert server["connected"] is True
+
+        # ★ 被跳过的条目必须连**原因**一起列出来。
+        #   否则「目录写错了」「配置全是关的」「连上了但模型没调用」
+        #   三种情况在报告里长得一模一样 —— 而它们的解法完全不同。
+        #   仓库里那 10 个配置全部处于「跳过」状态，一个刚接手的人
+        #   把目录配对了却什么都没发生，会先去怀疑代码。
+        (skipped,) = report["skipped"]
+        assert skipped["file"] == "notion.json"
+        assert "enabled=false" in skipped["reason"]
+        assert "去 Notion 建 integration" in skipped["reason"], "怎么打开的指引必须带出来"
+    finally:
+        if service._mcp is not None:
+            service._mcp.close()
+
+
+def test_runner_config_cannot_connect_mcp_by_itself() -> None:
+    """★ 「每个 packet 连一次」在结构上必须不可表达。
+
+    收目录 → runner 有能力自己连 → 迟早有人在 __init__ 里连。
+    收工具箱 → runner 根本没有连接的手段。
+
+    这是本项目那条约束实现优先级的直接应用：
+    **不可见 > 无权限 > 被拦截 > 提示词劝阻**。
+    一条「请只连一次」的注释属于最后一档。
+    """
+
+    from codentum_engine.agent_runner import AgentRunnerConfig
+
+    fields = {f.name for f in dataclasses.fields(AgentRunnerConfig)}
+    assert "mcp_toolbox" in fields
+    assert "mcp_config_dir" not in fields, "收目录就等于把「自己连」这条路留着"

@@ -55,7 +55,7 @@ from codentum_harness.prompt_bundle import load_worker_prompt_bundle
 
 from .acceptance import split_command, vacuity_check
 from .agent_graph import AgentGraphState, build_agent_graph
-from .mcp_toolbox import build_mcp_toolbox
+from .mcp_toolbox import McpToolbox
 from .tools import ToolExecutor, tool_schemas_for
 
 __all__ = ["AgentRunnerConfig", "build_agent_runner"]
@@ -83,10 +83,22 @@ class AgentRunnerConfig:
     acceptance_predicate: str = "python -m pytest workspace -q"
     """会被门禁真的执行的那条谓词。写进 prompt 是为了让「完成」有唯一定义。"""
 
-    mcp_config_dir: Path | None = None
-    """MCP 配置目录。**主 Agent 接一次，所有已连服务的工具自动进入工具面。**
+    mcp_toolbox: McpToolbox | None = None
+    """**已经连好**的 MCP 工具箱，由上层（EngineService）注入。
 
-    ★ 为 None 时不连任何 MCP —— 内置工具照常可用，不影响主链路。
+    ★ 这里刻意收的是「工具箱」而不是「配置目录」。
+      原先收的是目录，而 `_AgentRun` 是**每个 packet 新建一次**的 ——
+      于是每个 packet 都会把所有 MCP server 重连一遍。8 路并行 = 48 个
+      npx 进程，且与设计里那句「主 Agent 接一次」直接冲突。
+
+      改成收工具箱之后，「每个 packet 连一次」在**结构上不可表达** ——
+      runner 已经不知道该怎么连了。比写一条「请只连一次」的注释可靠得多，
+      这正是本项目那条约束实现优先级：**不可见 > 无权限 > 被拦截 > 提示词劝阻**。
+
+    ★ 为 None 时不接任何 MCP —— 内置工具照常可用，不影响主链路。
+
+    ★ 共享是安全的：`McpClient._request` 用 threading.Lock 把
+      「写请求 + 读到匹配 id 的响应」整段护住了，并行 packet 不会串包。
     """
 
     memory_dir: Path | None = None
@@ -123,10 +135,9 @@ class _AgentRun:
             f"{req.packet_id}-attempt-{req.attempt}"
         )
         self._model_dir = self._evidence_root / "model"
-        # ★ MCP 在这里接入：连不上的 server 不阻断内置工具。
-        self._mcp = (
-            build_mcp_toolbox(config.mcp_config_dir) if config.mcp_config_dir is not None else None
-        )
+        # ★ MCP 工具箱由上层注入（已连好）—— 这里不再自己连。
+        #   见 AgentRunnerConfig.mcp_toolbox 的说明。
+        self._mcp = config.mcp_toolbox
         self._tools = ToolExecutor(self._workspace, mcp=self._mcp)
         self._transcript: list[dict[str, Any]] = []
         self._spent = 0.0

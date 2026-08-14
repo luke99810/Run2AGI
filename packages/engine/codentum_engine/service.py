@@ -92,6 +92,8 @@ from codentum_roles.loader import (
 )
 
 from .acceptance import build_executing_acceptance_gate
+from .mcp_client import describe_skipped
+from .mcp_toolbox import McpToolbox, build_mcp_toolbox
 from .planner import PlannedTask, build_packets_from_plan, parse_plan, plan_prompt
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
@@ -166,6 +168,20 @@ class EngineConfig:
 
     context_char_budget: int = 8000
 
+    mcp_config_dir: Path | None = None
+    """MCP 配置目录（如 packages/roles/mcp/）。为 None 时不接任何 MCP。
+
+    ★ 默认 None 是**有意的**，不是忘了接：目录里那几个可启动的 server
+      靠 npx 拉起来，启动要几秒、要网络、缺凭据的还会失败。让它默认开，
+      等于给每次引擎启动加上一段不可控的等待与失败面。
+
+    ★ 但「默认关」不等于「没接」—— 区别在这里：在此之前
+      `mcp_config_dir` **全仓库无人传**，也就是根本没有办法把它打开。
+      那是死代码；现在它是一个开关。连接结果写到
+      `.codentum/mcp/connections.json`，开没开、连上几个、
+      没连上的缺什么，都看得见。
+    """
+
     enable_planner: bool = True
     """是否把需求拆成多个 packet。
 
@@ -225,6 +241,7 @@ class EngineService:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _workers: list[threading.Thread] = field(default_factory=list, init=False)
     _key_env: str | None = field(init=False)
+    _mcp: McpToolbox | None = field(default=None, init=False)
     _stopped: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
@@ -756,6 +773,8 @@ class EngineService:
                         #   `resolved_state_dir()` 可被显式覆盖，猜错会分叉成两个
                         #   记忆库，两边各自看起来都正常，只是谁也攒不够晋级次数。
                         memory_dir=self.config.resolved_state_dir() / "memory",
+                        # ★ 主 Agent 连一次，所有 packet 共享同一个工具箱。
+                        mcp_toolbox=self._ensure_mcp(),
                     )
                 ),
                 role_specs=self._role_specs,
@@ -847,6 +866,62 @@ class EngineService:
         return tuple(candidates)
 
     # ══════════════════════════════════════════════════════════
+
+    def _ensure_mcp(self) -> McpToolbox | None:
+        """连一次 MCP，之后所有 packet 共享。
+
+        ★ 「连一次」是这里的全部意义。原先 `_AgentRun.__init__` 每个 packet
+          连一遍 —— 8 路并行就是 48 个 npx 进程，且与设计里那句
+          「主 Agent 接一次」直接冲突。现在 runner 只收已连好的工具箱，
+          **它已经不知道该怎么连了**，这个错误在结构上不可能再犯。
+
+        ★ 懒连接而非启动即连：没有 packet 要跑时不该有 npx 进程在后台待着，
+          handshake 也不该被几秒的 server 启动拖住。
+
+        ★ 连接结果落盘。没有它的话，「没配置」「配了但一个都没连上」
+          「连上了但模型没调用」这三种情况从外面看是同一个样子 ——
+          都是「MCP 好像没起作用」，而它们的处理办法完全不同。
+        """
+
+        if self.config.mcp_config_dir is None:
+            return None
+        if self._mcp is not None:
+            return self._mcp
+
+        self._mcp = build_mcp_toolbox(self.config.mcp_config_dir)
+        report_dir = self.config.resolved_state_dir() / "mcp"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "connections.json").write_text(
+            json.dumps(
+                {
+                    "configDir": str(self.config.mcp_config_dir),
+                    "connectedAt": _now_iso(),
+                    "toolCount": len(self._mcp.schemas()),
+                    # ★ 没被加载的条目也要列出来并说明原因。
+                    #   否则「目录写错了」「配置全是关的」「连上了但模型没调用」
+                    #   三种情况在报告里长得一模一样 —— 而它们的解法完全不同。
+                    "skipped": list(describe_skipped(self.config.mcp_config_dir)),
+                    "servers": [
+                        {
+                            "id": r.server_id,
+                            "name": r.name,
+                            "connected": r.connected,
+                            "toolCount": r.tool_count,
+                            # ★ 失败原因原样写出来 —— 缺哪个环境变量必须说出名字，
+                            #   否则使用者只看到「没连上」，不知道该去配什么。
+                            "error": r.error,
+                        }
+                        for r in self._mcp.reports
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        logger.info("MCP 已连接：%s", self._mcp.summary())
+        return self._mcp
 
     def _receipt(
         self,
