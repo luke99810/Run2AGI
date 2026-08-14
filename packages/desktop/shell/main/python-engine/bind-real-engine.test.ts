@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { SidecarManager } from './SidecarManager'
@@ -74,6 +74,11 @@ describe('SidecarManager 与真引擎的绑定', () => {
         const bound = await manager.bindProject(selected)
         expect(bound.connected, `bindProject() 之后断开了：${bound.unavailableReason ?? ''}`).toBe(true)
         expect(bound.projectRoot?.toLowerCase()).toBe(selected.toLowerCase())
+
+        const state = join(selected, '.codentum')
+        const mcpFiles = (await readdir(join(state, 'mcp'))).filter((name) => name.endsWith('.json'))
+        const sourceMcpFiles = (await readdir(join(REPO, 'packages', 'roles', 'mcp'))).filter((name) => name.endsWith('.json'))
+        expect(mcpFiles.sort()).toEqual(sourceMcpFiles.sort())
       } finally {
         await manager.close().catch(() => undefined)
         for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]
