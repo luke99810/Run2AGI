@@ -618,3 +618,52 @@ def test_projection_is_refreshed_not_merely_created(project: Path, fake_key: Non
 
     refreshed = json.loads(stale.read_text("utf-8"))
     assert refreshed["usesModel"] is True, "旧副本没有被刷新，桌面端会显示过时的角色定义"
+
+
+def test_sedimented_memory_is_retrieved_without_any_knowledge_sources(
+    project: Path,
+    fake_key: None,
+) -> None:
+    """★ 进化层攒的经验，不该以「用户这次顺便传了几篇文档」为条件才被读到。
+
+    原先检索是嵌在 `if sources:` 里的 —— 没有 resourceSelections 的执行，
+    记忆一次都不会被读。这个缺陷是**静默**的：
+    写入侧一直在攒 L0/L1，读取侧一次没读过，
+    从外面看只是「记忆系统在跑，好像没起作用」。
+
+    这条测试就是那个静默缺陷的声音。
+    """
+
+    from codentum_contracts import MemoryEntry
+    from codentum_contracts.interfaces import MemoryScope
+    from codentum_harness.memory_index import PersistentMemoryIndex
+
+    service = _service(project)
+    # ★ 注意：**没有** resourceSelections
+    service.command(_command("submit_requirement", service.run_id, project, requirement="实现订阅费用页面"))
+    packet_id = next(iter(service.packets()))
+    role_spec = service._role_specs[0]
+
+    # 模拟上一个 packet 沉淀下来的 L1 经验（role 作用域）
+    index = PersistentMemoryIndex(project / ".codentum" / "memory" / "index")
+    index.write_now(
+        MemoryEntry(
+            ref="",
+            level="L1",
+            scope=MemoryScope(kind="role", role=role_spec.id),
+            text="工具 run_tests 失败：ImportError: No module named 'src'",
+            created_at="2026-08-14T10:00:00Z",
+        )
+    )
+
+    class _Request:
+        pass
+
+    request = _Request()
+    request.packet_id = packet_id  # type: ignore[attr-defined]
+
+    memory_candidates = [
+        c for c in service._context_loader(request, role_spec) if c.ref.startswith("memory:")
+    ]
+    assert memory_candidates, "没有知识资源时，沉淀下来的经验一条都没被读到"
+    assert any("ImportError" in c.text for c in memory_candidates)

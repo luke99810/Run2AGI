@@ -34,6 +34,7 @@ import json
 import logging
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,10 @@ __all__ = ["AgentRunnerConfig", "build_agent_runner"]
 
 logger = logging.getLogger(__name__)
 
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
 DEFAULT_MAX_TURNS = 12
 """工具循环的轮数上限。
 
@@ -82,6 +87,19 @@ class AgentRunnerConfig:
     """MCP 配置目录。**主 Agent 接一次，所有已连服务的工具自动进入工具面。**
 
     ★ 为 None 时不连任何 MCP —— 内置工具照常可用，不影响主链路。
+    """
+
+    memory_dir: Path | None = None
+    """进化层的记忆目录。为 None 时**不沉淀经验**。
+
+    ★ 这里刻意不按 workspace 猜一个默认路径。`resolved_state_dir()` 是
+      可以被显式覆盖的 —— 猜错就会分叉成两个记忆库，而两边各自看起来
+      都正常工作，只是谁也攒不够晋级所需的次数。**静默地什么都学不到**
+      比直接报错难查得多。
+
+    ★ 没传 = 关闭，这件事会写进 result.json 的 `evolution` 字段，
+      从外面看得见。否则「忘了接线」和「还没攒够」不可区分 ——
+      那正是这个项目一路在拆的那类问题。
     """
 
 
@@ -571,7 +589,56 @@ class _AgentRun:
             json.dumps(self._transcript, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
+    def _harvest(self) -> dict[str, Any]:
+        """把本次执行撞到的失败沉淀成 L0，够格的晋级为 L1。
+
+        ★ 挂在 `_write_result` 上，因为它是**唯一的收尾漏斗** ——
+          完成、失败、超时、撞轮次上限，全都经过这里。
+          挂在「成功」分支上会漏掉最该学的那些次。
+
+        ★ 进化层失败绝不能拖垮执行：一个学习机制把它正在学的东西搞崩了，
+          是笔糟糕的交易。但**也不能静默吞掉** —— 那就成了
+          skills manifest 里明令禁止的 silentDegrade。
+          所以：吞异常、记日志、并把状态写进 result.json。
+        """
+
+        if self._config.memory_dir is None:
+            return {"enabled": False, "reason": "memory_dir 未配置"}
+
+        try:
+            from codentum_harness.evolution import extract_observations
+            from codentum_harness.evolution.promoter import (
+                FingerprintLedger,
+                record_and_promote,
+            )
+            from codentum_harness.memory_index import PersistentMemoryIndex
+
+            observations = extract_observations(
+                self._transcript, packet_id=str(self._req.packet_id)
+            )
+            if not observations:
+                return {"enabled": True, "observations": 0, "promotions": 0}
+
+            promotions = record_and_promote(
+                PersistentMemoryIndex(self._config.memory_dir / "index"),
+                FingerprintLedger(self._config.memory_dir / "fingerprints.json"),
+                observations,
+                packet_id=str(self._req.packet_id),
+                role=self._req.role,
+                created_at=_now_iso(),
+            )
+            return {
+                "enabled": True,
+                "observations": len(observations),
+                "promotions": len(promotions),
+                "promoted_refs": [p.ref for p in promotions],
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("进化层沉淀失败（不影响本次执行）：%s", exc)
+            return {"enabled": True, "error": str(exc)}
+
     def _write_result(self, payload: dict[str, Any]) -> EvidenceRef:
+        payload = {**payload, "evolution": self._harvest()}
         self._model_dir.mkdir(parents=True, exist_ok=True)
         (self._model_dir / "result.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
