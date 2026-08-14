@@ -4,6 +4,7 @@ import { Icon, PageHeader } from '../panels/Common'
 import {
   KNOWLEDGE_OPTIONS,
   searchTaskSessions,
+  taskConversationEntries,
   toggleSelection,
   type ResourceOption,
   type TaskContextSelection,
@@ -11,34 +12,45 @@ import {
   type WorkbenchPreferences
 } from '../renderer/src/task-library'
 
-export function ConversationsView({ tasks, activeTaskId, onSelectTask, onNewTask }: {
+export function ConversationsView({ tasks, snapshot, activeTaskId, onSelectTask, onNewTask, onExportTask }: {
   readonly tasks: readonly TaskSession[]
+  readonly snapshot: StateSnapshot | null
   readonly activeTaskId: string | null
   readonly onSelectTask: (taskId: string) => void
   readonly onNewTask: () => void
+  readonly onExportTask: (task: TaskSession) => Promise<boolean>
 }): ReactNode {
   const [query, setQuery] = useState('')
-  const visible = useMemo(() => searchTaskSessions(tasks, query), [query, tasks])
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const visible = useMemo(() => searchTaskSessions(tasks, query, snapshot), [query, snapshot, tasks])
 
   return (
     <main className="page conversation-page">
       <PageHeader
         title="对话检索与导出"
-        description="每个对话使用独立 taskId、草稿和附件区；切换对话不会覆盖其他任务。"
+        description="按任务检索用户消息、C 命令与回执、真实 Worker/Agent 事件和证据引用；没有权威运行记录时如实显示为空。"
         actions={<button type="button" className="primary-button" onClick={onNewTask}><Icon name="plus" size={18} />新对话</button>}
       />
-      <label className="page-search"><Icon name="search" size={18} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索关键词、需求内容或文件名" /></label>
+      <label className="page-search"><Icon name="search" size={18} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索消息、命令、回执、文件、Packet 或证据引用" /></label>
+      {feedback === null ? null : <div className="conversation-feedback" role="status">{feedback}</div>}
       <div className="conversation-list" aria-live="polite">
         {visible.length === 0 ? (
           <div className="plain-empty"><strong>没有匹配的对话</strong><span>换个关键词，或新建一个独立任务。</span></div>
-        ) : visible.map((task) => (
-          <button type="button" className={task.id === activeTaskId ? 'active' : ''} key={task.id} onClick={() => onSelectTask(task.id)}>
-            <Icon name="chat" size={18} />
-            <span><strong>{task.title}</strong><small>{task.preview || '尚未输入需求'}</small></span>
-            <em>{task.status === 'submitted' ? '已提交' : '草稿'}</em>
-            <time dateTime={task.updatedAt}>{new Date(task.updatedAt).toLocaleString('zh-CN')}</time>
-          </button>
-        ))}
+        ) : visible.map((task) => {
+          const entries = taskConversationEntries(task, snapshot)
+          const latest = entries.at(-1)
+          return <article className={task.id === activeTaskId ? 'active' : ''} key={task.id}>
+            <button type="button" className="conversation-select" onClick={() => onSelectTask(task.id)}>
+              <Icon name="chat" size={18} />
+              <span><strong>{task.title}</strong><small>{latest?.text ?? (task.preview || '尚未输入需求')}</small></span>
+              <em>{entries.length} 条记录 · {task.status === 'submitted' ? '已提交' : '草稿'}</em>
+              <time dateTime={task.updatedAt}>{new Date(task.updatedAt).toLocaleString('zh-CN')}</time>
+            </button>
+            <button type="button" className="icon-button conversation-export" aria-label={`导出 ${task.title}`} title="导出完整任务记录" onClick={() => {
+              void onExportTask(task).then((exported) => setFeedback(exported ? `已导出：${task.title}` : null)).catch((error: unknown) => setFeedback(error instanceof Error ? error.message : String(error)))
+            }}><Icon name="file" size={17} /></button>
+          </article>
+        })}
       </div>
     </main>
   )
@@ -206,16 +218,44 @@ export function ResourceLibraryView({
           {builtInOptions.map((option) => {
             const checked = selected.includes(option.id)
             return (
-              <label key={option.id} className={checked ? 'selected' : ''}>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => onContextChange({ ...task.context, [copy.key]: toggleSelection(selected, option.id) })}
-                />
-                <span className="resource-icon"><Icon name={copy.icon} size={19} /></span>
-                <span><strong>{option.label}</strong><small>{option.detail}</small></span>
-                <em>{option.availability === 'available' ? '可用' : '待执行层接入'}</em>
-              </label>
+              <article key={option.id} className={`resource-option-entry${checked ? ' selected' : ''}`}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onContextChange({ ...task.context, [copy.key]: toggleSelection(selected, option.id) })}
+                  />
+                  <span className="resource-icon"><Icon name={copy.icon} size={19} /></span>
+                  <span>
+                    <strong>{option.label}</strong>
+                    <small>{option.detail}</small>
+                    {option.projection === undefined ? null : (
+                      <small>v{option.projection.version} · {option.projection.scope} · {option.projection.permissions.riskLevel} · {option.projection.appliesTo.join('、')}</small>
+                    )}
+                  </span>
+                  <em>{option.availability === 'available' ? 'B 已投影' : '待执行层接入'}</em>
+                </label>
+                {option.projection === undefined ? null : (
+                  <details className="skill-contract-details">
+                    <summary>查看 Skill 契约与 SKILL.md</summary>
+                    <div className="skill-contract-grid">
+                      <div><strong>输入</strong><span>{formatRecord(option.projection.inputs)}</span></div>
+                      <div><strong>输出</strong><span>{formatRecord(option.projection.outputs)}</span></div>
+                      <div><strong>前置条件</strong><span>{option.projection.preconditions.join('、') || '无'}</span></div>
+                      <div><strong>工具</strong><span>{option.projection.permissions.tools.join('、') || '无'}</span></div>
+                      <div><strong>可写路径</strong><span>{option.projection.permissions.writePaths.join('、') || '无'}</span></div>
+                      <div><strong>只读路径</strong><span>{option.projection.permissions.readPaths.join('、') || '无'}</span></div>
+                      <div><strong>网络权限</strong><span>{option.projection.permissions.networkAccess.join('、') || '无'}</span></div>
+                      <div><strong>MCP 依赖</strong><span>{option.projection.requiresMcp.join('、') || '无'}</span></div>
+                      <div><strong>Skill 依赖</strong><span>{option.projection.requiresSkills.join('、') || '无'}</span></div>
+                      <div><strong>冲突</strong><span>{option.projection.conflicts.join('、') || '无'}</span></div>
+                      <div><strong>失败策略</strong><span>{option.projection.failure.onError} · {option.projection.failure.timeoutSeconds}s · {option.projection.failure.silentDegrade ? '允许静默降级' : '禁止静默降级'}</span></div>
+                      <div><strong>复用</strong><span>{option.projection.reuse.crossRole ? '跨角色' : '限当前角色'} · {option.projection.reuse.crossProject ? '跨项目' : '限当前项目'}</span></div>
+                    </div>
+                    <pre>{option.projection.instructionMarkdown}</pre>
+                  </details>
+                )}
+              </article>
             )
           })}
             </div>
@@ -267,6 +307,11 @@ export function ResourceLibraryView({
       )}
     </main>
   )
+}
+
+function formatRecord(value: Readonly<Record<string, string>>): string {
+  const entries = Object.entries(value)
+  return entries.length === 0 ? '无' : entries.map(([key, description]) => `${key}: ${description}`).join('；')
 }
 
 function KnowledgeRuntimeStatus({ snapshot }: { readonly snapshot: StateSnapshot | null }): ReactNode {

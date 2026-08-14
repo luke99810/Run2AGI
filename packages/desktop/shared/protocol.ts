@@ -166,8 +166,68 @@ export interface McpServiceProjection {
   readonly status: McpServiceStatus
   readonly authentication: 'not_required' | 'configured' | 'missing' | 'unknown'
   readonly tools: readonly string[]
+  readonly category?: string
+  readonly purpose?: string
+  readonly command?: string
+  readonly args?: readonly string[]
+  readonly enabled?: boolean
+  readonly requiresEnv?: readonly string[]
+  readonly credentialHowTo?: string
+  readonly docs?: string
   readonly configSource?: string
   readonly error?: string
+}
+
+export interface SkillProjection {
+  readonly id: string
+  readonly version: string
+  readonly scope: 'global' | 'role' | 'once'
+  readonly appliesTo: readonly string[]
+  readonly description: string
+  readonly inputs: Readonly<Record<string, string>>
+  readonly outputs: Readonly<Record<string, string>>
+  readonly preconditions: readonly string[]
+  readonly failure: {
+    readonly timeoutSeconds: number
+    readonly onError: string
+    readonly silentDegrade: boolean
+  }
+  readonly permissions: {
+    readonly riskLevel: string
+    readonly tools: readonly string[]
+    readonly readPaths: readonly string[]
+    readonly writePaths: readonly string[]
+    readonly networkAccess: readonly string[]
+  }
+  readonly requiresMcp: readonly string[]
+  readonly requiresSkills: readonly string[]
+  readonly conflicts: readonly string[]
+  readonly reuse: {
+    readonly crossRole: boolean
+    readonly crossProject: boolean
+  }
+  /** B projects the executable Skill instructions beside manifest.json. */
+  readonly instructionMarkdown: string
+}
+
+export interface RequirementProjection {
+  readonly packetId: string
+  readonly text: string
+  readonly submittedAt: string
+  readonly commandId: string
+  readonly taskId?: string
+}
+
+export interface ArtifactPackageResult {
+  readonly fileName: string
+  readonly sha256: string
+  readonly fileCount: number
+  readonly sourceBytes: number
+  readonly archiveBytes: number
+  readonly packetId?: string
+  readonly verified: boolean
+  readonly createdAt: string
+  readonly log: readonly string[]
 }
 
 export interface StateSnapshot {
@@ -181,6 +241,8 @@ export interface StateSnapshot {
   readonly evidence: readonly Evidence[]
   readonly knowledge: KnowledgeFile | null
   readonly roles: readonly RoleSpec[]
+  readonly skills: readonly SkillProjection[]
+  readonly requirements: readonly RequirementProjection[]
   readonly mcpServices: readonly McpServiceProjection[]
   readonly workers: readonly WorkerProjection[]
   readonly warnings: readonly string[]
@@ -256,6 +318,7 @@ export interface DesktopBridge {
   moveRequirementDraft(sourceScopeId: string, targetScopeId: string): Promise<RequirementDraftSnapshot>
   discardDraftAttachment(scopeId: string, attachmentId: string): Promise<RequirementDraftSnapshot>
   exportTaskRecord(suggestedName: string, markdown: string): Promise<boolean>
+  packageProjectArtifact(sourceId: string, suggestedName: string, packetId?: string): Promise<ArtifactPackageResult | null>
   listManagedResources(kind?: ManagedResourceKind): Promise<readonly ManagedResource[]>
   selectManagedResources(kind: ManagedResourceKind, sourceKind: 'file' | 'folder'): Promise<readonly ManagedResource[]>
   addManagedResourceUrl(kind: ManagedResourceKind, url: string): Promise<ManagedResource>

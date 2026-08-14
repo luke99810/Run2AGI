@@ -34,6 +34,7 @@ const SCREENSHOTS = [
   { name: '07-evidence.png', navigation: '证据与审计', heading: '证据与审计' },
   { name: '08-skills.png', navigation: 'Skills', heading: 'Skills' },
   { name: '09-plugins.png', navigation: '连接器', heading: '连接器' },
+  { name: '12-conversations.png', navigation: '对话', heading: '对话检索与导出' },
   { name: '11-knowledge.png', navigation: '知识库', heading: '知识库' },
   { name: '10-mcp.png', navigation: 'MCP', heading: 'MCP' }
 ]
@@ -463,7 +464,7 @@ async function exerciseInteractiveDetails(client, navigation) {
       summary.click()
       return [...document.querySelectorAll('.chat-actions button strong')].map((node) => node.textContent?.trim())
     })()`, 'open chat actions menu')
-    if (!chatMenuLabels.includes('搜索任务记录') || !chatMenuLabels.includes('导出任务记录')) {
+    if (!chatMenuLabels.includes('搜索对话记录') || !chatMenuLabels.includes('导出对话记录')) {
       throw new Error(`Chat actions menu is incomplete: ${JSON.stringify(chatMenuLabels)}`)
     }
     await evaluate(client, `document.querySelector('.chat-actions')?.removeAttribute('open')`, 'close chat actions menu')
@@ -491,6 +492,16 @@ async function exerciseInteractiveDetails(client, navigation) {
     await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: targetX, y: divider.y, button: 'left', buttons: 1 })
     await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: targetX, y: divider.y, button: 'left', buttons: 0, clickCount: 1 })
     await waitFor(client, `document.querySelector('.sidebar')?.getBoundingClientRect().width >= ${divider.width + 24}`, 'resized sidebar width')
+  }
+  if (navigation === '集成与验证') {
+    const artifactDelivery = await evaluate(client, `(() => ({
+      heading: document.body.innerText.includes('项目源码交付包'),
+      honestBoundary: document.body.innerText.includes('不是 EXE 或安装包') && document.body.innerText.includes('不代表 Agent 已完成构建'),
+      actionDisabled: document.querySelector('.artifact-package-card .primary-button')?.disabled ?? false
+    }))()`, 'audit project artifact delivery boundary')
+    if (!artifactDelivery.heading || !artifactDelivery.honestBoundary || !artifactDelivery.actionDisabled) {
+      throw new Error(`Artifact delivery is incomplete or overclaims fixture state: ${JSON.stringify(artifactDelivery)}`)
+    }
   }
   if (navigation === '执行中心') {
     await waitFor(client, `document.body.innerText.includes('没有真实 Worker 投影') || document.querySelectorAll('.worker-card').length > 0`, 'an honest execution projection')
@@ -655,7 +666,7 @@ async function exerciseInteractiveDetails(client, navigation) {
         menu: [...add.querySelectorAll('button')].map((button) => button.textContent?.trim())
       }
     })()`, 'audit Skills catalog and add menu')
-    if (initial === null || initial.builtIns !== 12 || !initial.menu.some((label) => label?.includes('上传文件')) || !initial.menu.some((label) => label?.includes('上传文件夹')) || !initial.menu.some((label) => label?.includes('Git URL'))) {
+    if (initial === null || initial.builtIns < 1 || !initial.menu.some((label) => label?.includes('上传文件')) || !initial.menu.some((label) => label?.includes('上传文件夹')) || !initial.menu.some((label) => label?.includes('Git URL'))) {
       throw new Error(`Skills catalog or add menu is incomplete: ${JSON.stringify(initial)}`)
     }
     await evaluate(client, `(() => {

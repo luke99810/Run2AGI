@@ -1,7 +1,20 @@
 import type { RoleSpec } from '@codentum/contracts'
+import type { McpServiceProjection, SkillProjection, StateSnapshot } from '../../shared/protocol'
 
 export type TaskSessionStatus = 'draft' | 'submitted'
 export type AccessMode = 'read_only' | 'workspace_write' | 'full_access'
+export type TaskConversationKind = 'user' | 'command' | 'receipt' | 'agent' | 'evidence' | 'error'
+
+export interface TaskConversationEntry {
+  readonly id: string
+  readonly kind: TaskConversationKind
+  readonly at: string
+  readonly text: string
+  readonly commandId?: string
+  readonly action?: string
+  readonly packetId?: string
+  readonly evidenceRefs?: readonly string[]
+}
 
 export interface TaskContextSelection {
   readonly accessMode: AccessMode
@@ -21,6 +34,7 @@ export interface TaskSession {
   readonly createdAt: string
   readonly updatedAt: string
   readonly context: TaskContextSelection
+  readonly conversation: readonly TaskConversationEntry[]
 }
 
 export interface TaskHistoryEntry {
@@ -36,15 +50,73 @@ export interface WorkbenchPreferences {
 }
 
 export function taskRequestsValidation(task: Pick<TaskSession, 'title' | 'preview'>): boolean {
-  return /(?:测试|验证|验收|集成|test|tests|testing|verify|validation|integration|qa)/iu.test(`${task.title} ${task.preview}`)
+  return /(?:测试|验证|验收|集成|打包|交付|构建|test|tests|testing|verify|validation|integration|package|delivery|build|release|qa)/iu.test(`${task.title} ${task.preview}`)
 }
 
-export function searchTaskSessions(tasks: readonly TaskSession[], query: string): readonly TaskSession[] {
+export function searchTaskSessions(tasks: readonly TaskSession[], query: string, snapshot?: StateSnapshot | null): readonly TaskSession[] {
   const normalized = query.trim().toLocaleLowerCase('zh-CN')
   if (normalized === '') return tasks
-  return tasks.filter((task) =>
-    `${task.title} ${task.preview} ${task.attachmentNames.join(' ')}`.toLocaleLowerCase('zh-CN').includes(normalized)
-  )
+  return tasks.filter((task) => {
+    const timeline = taskConversationEntries(task, snapshot)
+    const text = [task.title, task.preview, ...task.attachmentNames, ...timeline.flatMap((entry) => [entry.text, entry.action ?? '', entry.packetId ?? '', ...(entry.evidenceRefs ?? [])])].join(' ')
+    return text.toLocaleLowerCase('zh-CN').includes(normalized)
+  })
+}
+
+export function appendTaskConversation(task: TaskSession, entry: TaskConversationEntry): TaskSession {
+  const conversation = [...task.conversation, entry].slice(-500)
+  return { ...task, conversation, updatedAt: entry.at }
+}
+
+export function taskConversationEntries(task: TaskSession, snapshot?: StateSnapshot | null): readonly TaskConversationEntry[] {
+  if (snapshot === undefined || snapshot === null) return task.conversation
+  const requirements = snapshot.requirements.filter((requirement) => requirement.taskId === task.id)
+  const packetIds = new Set(requirements.map((requirement) => requirement.packetId))
+  const runtime: TaskConversationEntry[] = requirements.map((requirement) => ({
+    id: `requirement:${requirement.commandId}`,
+    kind: 'receipt',
+    at: requirement.submittedAt,
+    text: `需求已由引擎登记为 ${requirement.packetId}`,
+    commandId: requirement.commandId,
+    action: 'submit_requirement',
+    packetId: requirement.packetId
+  }))
+  for (const worker of snapshot.workers) {
+    if (!packetIds.has(worker.packetId)) continue
+    for (const event of worker.events) {
+      runtime.push({
+        id: `worker:${worker.workerId}:${event.seq}`,
+        kind: 'agent',
+        at: event.at,
+        text: `${worker.role}/${event.kind}: ${payloadText(event.payload)}`,
+        action: event.kind,
+        packetId: worker.packetId
+      })
+    }
+  }
+  for (const evidence of snapshot.evidence) {
+    if (!packetIds.has(evidence.packetId)) continue
+    runtime.push({
+      id: `evidence:${evidence.ref}`,
+      kind: 'evidence',
+      at: evidence.at,
+      text: `${evidence.kind}/${evidence.verdict}${evidence.gate === undefined ? '' : ` · ${evidence.gate}`}${evidence.artifacts.length === 0 ? '' : ` · ${evidence.artifacts.join('、')}`}`,
+      packetId: evidence.packetId,
+      evidenceRefs: [evidence.ref]
+    })
+  }
+  const deduplicated = new Map<string, TaskConversationEntry>()
+  for (const entry of [...task.conversation, ...runtime]) deduplicated.set(entry.id, entry)
+  return [...deduplicated.values()].sort((left, right) => left.at.localeCompare(right.at) || left.id.localeCompare(right.id))
+}
+
+function payloadText(payload: Readonly<Record<string, unknown>>): string {
+  try {
+    const text = JSON.stringify(payload)
+    return text.length > 2_000 ? `${text.slice(0, 2_000)}…` : text
+  } catch {
+    return '[无法序列化的事件 payload]'
+  }
 }
 
 export interface ResourceOption {
@@ -52,9 +124,24 @@ export interface ResourceOption {
   readonly label: string
   readonly detail: string
   readonly availability: 'available' | 'pending_runtime'
+  readonly projection?: SkillProjection
+  readonly mcpProjection?: McpServiceProjection
 }
 
 export const PLUGIN_OPTIONS: readonly ResourceOption[] = []
+
+export function pluginOptionsFromMcp(services: readonly McpServiceProjection[] | undefined): readonly ResourceOption[] {
+  return (services ?? [])
+    .filter((service) => service.category === 'third-party-app')
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+    .map((service) => ({
+      id: service.id,
+      label: service.name,
+      detail: service.purpose ?? `${service.transport} 第三方应用服务`,
+      availability: service.status === 'connected' ? 'available' : 'pending_runtime',
+      mcpProjection: service
+    }))
+}
 
 export const KNOWLEDGE_OPTIONS: readonly ResourceOption[] = [
   { id: 'project-knowledge', label: '项目知识库', detail: '读取当前项目 .codentum 知识投影', availability: 'available' },
@@ -94,7 +181,10 @@ const SKILL_LABELS: Readonly<Record<string, string>> = {
   evolution: '能力进化'
 }
 
-export function skillOptionsFromRoles(roles: readonly RoleSpec[] | undefined): readonly ResourceOption[] {
+export function skillOptionsFromRoles(
+  roles: readonly RoleSpec[] | undefined,
+  skills: readonly SkillProjection[] | undefined = undefined
+): readonly ResourceOption[] {
   const projected = new Map<string, { roles: Set<string>; active: boolean }>()
   for (const role of roles ?? []) {
     for (const skill of role.skills ?? []) {
@@ -104,15 +194,23 @@ export function skillOptionsFromRoles(roles: readonly RoleSpec[] | undefined): r
       projected.set(skill.id, entry)
     }
   }
-  if (projected.size === 0) return SKILL_OPTIONS
-  return [...projected.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([id, entry]) => ({
-      id,
-      label: SKILL_LABELS[id] ?? id,
-      detail: `B RoleSpec 已绑定：${[...entry.roles].sort().join('、')}`,
-      availability: entry.active ? 'available' : 'pending_runtime'
-    }))
+  const skillById = new Map((skills ?? []).map((skill) => [skill.id, skill]))
+  const ids = new Set([...projected.keys(), ...skillById.keys()])
+  if (ids.size === 0) return SKILL_OPTIONS
+  return [...ids]
+    .sort((left, right) => left.localeCompare(right))
+    .map((id) => {
+      const binding = projected.get(id)
+      const projection = skillById.get(id)
+      const rolesText = binding === undefined ? projection?.appliesTo.join('、') : [...binding.roles].sort().join('、')
+      return {
+        id,
+        label: SKILL_LABELS[id] ?? id,
+        detail: projection?.description ?? `B RoleSpec 已绑定：${rolesText || '未指定角色'}；等待 Skill manifest 与 SKILL.md 投影`,
+        availability: projection !== undefined && (binding?.active ?? true) ? 'available' : 'pending_runtime',
+        ...(projection === undefined ? {} : { projection })
+      }
+    })
 }
 
 const TASK_STORAGE_KEY = 'codentum.desktop.task-sessions.v1'
@@ -141,6 +239,30 @@ function isStringArray(value: unknown): value is readonly string[] {
 
 function isAccessMode(value: unknown): value is AccessMode {
   return value === 'read_only' || value === 'workspace_write' || value === 'full_access'
+}
+
+function parseConversation(value: unknown): readonly TaskConversationEntry[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return []
+    const record = item as Record<string, unknown>
+    if (
+      typeof record['id'] !== 'string' ||
+      !['user', 'command', 'receipt', 'agent', 'evidence', 'error'].includes(String(record['kind'])) ||
+      typeof record['at'] !== 'string' ||
+      typeof record['text'] !== 'string'
+    ) return []
+    return [{
+      id: record['id'],
+      kind: record['kind'] as TaskConversationKind,
+      at: record['at'],
+      text: record['text'],
+      ...(typeof record['commandId'] === 'string' ? { commandId: record['commandId'] } : {}),
+      ...(typeof record['action'] === 'string' ? { action: record['action'] } : {}),
+      ...(typeof record['packetId'] === 'string' ? { packetId: record['packetId'] } : {}),
+      ...(isStringArray(record['evidenceRefs']) ? { evidenceRefs: record['evidenceRefs'] } : {})
+    }]
+  }).slice(-500)
 }
 
 function parseContext(value: unknown): TaskContextSelection | null {
@@ -186,7 +308,8 @@ function parseTask(value: unknown): TaskSession | null {
     status: record['status'],
     createdAt: record['createdAt'],
     updatedAt: record['updatedAt'],
-    context
+    context,
+    conversation: parseConversation(record['conversation'])
   }
 }
 
@@ -234,7 +357,8 @@ export function createTaskSession(sourceId: string, preferences: WorkbenchPrefer
     status: 'draft',
     createdAt: timestamp,
     updatedAt: timestamp,
-    context: { ...DEFAULT_CONTEXT, accessMode: preferences.defaultAccessMode }
+    context: { ...DEFAULT_CONTEXT, accessMode: preferences.defaultAccessMode },
+    conversation: []
   }
 }
 

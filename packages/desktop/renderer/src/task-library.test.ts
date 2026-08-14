@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import type { StateSnapshot } from '../../shared/protocol'
 import {
+  appendTaskConversation,
   createTaskSession,
   historyForAgent,
+  pluginOptionsFromMcp,
   searchTaskSessions,
   skillOptionsFromRoles,
   taskDraftScope,
+  taskConversationEntries,
   taskRequestsValidation,
   toggleSelection,
   updateTaskFromDraft
@@ -47,12 +51,32 @@ describe('task library', () => {
     expect(searchTaskSessions([task], '不存在')).toEqual([])
   })
 
+  it('searches and exports the same local command, receipt, Worker event, and evidence timeline', () => {
+    const base = createTaskSession('project:1234567890abcdef12345678', { defaultAccessMode: 'read_only' }, new Date('2026-08-14T00:00:00.000Z'))
+    const task = appendTaskConversation(base, { id: 'cmd-1:command', kind: 'command', at: '2026-08-14T00:01:00.000Z', text: '向 coder 发送 submit_requirement', commandId: 'cmd-1', action: 'submit_requirement' })
+    const snapshot = {
+      requirements: [{ packetId: 'wp-demo', text: '实现搜索', submittedAt: '2026-08-14T00:02:00.000Z', commandId: 'cmd-1', taskId: task.id }],
+      workers: [{ workerId: 'worker-1', packetId: 'wp-demo', role: 'coder', attempt: 1, state: 'completed', events: [{ seq: 1, kind: 'tool_result', at: '2026-08-14T00:03:00.000Z', payload: { summary: '已生成文件' } }] }],
+      evidence: [{ ref: 'evidence:demo', packetId: 'wp-demo', role: 'coder', kind: 'build', verdict: 'pass', artifacts: ['dist/app.js'], at: '2026-08-14T00:04:00.000Z' }]
+    } as unknown as StateSnapshot
+    const entries = taskConversationEntries(task, snapshot)
+    expect(entries.map((entry) => entry.kind)).toEqual(['command', 'receipt', 'agent', 'evidence'])
+    expect(searchTaskSessions([task], '已生成文件', snapshot)).toEqual([task])
+    expect(searchTaskSessions([task], 'evidence:demo', snapshot)).toEqual([task])
+  })
+
+  it('derives third-party application choices from B projections without claiming disconnected services are available', () => {
+    expect(pluginOptionsFromMcp([{ id: 'github', name: 'GitHub', category: 'third-party-app', purpose: '代码托管', transport: 'stdio', status: 'disconnected', authentication: 'missing', tools: [] }])).toEqual([
+      expect.objectContaining({ id: 'github', detail: '代码托管', availability: 'pending_runtime' })
+    ])
+  })
+
   it('toggles resource ids without duplicates', () => {
     expect(toggleSelection(['git'], 'browser')).toEqual(['git', 'browser'])
     expect(toggleSelection(['git', 'browser'], 'git')).toEqual(['browser'])
   })
 
-  it('derives available Skill options from projected RoleSpec bindings', () => {
+  it('does not claim a Skill is available until B projects its manifest and SKILL.md', () => {
     expect(skillOptionsFromRoles([
       {
         id: 'coder',
@@ -80,11 +104,11 @@ describe('task library', () => {
         ]
       }
     ])).toEqual([
-      expect.objectContaining({ id: 'backend', label: '后端实现', availability: 'available', detail: 'B RoleSpec 已绑定：coder' }),
-      expect.objectContaining({ id: 'frontend', availability: 'available', detail: 'B RoleSpec 已绑定：coder' }),
-      expect.objectContaining({ id: 'review', availability: 'available', detail: 'B RoleSpec 已绑定：reviewer' }),
-      expect.objectContaining({ id: 'security', label: '安全审计', availability: 'available', detail: 'B RoleSpec 已绑定：reviewer' }),
-      expect.objectContaining({ id: 'testing', availability: 'available', detail: 'B RoleSpec 已绑定：coder' })
+      expect.objectContaining({ id: 'backend', label: '后端实现', availability: 'pending_runtime' }),
+      expect.objectContaining({ id: 'frontend', availability: 'pending_runtime' }),
+      expect.objectContaining({ id: 'review', availability: 'pending_runtime' }),
+      expect.objectContaining({ id: 'security', label: '安全审计', availability: 'pending_runtime' }),
+      expect.objectContaining({ id: 'testing', availability: 'pending_runtime' })
     ])
   })
 
@@ -92,5 +116,6 @@ describe('task library', () => {
     expect(taskRequestsValidation({ title: '调整桌面布局', preview: '让对话区域占满可用宽度' })).toBe(false)
     expect(taskRequestsValidation({ title: '验证上传功能', preview: '运行文件导入测试并给出结果' })).toBe(true)
     expect(taskRequestsValidation({ title: 'Run QA', preview: 'verify the integration flow' })).toBe(true)
+    expect(taskRequestsValidation({ title: '生成交付包', preview: '打包当前项目源码' })).toBe(true)
   })
 })

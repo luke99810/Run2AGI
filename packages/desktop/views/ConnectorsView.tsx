@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import type { ConnectorConfiguration, ConnectorConfigurationInput } from '../shared/protocol'
+import type { ConnectorConfiguration, ConnectorConfigurationInput, McpServiceProjection } from '../shared/protocol'
 import { EmptyState, Icon, PageHeader } from '../panels/Common'
 
 const EMPTY: ConnectorConfigurationInput = { provider: 'custom', name: '', accountLabel: '', enabled: true }
 
-export function ConnectorsView({ list, save, remove }: {
+export function ConnectorsView({ services, list, save, remove }: {
+  readonly services: readonly McpServiceProjection[]
   readonly list: () => Promise<readonly ConnectorConfiguration[]>
   readonly save: (input: ConnectorConfigurationInput) => Promise<ConnectorConfiguration>
   readonly remove: (id: string) => Promise<boolean>
@@ -12,6 +13,7 @@ export function ConnectorsView({ list, save, remove }: {
   const [items, setItems] = useState<readonly ConnectorConfiguration[]>([])
   const [editing, setEditing] = useState<ConnectorConfigurationInput | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const applications = services.filter((service) => service.category === 'third-party-app')
 
   useEffect(() => { void list().then(setItems).catch((reason: unknown) => setError(String(reason))) }, [list])
 
@@ -30,7 +32,36 @@ export function ConnectorsView({ list, save, remove }: {
 
   return (
     <main className="page connector-page">
-      <PageHeader eyebrow="账号绑定层" title="连接器" description="管理本地账号、工作区和凭据配置。当前没有第三方应用运行时，页面不会预置或宣称支持任何具体应用。" />
+      <PageHeader eyebrow="第三方应用" title="连接器" description="读取 B 投影的第三方应用用途、配置要求和真实连接状态；本地凭据配置与 MCP 技术服务分开管理。" />
+      <section className="connector-config-section application-catalog" aria-labelledby="application-catalog-heading">
+        <header><h2 id="application-catalog-heading">第三方应用目录</h2><span>{applications.length} 项</span></header>
+        {applications.length === 0 ? (
+          <EmptyState icon="plug" title="没有第三方应用投影" detail="等待 A/B 将 category=third-party-app 的配置投影到当前项目。" />
+        ) : (
+          <div className="application-list">{applications.map((service) => {
+            const docs = service.docs?.startsWith('https://') === true ? service.docs : undefined
+            return <article className="application-item" key={service.id}>
+              <span className="connector-logo"><Icon name="plug" size={20} /></span>
+              <div className="application-copy">
+                <strong>{service.name}</strong>
+                <small>{service.purpose ?? '未提供用途说明'}</small>
+                <div className="application-meta">
+                  <span>{service.transport}</span>
+                  <span>{service.enabled ? '配置已启用' : '配置未启用'}</span>
+                  <span>{service.requiresEnv?.length ? `需要 ${service.requiresEnv.join('、')}` : '无需环境凭据'}</span>
+                  {docs === undefined ? null : <a href={docs} target="_blank" rel="noreferrer">配置文档</a>}
+                </div>
+                {service.credentialHowTo === undefined ? null : <small>凭据：{service.credentialHowTo}</small>}
+                {service.error === undefined ? null : <small className="application-error">{service.error}</small>}
+              </div>
+              <div className="connector-state" aria-label={`${service.name} 连接状态`}>
+                <span className={`config-state status-${service.status}`}>{service.status === 'connected' ? '已连接' : service.status === 'connecting' ? '连接中' : service.status === 'error' ? '错误' : '未连接'}</span>
+                <small>{service.authentication === 'configured' ? '凭据已配置' : service.authentication === 'not_required' ? '无需凭据' : service.authentication === 'missing' ? '缺少凭据' : '鉴权未知'}</small>
+              </div>
+            </article>
+          })}</div>
+        )}
+      </section>
       <section className="connector-add-row">
         <span className="connector-logo"><Icon name="plug" size={21} /></span>
         <div><strong>新增连接器配置</strong><small>凭据使用系统安全存储加密；真实连接状态等待后续运行时接口。</small></div>

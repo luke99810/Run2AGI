@@ -3,6 +3,7 @@ import type {
   CommandReceipt,
   AgentConfiguration,
   AgentConfigurationPatch,
+  ArtifactPackageResult,
   ConnectorConfiguration,
   ConnectorConfigurationInput,
   DraftAttachment,
@@ -46,6 +47,7 @@ export interface DesktopState {
   readonly moveRequirementDraft: (sourceScopeId: string, targetScopeId: string) => Promise<RequirementDraftSnapshot>
   readonly discardDraftAttachment: (scopeId: string, attachmentId: DraftAttachment['id']) => Promise<RequirementDraftSnapshot>
   readonly exportTaskRecord: (suggestedName: string, markdown: string) => Promise<boolean>
+  readonly packageProjectArtifact: (sourceId: string, suggestedName: string, packetId?: string) => Promise<ArtifactPackageResult | null>
   readonly listManagedResources: (kind?: ManagedResourceKind) => Promise<readonly ManagedResource[]>
   readonly selectManagedResources: (kind: ManagedResourceKind, sourceKind: 'file' | 'folder') => Promise<readonly ManagedResource[]>
   readonly addManagedResourceUrl: (kind: ManagedResourceKind, url: string) => Promise<ManagedResource>
@@ -183,6 +185,15 @@ export function useDesktop(): DesktopState {
     if (bridge === undefined) throw new Error('桌面桥接未加载')
     try {
       return await bridge.exportTaskRecord(suggestedName, markdown)
+    } catch (reason) {
+      throw new Error(errorMessage(reason))
+    }
+  }, [bridge])
+
+  const packageProjectArtifact = useCallback(async (sourceId: string, suggestedName: string, packetId?: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    try {
+      return await bridge.packageProjectArtifact(sourceId, suggestedName, packetId)
     } catch (reason) {
       throw new Error(errorMessage(reason))
     }
@@ -359,6 +370,7 @@ export function useDesktop(): DesktopState {
     moveRequirementDraft,
     discardDraftAttachment,
     exportTaskRecord,
+    packageProjectArtifact,
     listManagedResources,
     selectManagedResources,
     addManagedResourceUrl,
@@ -377,5 +389,5 @@ export function useDesktop(): DesktopState {
     removeMcpConfiguration,
     refresh,
     sendCommand
-  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, listManagedResources, selectManagedResources, addManagedResourceUrl, updateManagedResource, removeManagedResource, listConnectors, saveConnector, removeConnector, listAgentConfigurations, saveAgentConfiguration, removeAgentConfiguration, selectAgentSystemDocument, clearAgentSystemDocument, listMcpConfigurations, saveMcpConfiguration, removeMcpConfiguration, refresh, sendCommand])
+  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, packageProjectArtifact, listManagedResources, selectManagedResources, addManagedResourceUrl, updateManagedResource, removeManagedResource, listConnectors, saveConnector, removeConnector, listAgentConfigurations, saveAgentConfiguration, removeAgentConfiguration, selectAgentSystemDocument, clearAgentSystemDocument, listMcpConfigurations, saveMcpConfiguration, removeMcpConfiguration, refresh, sendCommand])
 }

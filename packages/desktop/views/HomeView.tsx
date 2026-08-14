@@ -112,11 +112,11 @@ export function HomeView({
               <button type="button" role="menuitem" onClick={() => {
                 chatMenuRef.current?.removeAttribute('open')
                 onSearchChat()
-              }}><Icon name="search" size={17} /><span><strong>搜索任务记录</strong><small>关键词、需求内容和文件名</small></span></button>
+              }}><Icon name="search" size={17} /><span><strong>搜索对话记录</strong><small>消息、命令、回执、文件和证据</small></span></button>
               <button type="button" role="menuitem" onClick={() => {
                 chatMenuRef.current?.removeAttribute('open')
                 void onExportChat().then((exported) => setChatActionStatus(exported ? '任务记录已导出' : null)).catch((error: unknown) => setChatActionStatus(error instanceof Error ? error.message : String(error)))
-              }}><Icon name="file" size={17} /><span><strong>导出任务记录</strong><small>保存需求、附件和任务元数据</small></span></button>
+              }}><Icon name="file" size={17} /><span><strong>导出对话记录</strong><small>保存需求、附件、命令、回执和运行引用</small></span></button>
             </div>
           </details>
         </div>

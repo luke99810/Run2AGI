@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readdir } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { SidecarManager } from './SidecarManager'
@@ -76,9 +76,17 @@ describe('SidecarManager 与真引擎的绑定', () => {
         expect(bound.projectRoot?.toLowerCase()).toBe(selected.toLowerCase())
 
         const state = join(selected, '.codentum')
+        const roleFiles = (await readdir(join(state, 'roles'))).filter((name) => name.endsWith('.json'))
+        const skillDirectories = await readdir(join(state, 'skills', 'shared'))
+        const sourceSkillDirectories = (await readdir(join(REPO, 'packages', 'roles', 'skills'), { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
         const mcpFiles = (await readdir(join(state, 'mcp'))).filter((name) => name.endsWith('.json'))
         const sourceMcpFiles = (await readdir(join(REPO, 'packages', 'roles', 'mcp'))).filter((name) => name.endsWith('.json'))
+        expect(roleFiles).toHaveLength(11)
+        expect(skillDirectories.sort()).toEqual(sourceSkillDirectories.sort())
         expect(mcpFiles.sort()).toEqual(sourceMcpFiles.sort())
+        expect(await readFile(join(state, 'skills', 'shared', 'frontend', 'SKILL.md'), 'utf8')).toContain('# Frontend Skill')
       } finally {
         await manager.close().catch(() => undefined)
         for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]

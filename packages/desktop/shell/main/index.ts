@@ -32,6 +32,7 @@ import { SidecarManager } from './python-engine/SidecarManager'
 import { ManagedResourceStore } from './managed-resource-store'
 import { RequirementDraftStore } from './requirement-draft-store'
 import { WorkspaceConfigurationStore } from './workspace-configuration-store'
+import { packageProjectArtifact as createProjectArtifact } from './artifact-packager'
 
 const ALLOWED_ACTIONS = new Set<OperatorAction>([
   'submit_requirement',
@@ -211,6 +212,24 @@ async function exportTaskRecord(suggestedName: unknown, markdown: unknown): Prom
   return true
 }
 
+async function packageProjectFromSource(sourceId: unknown, suggestedName: unknown, packetId: unknown): Promise<Awaited<ReturnType<typeof createProjectArtifact>> | null> {
+  if (mainWindow === undefined) return null
+  assertSourceId(sourceId)
+  if (typeof suggestedName !== 'string' || suggestedName.length < 1 || suggestedName.length > 160) throw new TypeError('Invalid artifact filename')
+  if (packetId !== undefined && (typeof packetId !== 'string' || packetId.length < 1 || packetId.length > 256)) throw new TypeError('Invalid packet id')
+  if (stateHub === undefined) throw new Error('State source is unavailable')
+  const root = stateHub.projectRoot(sourceId)
+  const safeName = suggestedName.replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_').replace(/[. ]+$/u, '').slice(0, 120) || 'Codentum-source'
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '生成项目源码交付包',
+    defaultPath: `${safeName}.tar.gz`,
+    buttonLabel: '生成并验证',
+    filters: [{ name: 'Gzip TAR', extensions: ['gz'] }]
+  })
+  if (result.canceled || result.filePath === '') return null
+  return createProjectArtifact(root, result.filePath, packetId)
+}
+
 function cleanupWatcher(contents: WebContents): void {
   watchers.get(contents.id)?.()
   watchers.delete(contents.id)
@@ -271,6 +290,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.exportTaskRecord, async (event, suggestedName: unknown, markdown: unknown) => {
     assertTrustedSender(event)
     return exportTaskRecord(suggestedName, markdown)
+  })
+  ipcMain.handle(IPC_CHANNELS.packageProjectArtifact, async (event, sourceId: unknown, suggestedName: unknown, packetId: unknown) => {
+    assertTrustedSender(event)
+    return packageProjectFromSource(sourceId, suggestedName, packetId)
   })
   ipcMain.handle(IPC_CHANNELS.listManagedResources, async (event, kind: unknown) => {
     assertTrustedSender(event)

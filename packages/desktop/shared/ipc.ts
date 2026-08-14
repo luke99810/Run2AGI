@@ -9,6 +9,7 @@ export const IPC_CHANNELS = {
   moveRequirementDraft: 'codentum:draft:move-requirement',
   discardDraftAttachment: 'codentum:draft:discard-attachment',
   exportTaskRecord: 'codentum:task:export-record',
+  packageProjectArtifact: 'codentum:delivery:package-project',
   listManagedResources: 'codentum:resources:list',
   selectManagedResources: 'codentum:resources:select',
   addManagedResourceUrl: 'codentum:resources:add-url',
