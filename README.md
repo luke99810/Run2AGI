@@ -51,8 +51,13 @@ Codentum 采用控制/执行/数据/上下文/进化五平面架构，借鉴 Kub
 
 数据平面  (Data Plane)         依赖图 · 所有权图 · 溯源图 · 知识图 · Git 仓库 · 三层记忆
 上下文平面 (Context Plane)     可见性矩阵 · 配方 · 预算降级
-进化平面  (Evolution Plane)    证伪门 · 影子回放 · Skill CI · 灰度发布
+进化平面  (Evolution Plane)    经验沉淀 L0→L1 ✅ · 判据影子档位 ✅ · 证伪门(L2→L3) ⏳ · Skill CI ⏳
 ```
+
+> ★ 进化平面标了实现状态。`L2→L3 证伪门`**暂缓**不是没做完，是**证据现在拿不到**：
+> 一条经验的证伪门只能是「判据冻结下，带它跑与不带它跑出现显著差异」，
+> 而当前单 packet 完成率约 20–40%，噪声远大于信号。
+> 理由与边界见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)。
 
 **同构关系**：控制平面 `reconcile` → K8s controller manager；`.codentum/` → etcd；`WorkPacket` → Pod spec。控制平面不 import 执行平面任何模块，WorkerRuntime 通过构造函数注入，确保执行平面可整体替换而控制平面零改动。
 
@@ -173,6 +178,64 @@ Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻�
 
 ---
 
+## 判据的因果检验
+
+不变量与门禁只解决一半问题。剩下的一半是：
+
+> **谁来判据判据？**
+>
+> 编码缺陷会让某条测试变红。**判据缺陷不会**——因为缺的正是那条测试。
+
+Codentum 用一组**因果算子**给判据缺陷造信号。它们共享同一个提问方式：
+不去检查判据「写得对不对」（那是模式匹配，模型总能绕过），
+而是**把被判的东西移走，看判据会不会变红**。
+
+### 验收侧：六层判据
+
+| 层 | 修的是 | 手法 |
+|---|---|---|
+| 1–3 | 拿控制面簿记当证据 · 门禁同洞 · 说完成了但没改文件 | 看有没有 X |
+| 4 | 改了文件，但没达到验收标准 | **真的把谓词跑一遍** |
+| 5 | 达到了验收标准，**但验收标准是空的** | `vacuity_check`：移走实现，测试必须变红 |
+| 6 | 各模块测试全绿、集成谓词全绿，**但集成没覆盖某个模块** | `composition_check`：逐模块桩化 |
+
+第六层是把因果检验从**单点**推广到**组合**——它防的是多 Agent 并行开发最经典的
+失败：「各段都对、合起来不通」。桩必须**签名保真**（AST 掏空函数体，
+保留导入与模块级常量），删文件得到的 `ImportError` 是「红对了、理由错了」。
+
+### 判据侧：变异检验与生命周期
+
+| 工具 | 回答的问题 |
+|---|---|
+| `scripts/mutate_judgements.py --mode=strong` | 这条判据**有没有人碰过**？（整条摘掉，测试必须红） |
+| `scripts/mutate_judgements.py --mode=weak` | 这条判据的**边界有没有被测准**？（AST 改一格：`<=`→`<`、`and`→`or`、去掉 `not`、常量差一） |
+| `scripts/judgement_ledger.py` | 判据资产负债表：档位 × 命中 × 变异，合起来才有结论 |
+| `scripts/judgement_gaps.py` | 反复发生、却从没有任何判据拦过的失败 |
+
+判据有**生命周期**：`shadow`（评估、记录、不拦截）→ `enforcing`。
+晋级两个条件缺一不可：**在真实案例上命中过 ≥1 次**（否则它和不存在不可区分）+
+**变异检验能杀死它**（否则改坏了没信号）。
+
+> ★ 默认档位是 `enforcing` 而不是 `shadow`，方向是有意选的：
+> 默认 shadow 会让新规则**静默地**不生效；默认 enforcing 可能误拦，但那是**响亮的**。
+
+### 这些数字自己也要有判据
+
+变异脚本有三个控制点，缺一不可：**基线绿** · **至少一条被杀死** ·
+**正对照（塞一条空规则）必须存活**。
+
+> 少了第三点，「全部被杀死」这个结论和「杀死判定永远为真」在证据上不可区分。
+
+等价变异体（如只影响提示文案截断长度的改动）**连同判定理由**记在
+`scripts/lib/equivalent_mutants.py`，并且**每次运行整张表都打印出来**——
+隐藏的排除项等于没有排除项。
+
+详见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)、
+[ADR-0010](docs/adr/0010-验收第六层-集成谓词的桩化检验.md)、
+[ADR-0011](docs/adr/0011-判据的生命周期-影子档位-资产负债表-缺口报告.md)。
+
+---
+
 ## 能力分层：Agent / Skill / Tool / MCP
 
 ### 分层
@@ -208,16 +271,47 @@ Agent   身份 · 职责边界 · 权限集 · 模型路由        谁来做
 
 **复用率是架构健康度指标**：`testing` 被 4 个角色引用、`review` 被 3 个引用。若每个角色各有一套专属 Skill，说明抽象失败。
 
-### 第三方应用（使用者自配凭据）
+### 第三方应用
+
+MCP **由引擎连一次**，工具进入主 Agent 的工具面，所有 packet 共享：
+
+```bash
+python -m codentum_engine --project-root <项目> --mcp-config-dir packages/roles/mcp
+```
+
+不给 `--mcp-config-dir` 就完全不接 MCP，内置工具照常可用。
+
+★ runner 收的是**已连好的工具箱**而不是配置目录 —— 这样「每个 packet 连一次」
+（8 路并行 = 48 个 npx 进程）在**结构上不可表达**。见
+[ADR-0009](docs/adr/0009-MCP-连接点归属与共享工具箱.md)。
+
+**默认开启**
+
+| id | 用途 | 凭据 | 实测 |
+|---|---|---|---|
+| `playwright` | 端到端测试、浏览器自动化 | **无需** | ✅ 连接成功，24 个工具 |
+
+**默认关闭 · 需凭据**
 
 | id | 用途 | 需要的凭据 |
 |---|---|---|
-| `playwright` | 端到端测试、浏览器自动化 | **无需凭据** |
 | `github` | 仓库、Issue、PR、提交历史 | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | `sentry` | 线上错误追踪 | `SENTRY_ACCESS_TOKEN` |
 | `postgres` | 只读查询与 schema 检查 | `POSTGRES_CONNECTION_STRING` |
 | `notion` | 需求文档、技术方案 | `NOTION_TOKEN` |
 | `feishu` | 文档、消息、日程、审批 | `APP_ID` / `APP_SECRET` |
+
+**默认关闭 · 会绕过本项目的不变量**
+
+| id | 风险 | 绕过什么 |
+|---|---|---|
+| `git` | **R3** | 控制平面的状态机与 worktree 隔离 |
+| `filesystem` | R2 | 工作区边界（内置 `write_file` 的路径穿越检查） |
+| `browser` | R1 | 无，但与 `playwright` 完全重叠 |
+
+> ★ `git` 能 commit / merge / 切分支，而并行 packet 的 worktree 隔离与状态转移
+> 都建立在「**只有 ReconcileLoop 动 git**」这个前提上。开它等于让 Agent
+> 和控制平面抢方向盘。配置里写明了每个的 `riskLevel` 与 `bypasses`。
 
 启用三步：申请凭据 → 设环境变量（或填配置 `env`）→ `enabled` 改 `true`。
 
@@ -229,6 +323,17 @@ Agent   身份 · 职责边界 · 权限集 · 模型路由        谁来做
 ```
 
 三条约定：`tools` 字段**刻意留空**（由 server 在 `tools/list` 时提供，预列会在版本变化后变成谎报）；`status` 如实写 `disconnected`；工具名带 `id` 前缀（GitHub 与 GitLab 都有 `create_issue`，不加前缀会静默覆盖）。
+
+**未被加载的条目连原因一起报**（`<state-dir>/mcp/connections.json`）：
+
+```
+playwright.json   已连接，24 个工具
+github.json       enabled=false（未启用）。GitHub → Settings → Developer settings → …
+agentteams.json   声明式清单（transport='http'），只作能力投影不启动
+```
+
+> ★ 没有这份报告，「目录写错了」「配置全是关的」「连上了但模型没调用」
+> 三种情况看起来完全一样 —— 而它们的解法完全不同。
 
 详见 [`packages/roles/mcp/README.md`](packages/roles/mcp/README.md)。
 
@@ -311,6 +416,20 @@ make verify-offline   # 零运行时依赖子集
 | `make desktop-typecheck` | 桌面端 `tsc --noEmit` | 需 `npm i` |
 
 前五项设计为零运行时依赖——在完整安装前即可验证契约自洽性。
+
+### 判据自身的质量（按需运行，不进 CI 主链路）
+
+| 命令 | 产出 | 耗时 |
+|---|---|---|
+| `python scripts/mutate_judgements.py --mode=strong` | 强变异存活率（判据**有没有人碰过**） | ~2 分钟 |
+| `python scripts/mutate_judgements.py --mode=weak` | 弱变异存活率（判据**边界有没有测准**） | ~5 分钟起 |
+| `python scripts/judgement_ledger.py` | 判据资产负债表（档位 × 命中 × 变异） | 秒级 |
+| `python scripts/judgement_gaps.py` | 判据缺口报告（反复失败但事前无人拦） | 秒级 |
+
+变异结果写入 `.codentum/judgements/mutation.json`，资产负债表读它。
+
+> ★ 这几项**不放进 `make verify`**：变异检验要跑几十遍测试套件，
+> 放进主链路会让每次提交都付这个代价。它们是**定期体检**，不是回归门禁。
 
 ### 固件八项交叉检查
 
