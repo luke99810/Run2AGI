@@ -433,3 +433,68 @@ class TestAdmissionChecker:
         )
         verdict = checker.check(pkt)
         assert verdict.allowed, f"Violations: {[(v.code, v.detail) for v in verdict.violations]}"
+
+# ════════════════════════════════════════════════════════════
+#  弱变异检验补上的三条
+#
+#  ★ 来源：scripts/mutate_judgements.py --mode=weak。
+#    这三处在强变异（整条判据摘掉）下都是被杀死的 —— 说明有人碰过它们；
+#    但在弱变异（边界挪一格）下存活，说明**边界那一格没人测过**。
+#
+#    两个数测的是两件事：
+#      强变异存活率 = 有没有人**碰过**这条判据
+#      弱变异存活率 = 有没有人**测准**这条判据的边界
+# ════════════════════════════════════════════════════════════
+
+
+class TestJudgementBoundaries:
+    def test_small_but_valid_budget_is_accepted(self) -> None:
+        """★ 合法预算的**下边界**必须被测。
+
+        原先只有「0 无效」和「5.0 有效」两条 —— 中间那段没人测过。
+        后果是 `<= 0` 被改成 `<= 1` 时全套测试照样绿：
+        所有 0 到 1 元的合法预算会被静默拒绝，而没有任何信号。
+        """
+
+        assert check_budget_limit(_pkt(limitCny=0.5)) is None
+
+    def test_isolation_defers_when_role_is_unknown(self) -> None:
+        """★ packet.role 不在 role_specs 里时，模型隔离**让路**而不是报错。
+
+        这条卫语句的语义是分工：「角色不存在」由 ROLE_NOT_FOUND 负责报，
+        这里再报一次就是同一个问题出两条违规。
+
+        它原先无人覆盖 —— 把 `spec is None or spec.modelPolicy is None`
+        改成 `and` 之后没有任何测试变红，而那个改动会让这条路径直接
+        抛 AttributeError。
+        """
+
+        pkt = _pkt(role="architect", routing_model="qwen-plus")
+        assert check_role_model_isolation(pkt, role_specs=SPECS) is None
+
+    def test_isolation_skips_role_absent_from_the_given_specs(self) -> None:
+        """★ mustDifferFrom 指向的角色不在**本次传入的 role_specs** 里时跳过，不崩。
+
+        写这条测试时先试了另一个场景 —— 让 mustDifferFrom 指向一个
+        不存在的角色名 —— 发现**它在类型层面就不可表示**：
+        mustDifferFrom 是 Literal 枚举，pydantic 在构造时就拒了。
+
+        这正是本项目那条约束实现优先级的一个实例：
+        **不可见 > 无权限 > 被拦截 > 提示词劝阻**。
+        不可表示的东西不需要运行时检查。
+
+        所以这条卫语句真正守的是另一件事：角色名合法，但调用方传进来的
+        role_specs 是**不完整的**（被过滤过、或分批加载）。
+        这种情况下这条约束无法判定，应当跳过 ——
+        而不是让一个局部视图把整个准入流程炸掉。
+        """
+
+        partial = _reviewer_spec().model_copy(
+            update={"modelPolicy": ModelPolicy(
+                defaultModel="qwen-max", defaultEffort="high",
+                mustDifferFrom=("manager",),
+            )}
+        )
+        pkt = _pkt(role="reviewer", routing_model="qwen-plus")
+        # ★ 注意 role_specs 里**没有** manager
+        assert check_role_model_isolation(pkt, role_specs=(partial,)) is None
