@@ -131,11 +131,13 @@ describe('RoleSpec 项目投影', () => {
       for (const required of ['agentteams', 'browser', 'filesystem', 'git']) {
         expect(ids).toContain(required)
       }
-      expect(snapshot.mcpServices.find((service) => service.id === 'filesystem')?.tools).toEqual([
-        'read_file',
-        'write_file',
-        'list_directory'
-      ])
+      expect(snapshot.mcpServices.find((service) => service.id === 'filesystem')).toMatchObject({
+        category: 'third-party-app',
+        enabled: false,
+        status: 'disconnected',
+        authentication: 'not_required',
+        tools: []
+      })
       expect(snapshot.mcpServices.find((service) => service.id === 'agentteams')?.authentication).toBe('missing')
       expect(snapshot.mcpServices.find((service) => service.id === 'github')).toMatchObject({
         category: 'third-party-app',
