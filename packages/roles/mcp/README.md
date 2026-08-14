@@ -1,8 +1,23 @@
 # MCP 服务与第三方应用
 
 本目录的每个 JSON 是一个 MCP server 的接入配置。
-**引擎启动时读取本目录，凡是 `enabled: true` 且凭据齐全的都会自动连接，
-其工具进入主 Agent 的工具面。**
+
+**引擎需要显式指向本目录才会读它：**
+
+```bash
+python -m codentum_engine --project-root <项目> --mcp-config-dir packages/roles/mcp
+```
+
+指向之后，凡是 `enabled: true` 且凭据齐全的都会**由引擎连一次**，
+工具进入主 Agent 的工具面，所有 packet 共享（见 [ADR-0009](../../../docs/adr/0009-MCP-连接点归属与共享工具箱.md)）。
+
+★ 不给 `--mcp-config-dir` 就完全不接 MCP，内置工具照常可用。
+  默认关是有意的：可启动的 server 靠 npx 拉起来，要几秒、要网络、
+  缺凭据的还会失败 —— 不该给每次引擎启动加一段不可控的等待。
+
+★ 连接结果与**被跳过的条目及原因**都写在 `<state-dir>/mcp/connections.json`。
+  没有它的话，「目录写错了」「配置全是关的」「连上了但模型没调用」
+  三种情况看起来完全一样。
 
 ## 分工
 
@@ -17,21 +32,41 @@
 
 ## 现有目录
 
-### 内置（无需外部凭据）
+### 默认开启
+
+| id | 用途 | 凭据 | 实测 |
+|---|---|---|---|
+| `playwright` | 端到端测试、浏览器自动化 | **无需** | ✅ 连接成功，24 个工具 |
+
+★ 目录里**唯一**默认开启的 —— 因为它是唯一零凭据的。
+
+### 默认关闭：会绕过本项目不变量的三个
+
+| id | 包 | 风险 | 绕过什么 |
+|---|---|---|---|
+| `git` | `@cyanheads/git-mcp-server` | **R3** | 控制平面的状态机与 worktree 隔离 |
+| `filesystem` | `@modelcontextprotocol/server-filesystem` | R2 | 工作区边界（内置 `write_file` 的路径穿越检查） |
+| `browser` | `@modelcontextprotocol/server-puppeteer` | R1 | 无，但与 `playwright` 完全重叠 |
+
+★ `git` 是本目录风险最高的：它能 commit / merge / 切分支，
+  而并行 packet 的 worktree 隔离与状态转移都建立在
+  「**只有 ReconcileLoop 动 git**」这个前提上。
+  开它等于让 Agent 和控制平面抢方向盘。只读用途（diff / log）是安全的。
+
+★ `filesystem` 的作用域**完全由 args 最后一项决定**，
+  而内置 `write_file` 有 `_resolve_inside` 拦路径穿越 —— 这个 server 没有。
+
+### 声明式清单（不启动）
 
 | id | 用途 | 传输 |
 |---|---|---|
-| `filesystem` | 本地文件读写 | stdio |
-| `git` | 版本控制 | stdio |
-| `browser` | 浏览器 | 声明式（尚无运行时） |
-| `agentteams` | Team-mode 编排 | 声明式（http，尚无客户端） |
+| `agentteams` | Team-mode 编排 | http（尚无客户端，只作能力投影） |
 
 ### 第三方应用（使用者自行配置凭据）
 
 | id | 用途 | 需要的凭据 |
 |---|---|---|
 | `github` | 仓库、Issue、PR、提交历史 | `GITHUB_PERSONAL_ACCESS_TOKEN` |
-| `playwright` | 端到端测试、浏览器自动化 | **无需凭据** |
 | `sentry` | 线上错误追踪 | `SENTRY_ACCESS_TOKEN` |
 | `postgres` | 数据库只读查询与 schema | `POSTGRES_CONNECTION_STRING` |
 | `notion` | 需求文档、技术方案 | `NOTION_TOKEN` |

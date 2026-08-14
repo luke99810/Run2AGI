@@ -579,8 +579,15 @@ def test_mcp_services_are_projected_into_project_state(
     assert {"agentteams.json", "browser.json", "filesystem.json", "git.json"} <= set(projected)
     filesystem = json.loads((mcp_dir / "filesystem.json").read_text("utf-8"))
     agentteams = json.loads((mcp_dir / "agentteams.json").read_text("utf-8"))
-    assert filesystem["status"] == "connected"
-    assert filesystem["tools"] == ["read_file", "write_file", "list_directory"]
+    # ★ 这两条原先断言的是 status == "connected" 和一份写死的工具清单。
+    #   而 filesystem.json 当时**根本没有 command** —— 不可能连上任何东西。
+    #   也就是说测试把「声称已连接但无法启动」钉死了：去修正它反而会变红。
+    #
+    #   同样的断言在 packages/roles/tests/test_loader.py 里还有一份，
+    #   两处一起把这个谎锁住了。★ 断言的对象选错了：
+    #   该断言的不是「这个字段等于这个值」，是「**这个字段没有说谎**」。
+    assert filesystem["status"] == "disconnected", "没启用的 server 不得声称已连接"
+    assert filesystem["tools"] == [], "可启动的 server 不该预先罗列工具 —— 会随版本漂移变成谎报"
     assert agentteams["status"] == "disconnected"
     assert agentteams["authentication"] == "missing"
     assert "error" in agentteams
