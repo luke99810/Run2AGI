@@ -39,7 +39,9 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+import ast
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from codentum_contracts.state import EvidenceRef, WorkPacket
@@ -50,6 +52,8 @@ __all__ = [
     "ACCEPTANCE_TIMEOUT_SECONDS",
     "build_executing_acceptance_gate",
     "split_command",
+    "composition_check",
+    "discover_modules",
     "vacuity_check",
 ]
 
@@ -164,6 +168,19 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
         if vacuous is not None:
             return GateVerdict(passed=False, gate_id="acceptance", detail=vacuous)
 
+        # ── 第六层：集成判据必须真的覆盖每个模块 ──────────
+        #
+        # ★ 只对集成 packet 生效。对单模块 packet 谈「组合」没有意义，
+        #   而且 vacuity_check 已经守住了那一层。
+        if packet.role == "integrator":
+            modules = discover_modules(workspace)
+            if len(modules) >= 2:
+                uncovered = composition_check(workspace, command, modules=modules)
+                if uncovered is not None:
+                    return GateVerdict(
+                        passed=False, gate_id="acceptance", detail=uncovered
+                    )
+
         return GateVerdict(
             passed=True,
             gate_id="acceptance",
@@ -275,6 +292,231 @@ def vacuity_check(workspace: Path, command: list[str]) -> str | None:
         for original, hidden in moved:
             if hidden.exists():
                 hidden.rename(original)
+
+
+class _BodyStubber(ast.NodeTransformer):
+    """把函数体掏空成 `return None`，**保留签名、装饰器、类结构与模块级语句**。"""
+
+    def _stub(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
+        self.generic_visit(node)   # 先处理嵌套函数
+        node.body = [ast.Return(value=ast.Constant(value=None))]
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        return self._stub(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
+        return self._stub(node)
+
+
+def _stub_source(source: str) -> str | None:
+    """签名保真地掏空一份源码。语法错误时返回 None（不该由这一层去报）。"""
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    tree = _BodyStubber().visit(tree)
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
+def discover_modules(workspace: Path) -> list[str]:
+    """按 Planner 的约定找出模块 —— `workspace/<module>/src/`。
+
+    ★ 从**工作区的实际状态**推导，而不是从 packet 上的声明读。
+      声明会与现实漂移（改了目录忘了改声明），而目录不会 ——
+      这一层要判的正是「实际存在的模块有没有被集成测试覆盖」。
+    """
+
+    modules: list[str] = []
+    for src in sorted(workspace.rglob("src")):
+        if not src.is_dir() or src.parent == workspace:
+            continue
+        rel = src.parent.relative_to(workspace).as_posix()
+        if ".codentum" in rel or ".git" in rel or "/src/" in f"/{rel}/":
+            continue
+        modules.append(rel)
+    return modules
+
+
+def _is_test_file(path: Path) -> bool:
+    return (
+        "tests" in path.parts
+        or path.name.startswith("test_")
+        or path.name.endswith("_test.py")
+    )
+
+
+def _module_impl_files(workspace: Path, module: str) -> list[Path]:
+    root = workspace / module
+    if not root.is_dir():
+        return []
+    return [
+        path
+        for path in sorted(root.rglob("*.py"))
+        if not _is_test_file(path) and "conftest" not in path.name
+    ]
+
+
+def _module_test_files(workspace: Path, module: str) -> list[Path]:
+    root = workspace / module
+    if not root.is_dir():
+        return []
+    return [
+        path
+        for path in sorted(root.rglob("*.py"))
+        if _is_test_file(path) and "conftest" not in path.name
+    ]
+
+
+def composition_check(
+    workspace: Path, command: list[str], *, modules: Sequence[str]
+) -> str | None:
+    """★ 把**某一个模块**的实现桩化，集成谓词必须变红 —— 对每个模块都如此。
+
+    ════════════════════════════════════════════════════════════
+     这一层防的是 `vacuity_check` 防不住的那个
+    ════════════════════════════════════════════════════════════
+
+    `vacuity_check` 能抓「测试是空的」。它抓不到一个更隐蔽的东西：
+
+        **集成测试只是把各模块自己的测试又跑了一遍。**
+
+    多 Agent 并行开发最经典的失败就是「各段都对、合起来不通」，
+    而集成判据恰恰是最容易造假的一个 —— 写它的人**没有动力让它变红**。
+    全量跑一遍所有测试，退出码 0，看起来无懈可击；
+    但它完全没有检验模块之间的接口是不是对得上。
+
+    ★ 算子：把模块 A 的实现掏空，集成谓词**必须**变红。
+      如果它照样通过 —— 集成测试根本没测到 A 的参与。
+
+    ════════════════════════════════════════════════════════════
+     为什么是「掏空函数体」而不是「删掉文件」
+    ════════════════════════════════════════════════════════════
+
+    删文件会得到 ImportError。测试确实变红了，但那是**红对了、理由错了**：
+    它只证明「A 的文件存在」，证明不了「集成测试覆盖了 A 的行为」。
+    一个只写了 `import a` 的集成测试，在删文件时也会红。
+
+    所以桩必须是**合法可导入**的：同名函数、同参数、同装饰器，
+    模块级常量与类结构原样保留 —— 只有函数体变成 `return None`。
+    这样导入照常成功，**只有真的调用了 A 的行为的测试才会红**。
+
+    ★ 与 `vacuity_check` 的分工：
+      vacuity 问「测试有没有在验证实现」（单点）；
+      这一层问「集成判据有没有覆盖它声称覆盖的每一个模块」（组合）。
+      前者是判据的**存在性**，后者是判据的**作用域真实性**。
+
+    ════════════════════════════════════════════════════════════
+     ★ 为什么必须同时把该模块**自己的测试**藏起来
+    ════════════════════════════════════════════════════════════
+
+    不藏的话这个算子自己就是空的：
+
+        集成谓词若是 `pytest workspace -q`（跑全部测试），
+        桩化 A 一定会让 **A 自己的单元测试**变红 ——
+        于是每个模块都显示「已覆盖」，**这个检查永远返回通过**。
+
+    那正是它自己要防的那种「零输入的绿灯」，只不过发生在检查器身上。
+
+    藏掉 A 的自测之后，剩下还会红的必然来自 A 之外 —— 也就是真正跨模块的用例。
+    这一步不是优化，是**结论成立的前提**。
+
+    ★ 局限（说清楚，不假装没有）：
+      · 只对「模块 = 目录」的拆分方式有效，而 Planner 正是这么分的
+      · 桩化后若因 TypeError 而红，仍算作「覆盖到了」—— 那确实说明
+        集成测试用到了 A 的返回值。但它不能区分「用到了」与「验证了」。
+
+    返回 None 表示每个模块都被覆盖；返回字符串列出没被覆盖的模块。
+    """
+
+    uncovered: list[str] = []
+    skipped: list[str] = []
+
+    for module in modules:
+        impl_files = _module_impl_files(workspace, module)
+        if not impl_files:
+            skipped.append(module)
+            continue
+
+        saved: list[tuple[Path, str]] = []
+        hidden: list[tuple[Path, Path]] = []
+        try:
+            # ★ 把本模块**自己的测试**藏起来 —— 这一步是这个算子成立的前提。
+            #
+            #   不藏的话：集成谓词若是 `pytest workspace -q`（跑全部测试），
+            #   桩化 A 一定会让 A 自己的单元测试变红 —— 于是每个模块都显示
+            #   「已覆盖」，**这个检查永远返回通过**。
+            #   那正是它自己要防的那种空判据。
+            #
+            #   藏掉之后，剩下还会红的必然来自 A 之外的测试 ——
+            #   也就是真正跨模块的那些。
+            for path in _module_test_files(workspace, module):
+                away = path.with_suffix(path.suffix + ".composition-check")
+                path.rename(away)
+                hidden.append((path, away))
+
+            stubbed_any = False
+            for path in impl_files:
+                original = path.read_text(encoding="utf-8")
+                stub = _stub_source(original)
+                if stub is None:
+                    continue
+                saved.append((path, original))
+                path.write_text(stub, encoding="utf-8")
+                stubbed_any = True
+            if not stubbed_any:
+                skipped.append(module)
+                continue
+
+            still_green = False
+            try:
+                proc = subprocess.run(  # noqa: S603 - argv 明确，shell=False
+                    command,
+                    cwd=workspace,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=ACCEPTANCE_TIMEOUT_SECONDS,
+                    stdin=subprocess.DEVNULL,
+                    shell=False,
+                )
+                still_green = proc.returncode == 0
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                # ★ 检不了就别拦 —— 但也别谎称检过了。
+                return None
+
+            if still_green:
+                uncovered.append(module)
+        finally:
+            # ★ 还原必须在 finally，而且是**逐个模块**还原，不是最后统一还原 ——
+            #   中途抛异常时，已经桩化的模块必须先复原再往下走，
+            #   否则后一个模块的检验会在一个残破的工作区里进行，结论毫无意义。
+            for path, original in saved:
+                path.write_text(original, encoding="utf-8")
+            for original_path, away in hidden:
+                if away.exists():
+                    away.rename(original_path)
+
+    if not uncovered:
+        return None
+
+    names = "、".join(uncovered)
+    note = ""
+    if skipped:
+        note = "\n（跳过了 " + "、".join(skipped) + " —— 没有找到可桩化的实现文件）"
+    return (
+        f"集成验收未通过：**集成测试没有覆盖 {names}**。\n"
+        f"把 {names} 的实现全部掏空（保留签名，只让函数返回 None）之后，"
+        "集成谓词**仍然退出码 0**。\n\n"
+        "★ 这说明集成测试很可能只是把各模块自己的测试又跑了一遍，"
+        "而没有真的检验模块之间的接口。\n"
+        "「各段都对、合起来不通」正是这样漏过去的。\n\n"
+        f"**请补充真正跨模块的用例**：调用 {names} 的公开接口，"
+        "并断言它的返回值参与了最终结果。" + note
+    )
 
 
 def _as_refs(refs: tuple[str, ...]) -> tuple[EvidenceRef, ...]:
