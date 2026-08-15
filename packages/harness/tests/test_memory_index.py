@@ -251,3 +251,129 @@ def role_spec(*, invisible: tuple[str, ...] = ()) -> RoleSpec:
         tools=("read_file", "write_file"),
         transitions=(),
     )
+
+
+def test_semantic_retrieval_is_deterministic(tmp_path: Path) -> None:
+    index = PersistentMemoryIndex(tmp_path / "memory")
+    for text in ("beta release notes", "gamma release notes", "beta quaternion octonion"):
+        asyncio.run(
+            index.write(
+                MemoryEntry(
+                    ref="",
+                    level="L0",
+                    scope=MemoryScope(kind="global"),
+                    text=text,
+                    created_at="2026-08-15T00:00:00Z",
+                )
+            )
+        )
+    query = RetrievalQuery(
+        mode=RetrievalMode.SEMANTIC,
+        q="release quaternion",
+        scope=MemoryScope(kind="global"),
+        limit=5,
+        char_budget=1000,
+    )
+
+    first = asyncio.run(index.retrieve(query))
+    second = asyncio.run(index.retrieve(query))
+
+    assert first.index_version == second.index_version
+    assert [entry.ref for entry in first.entries] == [entry.ref for entry in second.entries]
+    assert first.degraded is False
+
+
+def test_semantic_mode_weights_rare_terms_above_common_ones(tmp_path: Path) -> None:
+    """稀有词（df 低）比常见词（df 高）更值钱 —— idf 加权是向量检索的核心。
+
+    LEXICAL 会把三者都判成「命中 1 个词」而并列；SEMANTIC 因 rareword 的
+    idf 更高，把只含 rareword 的 entry 排到只含 commonword 的前面。
+    """
+    index = PersistentMemoryIndex(tmp_path / "memory")
+    refs: list[str] = []
+    for text in (
+        "commonword appears here",
+        "commonword appears there",
+        "rareword appears here",
+    ):
+        refs.append(
+            asyncio.run(
+                index.write(
+                    MemoryEntry(
+                        ref="",
+                        level="L0",
+                        scope=MemoryScope(kind="global"),
+                        text=text,
+                        created_at="2026-08-15T00:00:00Z",
+                    )
+                )
+            )
+        )
+
+    query = RetrievalQuery(
+        mode=RetrievalMode.SEMANTIC,
+        q="commonword rareword",
+        scope=MemoryScope(kind="global"),
+        limit=5,
+        char_budget=1000,
+    )
+    result = asyncio.run(index.retrieve(query))
+
+    assert next(entry.ref for entry in result.entries) == refs[2]
+    assert result.degraded is False
+
+
+def test_semantic_returns_empty_when_no_term_overlap(tmp_path: Path) -> None:
+    index = PersistentMemoryIndex(tmp_path / "memory")
+    asyncio.run(
+        index.write(
+            MemoryEntry(
+                ref="",
+                level="L0",
+                scope=MemoryScope(kind="global"),
+                text="alpha beta gamma",
+                created_at="2026-08-15T00:00:00Z",
+            )
+        )
+    )
+    query = RetrievalQuery(
+        mode=RetrievalMode.SEMANTIC,
+        q="totally unrelated terms",
+        scope=MemoryScope(kind="global"),
+        limit=5,
+        char_budget=1000,
+    )
+    result = asyncio.run(index.retrieve(query))
+    assert result.entries == ()
+
+
+def test_knowledge_candidates_can_use_semantic_mode(tmp_path: Path) -> None:
+    knowledge = tmp_path / "notes.md"
+    knowledge.write_text("Billing screen must show CNY cost attribution.\n", encoding="utf-8")
+    index = PersistentMemoryIndex(tmp_path / "memory")
+    asyncio.run(
+        index_knowledge_sources(
+            index,
+            (KnowledgeSource(
+                selection_id="managed:00000000-0000-0000-0000-000000000001",
+                source_kind="file",
+                local_path=knowledge,
+                packet_id=PacketId("wp-abcdef"),
+            ),),
+            created_at="2026-08-15T00:00:00Z",
+        )
+    )
+    candidates = asyncio.run(
+        memory_context_candidates(
+            index,
+            query_text="CNY cost attribution",
+            role_spec=role_spec(),
+            packet_id=PacketId("wp-abcdef"),
+            limit=3,
+            char_budget=500,
+            mode=RetrievalMode.SEMANTIC,
+        )
+    )
+    assert len(candidates) == 1
+    assert "Billing screen must show CNY cost attribution." in candidates[0].text
+

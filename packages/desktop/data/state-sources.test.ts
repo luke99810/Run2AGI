@@ -189,7 +189,6 @@ describe('ProjectStateSource', () => {
         at: '2026-08-14T10:01:00.000Z'
       }]
     }), 'utf8')
-
     const source = await ProjectStateSource.create(project)
     const snapshot = await source.read()
 
@@ -218,6 +217,47 @@ describe('ProjectStateSource', () => {
 
     expect(snapshot.scheduling).toBeNull()
     expect(snapshot.warnings.join('\n')).toContain('[schema] State file does not match its contract: scheduling.json')
+    source.close()
+  })
+
+  it('reads B runtime Skill projection for the Skills panel', async () => {
+    const project = await copyFixtureProject('empty')
+    const skillsDirectory = join(project, '.codentum', 'skills')
+    await mkdir(skillsDirectory, { recursive: true })
+    await writeFile(
+      join(skillsDirectory, 'projection.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: '2026-08-15T00:00:00.000Z',
+        packetId: 'wp-skill001',
+        role: 'coder',
+        sharedDir: join(project, '.codentum', 'skills', 'shared'),
+        projectedCount: 2,
+        projected: [
+          { id: 'local-ui-audit-abc123', name: '本地 UI 审计', origin: 'local', sourceId: 'managed:ui', role: 'coder' },
+          { id: 'cloud-accessibility-def456', name: '云可访问性', origin: 'cloud', sourceId: 'frontend-accessibility', sourceCatalog: 'catalog.json', role: 'coder', matchScore: 3 }
+        ],
+        cloudSearch: {
+          enabled: true,
+          catalog: 'catalog.json',
+          query: '实现登录页',
+          matchedCount: 1,
+          selected: [{ id: 'cloud-accessibility-def456', name: '云可访问性', sourceId: 'frontend-accessibility', matchScore: 3 }],
+          degraded: false,
+          degradationReasons: []
+        },
+        degraded: false,
+        degradationReasons: []
+      }),
+      'utf8'
+    )
+
+    const source = await ProjectStateSource.create(project)
+    const snapshot = await source.read()
+
+    expect(snapshot.skillProjection?.projectedCount).toBe(2)
+    expect(snapshot.skillProjection?.projected.map((skill) => skill.origin)).toEqual(['local', 'cloud'])
+    expect(snapshot.skillProjection?.cloudSearch.matchedCount).toBe(1)
     source.close()
   })
 

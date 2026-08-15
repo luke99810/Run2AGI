@@ -81,6 +81,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key-env", default=None)
     parser.add_argument("--model-timeout-seconds", type=float, default=180.0)
     parser.add_argument(
+        "--worker-runtime",
+        choices=("local", "team"),
+        default="local",
+        help=(
+            "选择 WorkerRuntime 产品模式：local=隔离 git worktree 本地执行；"
+            "team=经 AgentTeams 创建 Worker、派发并回收结果"
+        ),
+    )
+    parser.add_argument(
         "--enforce-role-transitions",
         action="store_true",
         help="装载 RoleSpec 派生的 TransitionTable（见 EngineConfig 里的说明：现在打开会让 coder packet 停在 review）",
@@ -93,6 +102,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "★ 目录里只有 enabled=true 的 stdio 条目会被启动；"
             "连接结果与**被跳过的条目及原因**都写在 <state-dir>/mcp/connections.json"
         ),
+    )
+    parser.add_argument(
+        "--cloud-skills-catalog",
+        default=os.environ.get("CODENTUM_CLOUD_SKILLS_CATALOG"),
+        help=(
+            "云 Skills catalog 的本地 JSON 路径或 HTTPS URL。不给则不联网检索；"
+            "给出后主 Agent 会按需求文本和角色自动注入匹配 Skill。"
+        ),
+    )
+    parser.add_argument(
+        "--cloud-skill-limit",
+        type=int,
+        default=3,
+        help="每个 Worker 从云 Skills catalog 自动注入的 Skill 上限，默认 3。",
     )
     parser.add_argument("--log-level", default="INFO")
     return parser
@@ -293,8 +316,11 @@ def main(argv: list[str] | None = None) -> int:
             packet_budget_cny=args.packet_budget_cny,
             api_key_env=args.api_key_env,
             model_timeout_seconds=args.model_timeout_seconds,
+            worker_runtime_mode=args.worker_runtime,
             enforce_role_transitions=args.enforce_role_transitions,
             mcp_config_dir=Path(args.mcp_config_dir).resolve() if args.mcp_config_dir else None,
+            cloud_skills_catalog=args.cloud_skills_catalog,
+            cloud_skill_limit=args.cloud_skill_limit,
         )
     )
     logger.info("%s 就绪：run=%s revision=%d", ENGINE_VERSION, service.run_id, service.revision)

@@ -303,6 +303,7 @@ export function ResourceLibraryView({
             )}
           </section>
           {kind === 'knowledge' ? <KnowledgeRuntimeStatus snapshot={snapshot} /> : null}
+          {kind === 'skills' ? <SkillRuntimeStatus snapshot={snapshot} /> : null}
         </>
       )}
     </main>
@@ -312,6 +313,50 @@ export function ResourceLibraryView({
 function formatRecord(value: Readonly<Record<string, string>>): string {
   const entries = Object.entries(value)
   return entries.length === 0 ? '无' : entries.map(([key, description]) => `${key}: ${description}`).join('；')
+}
+
+function SkillRuntimeStatus({ snapshot }: { readonly snapshot: StateSnapshot | null }): ReactNode {
+  const projection = snapshot?.skillProjection
+  return (
+    <section className="resource-section skill-runtime" aria-labelledby="skill-runtime-heading">
+      <header>
+        <div>
+          <h2 id="skill-runtime-heading">运行时注入</h2>
+          <p>展示最近一次 Worker 准备阶段由 B 投影到共享空间的本地与云 Skill。</p>
+        </div>
+        <span className={projection?.degraded ? 'runtime-pending' : 'runtime-ready'}>
+          {projection === undefined || projection === null ? '尚未生成' : projection.degraded ? '有降级' : '已记录'}
+        </span>
+      </header>
+      {projection === undefined || projection === null ? (
+        <div className="resource-empty">当前项目还没有 Skill 运行时投影。</div>
+      ) : (
+        <>
+          <div className="runtime-contract-grid">
+            <div><strong>{projection.projectedCount}</strong><span>注入 Skill</span></div>
+            <div><strong>{projection.cloudSearch.enabled ? projection.cloudSearch.matchedCount : '未启用'}</strong><span>云检索命中</span></div>
+            <div><strong>{projection.role}</strong><span>目标角色</span></div>
+          </div>
+          {projection.degradationReasons.length > 0 ? (
+            <p className="runtime-boundary"><Icon name="warning" size={17} />{projection.degradationReasons.join('；')}</p>
+          ) : null}
+          {projection.projected.length === 0 ? (
+            <div className="resource-empty">最近一次执行没有额外注入 Skill。</div>
+          ) : (
+            <div className="knowledge-edge-list">
+              {projection.projected.map((skill) => (
+                <article key={skill.id}>
+                  <strong>{skill.name}</strong>
+                  <code>{skill.id}</code>
+                  <span>{skill.origin === 'cloud' ? '云 Skill' : skill.origin === 'local' ? '本地 Skill' : skill.origin}</span>
+                </article>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
 }
 
 function KnowledgeRuntimeStatus({ snapshot }: { readonly snapshot: StateSnapshot | null }): ReactNode {

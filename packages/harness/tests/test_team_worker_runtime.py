@@ -90,7 +90,12 @@ def test_team_spawn_creates_agentteams_worker_and_prompt_bundle(tmp_path: Path) 
 def test_team_settle_dispatches_task_and_collects_completed_result(tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     client = FakeAgentTeamsClient()
-    runtime = TeamWorkerRuntime(repo_root=tmp_path, client=client, role_specs=(role_spec(),))
+    runtime = TeamWorkerRuntime(
+        repo_root=tmp_path,
+        client=client,
+        role_specs=(role_spec(),),
+        project_state_dir=tmp_path / ".codentum",
+    )
 
     handle = asyncio.run(runtime.spawn(request(workspace)))
     outcome = asyncio.run(runtime.settle(handle))
@@ -118,6 +123,17 @@ def test_team_settle_dispatches_task_and_collects_completed_result(tmp_path: Pat
     assert dispatch["transport"] == "fake-matrix"
     assert result["status"] == "completed"
     assert result["spent_cny"] == 0.12
+    mirror_dir = tmp_path / ".codentum" / "evidence" / handle.worker_id
+    assert (mirror_dir / "manifest.json").exists()
+    assert (mirror_dir / "events.jsonl").exists()
+    assert (mirror_dir / "checkpoints" / "0000.json").exists()
+    assert (mirror_dir / "prompt" / "manifest.json").exists()
+    assert json.loads((mirror_dir / "agentteams" / "dispatch.json").read_text("utf-8"))[
+        "transport"
+    ] == "fake-matrix"
+    assert json.loads((mirror_dir / "agentteams" / "result.json").read_text("utf-8"))[
+        "status"
+    ] == "completed"
 
     events = asyncio.run(_collect_events(runtime, handle))
     assert [event.kind for event in events] == [
@@ -224,6 +240,44 @@ def test_team_spawn_reads_active_skill_prompt_from_project_shared_space(tmp_path
     assert "# Frontend Skill" not in system_prompt
 
 
+def test_team_spawn_uses_role_spec_resolver_before_dispatch_prompt(tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    _write_shared_skill(
+        tmp_path / ".codentum" / "skills" / "shared",
+        "cloud-dynamic-test",
+        "# Dynamic Cloud Skill\n\nUse the selected cloud skill.",
+    )
+
+    def resolve(req: SpawnRequest, spec: RoleSpec) -> RoleSpec:
+        assert req.packet_id == "wp-abcdef"
+        return spec.model_copy(
+            update={
+                "skills": (
+                    *(spec.skills or ()),
+                    RoleSkill(id="cloud-dynamic-test", scope="role", state="active"),
+                )
+            }
+        )
+
+    client = FakeAgentTeamsClient()
+    runtime = TeamWorkerRuntime(
+        repo_root=tmp_path,
+        client=client,
+        role_specs=(role_spec(),),
+        role_spec_resolver=resolve,
+    )
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    prompt_manifest = json.loads(
+        (evidence_dir / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
+    system_prompt = (evidence_dir / "prompt" / "system.md").read_text(encoding="utf-8")
+
+    assert prompt_manifest["skill_refs"] == ["cloud-dynamic-test"]
+    assert "# Dynamic Cloud Skill" in system_prompt
+
+
 def test_team_spawn_records_agentteams_error_as_failed_outcome(tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     client = FakeAgentTeamsClient(create_error=RuntimeError("docker daemon unavailable"))
@@ -248,7 +302,11 @@ def test_build_team_worker_runtime_wires_injected_client(tmp_path: Path) -> None
     workspace = tmp_path / "workers" / "wp-abcdef"
     client = FakeAgentTeamsClient()
     runtime = build_team_worker_runtime(
-        TeamWorkerRuntimeConfig(repo_root=tmp_path, worker_name_prefix="codentum.test"),
+        TeamWorkerRuntimeConfig(
+            repo_root=tmp_path,
+            worker_name_prefix="codentum.test",
+            project_state_dir=tmp_path / ".codentum",
+        ),
         role_specs=(role_spec(),),
         client=client,
     )
@@ -257,6 +315,7 @@ def test_build_team_worker_runtime_wires_injected_client(tmp_path: Path) -> None
 
     assert handle.runtime_ref == "agentteams://worker/codentum-test-coder-wp-abcdef-a1"
     assert client.created[0].name == "codentum-test-coder-wp-abcdef-a1"
+    assert (tmp_path / ".codentum" / "evidence" / handle.worker_id / "manifest.json").exists()
 
 
 def role_spec() -> RoleSpec:

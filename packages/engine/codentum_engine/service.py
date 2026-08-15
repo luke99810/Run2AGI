@@ -49,13 +49,13 @@ import json
 import logging
 import os
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from codentum_contracts.state import ModelRouting, PacketId, RoleSpec, WorkPacket, dump_state
+from codentum_contracts.state import ModelRouting, PacketId, RoleSkill, RoleSpec, WorkPacket, dump_state
 from codentum_control_plane.admission import AdmissionChecker
 from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.gates import GateRunner, register_builtin_gates
@@ -66,6 +66,7 @@ from codentum_delivery.protocol import CAPABILITY_NAMES, PROTOCOL_VERSION, JsonV
 from codentum_harness.context_broker import ContextCandidate
 from codentum_harness.evolution import experience_context_candidates_now
 from codentum_harness.memory_index import (
+    KnowledgeSource,
     PersistentMemoryIndex,
     ResourceSelectionError,
     index_knowledge_sources_now,
@@ -73,16 +74,24 @@ from codentum_harness.memory_index import (
     memory_context_candidates_now,
 )
 from codentum_harness.model_gateway import audited_bailian_pricing
-from codentum_contracts.interfaces import ModelMessage, ModelRequest
+from codentum_contracts.interfaces import ModelMessage, ModelRequest, WorkerRuntime
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
     ModelGatewayConfig,
     RunnerConfig,
+    TeamWorkerRuntimeConfig,
     TokenPricingConfig,
     build_local_worker_runtime,
     build_model_gateway,
+    build_team_worker_runtime,
 )
-from codentum_harness.worker import LocalWorkerRuntime
+from codentum_harness.worker import (
+    LocalWorkerRuntime,
+    integrate_worker_result,
+    rollback_worker_result,
+    ProjectInit,
+    ensure_project_initialized,
+)
 from codentum_roles.loader import (
     RoleMcpLoadError,
     RoleSkillLoadError,
@@ -91,10 +100,11 @@ from codentum_roles.loader import (
     project_role_skills,
 )
 
-from .acceptance import build_executing_acceptance_gate
+from .acceptance import _latest_workspace, build_executing_acceptance_gate
 from .mcp_client import describe_skipped
 from .mcp_toolbox import McpToolbox, build_mcp_toolbox
 from .planner import PlannedTask, build_packets_from_plan, parse_plan, plan_prompt
+from .projections import write_flow
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
@@ -105,6 +115,7 @@ from .intake import (
     new_packet_id,
 )
 from .session import EngineSession
+from .skill_registry import SkillRegistryError, resolve_dynamic_skills
 
 __all__ = ["ENGINE_VERSION", "EngineConfig", "EngineService"]
 
@@ -120,7 +131,26 @@ _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS
 #
 #   加实现的时候记得同步这里；忘了同步的后果是「实现了但用不了」，
 #   比「没实现」更难查。
-IMPLEMENTED_CAPABILITIES: tuple[str, ...] = ("requirements",)
+IMPLEMENTED_CAPABILITIES: tuple[str, ...] = (
+    "requirements",
+    "pauseAtSafePoint",
+    "resume",
+    "stop",
+)
+"""真正实现了的动作。
+
+★ 其余五项**仍然报 false**，而且那是正确行为，不是欠账没还：
+  报 false 之后网关会以 capability_unavailable 直接拒绝，
+  桌面端也就不会把它们显示成可用。**报一个什么都不做的 true 才是病。**
+
+  · keepMemory        —— 目前 `stop` 本来就不清记忆，这个开关没有可区分的语义。
+                         等真有「停止并遗忘」那一档时再开，否则它是个假选项。
+  · appendPrompt      —— 只能对**还没开工**的 packet 追加；对正在跑的
+                         worker 注入上下文没有实现。做一半会让人以为整条都通。
+  · insertModule      —— 要往既有计划里插节点并重排依赖，不是加一个 packet。
+  · planConfirmation  —— 计划目前自动落地；确认要改成「先挂起再确认」的流程。
+  · forkFromCheckpoint —— 需要检查点与分叉，工程量最大的一项。
+"""
 
 
 def _now_iso() -> str:
@@ -205,20 +235,42 @@ class EngineConfig:
     max_tool_turns: int = DEFAULT_MAX_TURNS
     """工具循环的轮数上限。撞上限时如实报 max_turns_exhausted，不伪装成完成。"""
 
-    enforce_role_transitions: bool = False
+    worker_runtime_mode: Literal["local", "team"] = "local"
+    """WorkerRuntime 产品模式。
+
+    `local` 是默认模式：在隔离 git worktree 中本地执行工具循环或 one-shot runner。
+    `team` 会选择 B 的 TeamWorkerRuntime，经 AgentTeams 创建 Worker、派发任务并回收结果。
+
+    ★ 这个开关不改变 contracts：控制平面仍只调用 `WorkerRuntime.spawn(req)`。
+      Team-mode 是装配选择，不是给控制平面新增第二套入口。
+    """
+
+    cloud_skills_catalog: str | None = None
+    """云 Skills catalog 地址或本地 JSON 文件。
+
+    为 None 时不主动联网检索，保证本地演示和测试可确定；给出文件路径或
+    HTTPS URL 后，主 Agent 会按本次需求文本和角色从 catalog 里检索匹配
+    Skill，并投影到 `.codentum/skills/shared/` 后再启动 Worker。
+    """
+
+    cloud_skill_limit: int = 3
+    "每个 Worker 从云 catalog 自动注入的 Skill 上限。"
+
+    enforce_role_transitions: bool = True
     """是否把 RoleSpec 派生的 TransitionTable 装进 ReconcileLoop。
 
-    ★ 默认 False，而且这个默认值需要解释 —— 因为它看起来像是在关护栏。
+    ★ 2026-08-15 起默认 **True**。此前默认 False 是因为一处建模缺陷：
 
-    打开它会让 coder 的 packet **永远停在 review**：`_try_review_to_accepted`
-    用 `role=packet.role` 去查表，而 `review → accepted` 只有 reviewer 声明了
-    （coder 只声明了 running→review / running→blocked）。也就是说表是对的
-    ——「coder 不能给自己的活签字」正是想要的语义 —— 但 reconcile 问表的
-    方式（拿 packet 自己的 role 去问）让这条规则等价于「没有人能签字」。
+      `_try_review_to_accepted` 用 `check(role=packet.role, ...)` 查表，
+      而契约里 `RoleSpec.transitions` 的定义是「此角色可**触发**的转换」——
+      role 是触发者，不是 packet 的归属者。调和循环不是角色，它在门禁通过后
+      **代为应用**。问错了人的后果很具体：coder 没声明 review→accepted，
+      于是「不能给自己的活签字」变成了「**没有人能签字**」，
+      packet 永远停在 review。
 
-    这是 A 自己模块里的一处建模问题，不是配置问题，**不应该在入口层绕过**。
-    `tests/test_role_transition_gap.py` 用一条测试把两个分支都钉住了：
-    打开会停在 review，关掉才会走完。修好之后那条测试会变红。
+    ★ 修法是补一个系统侧查询 `TransitionTable.check_system()`：
+      签字人 = 声明者 − packet 自己的角色（**I2 在状态机层的落点**），
+      门禁由签字人声明。修的是范畴错误本身，不是在入口层绕过。
     """
 
     def resolved_state_dir(self) -> Path:
@@ -242,6 +294,8 @@ class EngineService:
     _workers: list[threading.Thread] = field(default_factory=list, init=False)
     _key_env: str | None = field(init=False)
     _mcp: McpToolbox | None = field(default=None, init=False)
+    _project_init: ProjectInit | None = field(default=None, init=False)
+    _paused: bool = field(default=False, init=False)
     _stopped: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
@@ -258,6 +312,20 @@ class EngineService:
         #   ★ 这比「目录根本不存在」更糟：不存在时桌面端显示「尚未初始化」，
         #     残缺时它显示的是一串错误。2026-08-11 实机第一次打开项目就撞上了，
         #     而且**是引擎引入的回归** —— 在它之前新项目压根没有 .codentum/。
+        # ★ 项目必须可被 worktree 隔离使用，否则每个 packet 都会卡在 ready。
+        #
+        #   桌面端最常见的用法就是「打开一个新文件夹 → 提一个需求」，
+        #   而刚 git init 的仓库没有 HEAD，`git worktree add` 必然失败。
+        #   失败之后调和循环看不到任何转换、认为系统已稳定并正常退出 ——
+        #   **使用者只看到「什么都没发生」**。
+        #
+        #   ★ 这一步只在「不是 git 仓库」或「一个提交都没有」时动手；
+        #     已有历史的仓库一律不碰（那是别人的历史）。
+        #     做没做、做了什么，都写进 handshake 与日志。
+        self._project_init = ensure_project_initialized(self.config.project_root)
+        if self._project_init.changed:
+            logger.info("项目初始化：%s", self._project_init.detail)
+
         self._role_specs = load_builtin_role_specs()
         self._requirements = RequirementStore(state_dir)
         self._key_env = _resolve_key_env(self.config.api_key_env)
@@ -407,6 +475,12 @@ class EngineService:
 
         if action == "submit_requirement":
             return self._submit_requirement(command_id, command)
+        if action == "pause_at_safe_point":
+            return self._pause_at_safe_point(command_id)
+        if action == "resume":
+            return self._resume(command_id)
+        if action == "stop":
+            return self._stop(command_id)
 
         # ★ 走到这里说明网关的能力检查放行了一个我们没实现的动作 ——
         #   要么是能力表写错了，要么是网关被绕过了。两种都该说清楚，
@@ -433,6 +507,60 @@ class EngineService:
             "stopped": True,
             "pendingWorkers": len(still_running),
         }
+
+    # ══════════════════════════════════════════════════════════
+    #  暂停 / 恢复 / 停止
+    # ══════════════════════════════════════════════════════════
+
+    def _pause_at_safe_point(self, command_id: str) -> dict[str, JsonValue]:
+        """在安全点暂停：**不再放新的 packet 开工，等在跑的自然收尾**。
+
+        ★ 不打断正在跑的 worker。它手上握着路径锁，进程被打断而锁没释放的话，
+          下次启动会看到一把没有主人的锁 —— 那比不暂停糟得多。
+          `shutdown()` 的注释里已经立过这条规矩，这里是同一条。
+
+        ★ 回执状态区分两种情况，因为它们对使用者意味着不同的事：
+          还有 worker 在跑 → `waiting_safe_point`（**暂停请求已接受，但还没到点**）
+          没有在跑的       → `applied`（此刻就是安全点）
+          都回 applied 的话，使用者会以为已经停住了，而实际上还在写文件。
+        """
+
+        self._paused = True
+        alive = [t for t in self._workers if t.is_alive()]
+        logger.info("已请求在安全点暂停（%d 个 worker 仍在收尾）", len(alive))
+        if alive:
+            return self._receipt(
+                command_id, "waiting_safe_point",
+                reason=f"{len(alive)} 个 worker 仍在执行，到达安全点后暂停",
+            )
+        return self._receipt(command_id, "applied")
+
+    def _resume(self, command_id: str) -> dict[str, JsonValue]:
+        """解除暂停。
+
+        ★ 幂等：没暂停时 resume 也回 applied 而不是报错 ——
+          桌面端可能在不确定状态下重发，把它判成错误只会制造噪音。
+        """
+
+        self._paused = False
+        logger.info("已解除暂停")
+        return self._receipt(command_id, "applied")
+
+    def _stop(self, command_id: str) -> dict[str, JsonValue]:
+        """停止本次运行。
+
+        ★ 复用 `shutdown()` 而不是另写一套：那里已经处理了
+          「不强杀、等 worker 收尾」这件事。两套停止逻辑迟早会分叉，
+          而分叉的那一天没有人会发现。
+        """
+
+        result = self.shutdown()
+        pending = result.get("pendingWorkers", 0)
+        logger.info("已停止（%s 个 worker 未在超时内收尾）", pending)
+        return self._receipt(
+            command_id, "applied",
+            reason=None if pending == 0 else f"{pending} 个 worker 未在超时内收尾",
+        )
 
     # ══════════════════════════════════════════════════════════
     #  submit_requirement
@@ -550,10 +678,13 @@ class EngineService:
                 #   时间差定位的。装配看起来不像会做 I/O 的事，所以更需要打点。
                 logger.info("装配完成，开始 tick")
                 for _ in range(max_ticks):
+                    # ★ 每轮都同步暂停位：暂停命令可能在 tick 之间到达。
+                    loop.paused = self._paused
                     report = loop.tick()
                     # ★ 先落盘再记日志：日志丢了只是少条线索，
                     #   状态没落盘则是桌面端看到假象。
                     loop.save_state()
+                    self._write_projections(loop)
                     if report.transitions:
                         self._session.bump()
                     for transition in report.transitions:
@@ -602,6 +733,8 @@ class EngineService:
             budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
             guardian=Guardian(),
             transition_table=self._transition_table(),
+            result_integrator=self._integrate_result,
+            result_rollbacker=self._rollback_result,
         )
         loop.worker_runtime = self._build_worker_runtime()
         return loop
@@ -746,7 +879,7 @@ class EngineService:
             return None
         return TransitionTable(self._role_specs)
 
-    def _build_worker_runtime(self) -> LocalWorkerRuntime | None:
+    def _build_worker_runtime(self) -> WorkerRuntime | None:
         if self._key_env is None:
             return None
 
@@ -757,6 +890,18 @@ class EngineService:
             },
             api_key_env=self._key_env,
         )
+
+        if self.config.worker_runtime_mode == "team":
+            return build_team_worker_runtime(
+                TeamWorkerRuntimeConfig(
+                    repo_root=self.config.project_root,
+                    context_char_budget=self.config.context_char_budget,
+                    project_state_dir=self.config.resolved_state_dir(),
+                ),
+                role_specs=self._role_specs,
+                context_loader=self._context_loader,
+                role_spec_resolver=self._role_spec_for_request,
+            )
 
         if self.config.enable_tool_loop:
             # ★ 带工具循环的 runner：模型能真的把代码写进文件。
@@ -779,7 +924,9 @@ class EngineService:
                 ),
                 role_specs=self._role_specs,
                 context_loader=self._context_loader,
+                role_spec_resolver=self._role_spec_for_request,
                 context_char_budget=self.config.context_char_budget,
+                project_state_dir=self.config.resolved_state_dir(),
             )
 
         return build_local_worker_runtime(
@@ -789,10 +936,55 @@ class EngineService:
                     gateway_config, timeout_seconds=self.config.model_timeout_seconds
                 ),
                 context_char_budget=self.config.context_char_budget,
+                project_state_dir=self.config.resolved_state_dir(),
             ),
             role_specs=self._role_specs,
             context_loader=self._context_loader,
+            role_spec_resolver=self._role_spec_for_request,
         )
+
+    def _role_spec_for_request(self, request: Any, role_spec: RoleSpec) -> RoleSpec:
+        """按当前请求把项目/云 Skill 注入 RoleSpec，不改变 contracts。
+
+        桌面端把本地上传的 Skill 作为 ``resourceSelections`` 传来；云 Skill
+        由本配置给出的 catalog 检索。二者最后都投影进项目共享空间，让 Local
+        和 Team Worker 写 prompt 时走同一套读取逻辑。
+        """
+
+        requirement_record = self._requirements.record_for(str(request.packet_id))
+        if requirement_record is None:
+            return role_spec
+        payload = requirement_record.get("payload")
+        text = requirement_record.get("text")
+        if not isinstance(payload, dict) or not isinstance(text, str):
+            return role_spec
+
+        try:
+            resolution = resolve_dynamic_skills(
+                payload=payload,
+                requirement_text=text,
+                packet_id=request.packet_id,
+                role=role_spec.id,
+                shared_dir=self.config.resolved_state_dir() / "skills" / "shared",
+                projection_dir=self.config.resolved_state_dir() / "skills",
+                cloud_catalog=self.config.cloud_skills_catalog,
+                cloud_limit=self.config.cloud_skill_limit,
+            )
+        except (OSError, SkillRegistryError) as exc:
+            logger.warning("Skill 动态解析失败，沿用原 RoleSpec：%s", exc)
+            return role_spec
+
+        if not resolution.skill_ids:
+            return role_spec
+
+        existing = list(role_spec.skills or ())
+        seen = {skill.id for skill in existing}
+        for skill_id in resolution.skill_ids:
+            if skill_id in seen:
+                continue
+            existing.append(RoleSkill(id=skill_id, scope="role", state="active"))
+            seen.add(skill_id)
+        return role_spec.model_copy(update={"skills": tuple(existing)})
 
     def _context_loader(self, request: Any, role_spec: RoleSpec) -> tuple[ContextCandidate, ...]:
         """把需求原文送进模型上下文 —— 08-10 那个缺陷的可运行性修复。
@@ -817,15 +1009,19 @@ class EngineService:
         ]
         payload = requirement_record.get("payload") if requirement_record is not None else {}
         submitted_at = requirement_record.get("submittedAt") if requirement_record is not None else None
+        sources: tuple[KnowledgeSource, ...] = ()
+        indexed_refs: tuple[str, ...] = ()
+        memory_candidates: tuple[ContextCandidate, ...] = ()
+        degradation_reasons: list[str] = []
+        index = PersistentMemoryIndex(self.config.resolved_state_dir() / "memory" / "index")
         try:
             sources = knowledge_sources_from_payload(
                 payload if isinstance(payload, dict) else {},
                 packet_id=request.packet_id,
                 role=role_spec.id,
             )
-            index = PersistentMemoryIndex(self.config.resolved_state_dir() / "memory" / "index")
             if sources:
-                index_knowledge_sources_now(
+                indexed_refs = index_knowledge_sources_now(
                     index,
                     sources,
                     created_at=submitted_at if isinstance(submitted_at, str) else _now_iso(),
@@ -838,34 +1034,161 @@ class EngineService:
             #
             #   这个缺陷是静默的：写入侧一直在攒 L0/L1，读取侧一次没读过，
             #   从外面看就是「记忆系统在跑，只是好像没起作用」。
-            candidates.extend(
-                memory_context_candidates_now(
-                    index,
-                    query_text=text,
-                    role_spec=role_spec,
-                    packet_id=request.packet_id,
-                    limit=5,
-                    char_budget=max(1, self.config.context_char_budget // 2),
-                )
+            memory_candidates = memory_context_candidates_now(
+                index,
+                query_text=text,
+                role_spec=role_spec,
+                packet_id=request.packet_id,
+                limit=5,
+                char_budget=max(1, self.config.context_char_budget // 2),
             )
+            candidates.extend(memory_candidates)
+            if not memory_candidates:
+                degradation_reasons.append("no_memory_hits")
             # ★ 经验要单独召回一次，不能和上面那次共用。
             #   上面用**需求文本**做词法检索，对领域知识是对的；
             #   而经验的相关性来自「你是这个角色」，与本次需求内容无关 ——
             #   共用一次的话，词法得分为 0 会把经验全部丢掉，
             #   于是写入侧一直在攒、读取侧一条都出不来。
-            candidates.extend(
-                experience_context_candidates_now(
-                    index,
-                    role_spec=role_spec,
-                    packet_id=request.packet_id,
-                    char_budget=max(1, self.config.context_char_budget // 4),
-                )
+            experience_candidates = experience_context_candidates_now(
+                index,
+                role_spec=role_spec,
+                packet_id=request.packet_id,
+                char_budget=max(1, self.config.context_char_budget // 4),
+            )
+            candidates.extend(experience_candidates)
+            self._write_memory_projection(
+                packet_id=request.packet_id,
+                role_spec=role_spec,
+                index=index,
+                sources=sources,
+                indexed_refs=indexed_refs,
+                candidates=(*memory_candidates, *experience_candidates),
+                degradation_reasons=tuple(degradation_reasons),
             )
         except ResourceSelectionError as exc:
             logger.warning("MemoryIndex 资源选择被拒绝：%s", exc)
+            self._write_memory_projection(
+                packet_id=request.packet_id,
+                role_spec=role_spec,
+                index=index,
+                sources=sources,
+                indexed_refs=indexed_refs,
+                candidates=memory_candidates,
+                degradation_reasons=(f"resource_selection_rejected:{exc}",),
+            )
         return tuple(candidates)
 
+    def _write_memory_projection(
+        self,
+        *,
+        packet_id: PacketId,
+        role_spec: RoleSpec,
+        index: PersistentMemoryIndex,
+        sources: Sequence[KnowledgeSource],
+        indexed_refs: Sequence[str],
+        candidates: Sequence[ContextCandidate],
+        degradation_reasons: Sequence[str],
+    ) -> None:
+        """把 MemoryIndex 的运行事实投影成 C 可直接读取的权威状态。"""
+
+        try:
+            index_version = index.version_now()
+            hits = [_memory_hit_projection(candidate, index_version) for candidate in candidates]
+            reasons = list(degradation_reasons)
+            if any(hit["degraded"] for hit in hits):
+                reasons.append("memory_retrieval_degraded")
+            payload = {
+                "schemaVersion": 1,
+                "updatedAt": _now_iso(),
+                "packetId": str(packet_id),
+                "role": str(role_spec.id),
+                "indexVersion": index_version,
+                "sourceCount": len(sources),
+                "sources": [_knowledge_source_projection(source) for source in sources],
+                "indexedRefCount": len(tuple(indexed_refs)),
+                "indexedRefs": list(indexed_refs),
+                "retrievalCount": len(hits),
+                "retrievals": hits,
+                "degraded": bool(reasons),
+                "degradationReasons": reasons,
+            }
+            projection_dir = self.config.resolved_state_dir() / "memory"
+            projection_dir.mkdir(parents=True, exist_ok=True)
+            (projection_dir / "projection.json").write_text(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("MemoryIndex 投影写入失败：%s", exc)
+
     # ══════════════════════════════════════════════════════════
+
+    def _integrate_result(self, packet: WorkPacket) -> tuple[bool, str]:
+        """把 worker 在隔离 worktree 里的产出合回主项目。
+
+        ★ 装配点负责「怎么合」（git 操作 + 定位工作区），
+          控制平面只负责「什么时候合」（验收通过时）。
+          把 subprocess 放进控制平面会稀释它「零 LLM、不派生子进程」的承诺。
+        """
+
+        if packet.attempts == 0:
+            # ★ **没有 worker 跑过 ≠ 合入失败。** 没跑过就没有产出，无从合起。
+            #   不做这个区分的话，任何「直接进 review」的 packet（比如
+            #   评审类、或外部驱动的）都会被判成合入失败并转 blocked ——
+            #   实测被 test_role_transition_gap 当场抓住。
+            return True, f"{packet.id} 没有 worker 执行记录（attempts=0），无需合入"
+
+        workspace = _latest_workspace(self._workers_root(), packet)
+        if workspace is None:
+            # ★ 找不到工作区**不拦**，但必须出声。
+            #
+            #   这与「工作区不干净 / 改了别人的路径 / 合并冲突」是两类事：
+            #   那三条是对**这份工作**的判断，该拦；
+            #   而工作区找不到是**信息缺失**（被清理、换了机器、重启过），
+            #   拦掉会误伤合法的工作。
+            #
+            #   但它绝不能静默通过 —— 结论会写进 accepted 的 detail，
+            #   否则「合入了」和「压根没合」在状态上长得一模一样。
+            return True, f"**未合入**：有 {packet.attempts} 次执行记录却找不到工作区"
+
+        result = integrate_worker_result(
+            self.config.project_root,
+            workspace,
+            packet_id=str(packet.id),
+            owns_paths=tuple(packet.ownsPaths),
+        )
+        return result.merged, result.detail
+
+    def _rollback_result(self, packet: WorkPacket) -> tuple[bool, str]:
+        """把某个 packet 已合入的产出回滚掉（撤销合入）。
+
+        ★ 与 _integrate_result 对称：合入是 merge，回滚是 revert 那个
+          merge 提交。真正的 git 操作在 harness 的 rollback_worker_result，
+          装配点只负责把 packet 映射到项目仓库。
+        """
+        result = rollback_worker_result(
+            self.config.project_root,
+            packet_id=str(packet.id),
+        )
+        return result.rolled_back, result.detail
+
+    def _write_projections(self, loop: ReconcileLoop) -> None:
+        """重算 `.codentum/flow.json`。
+
+        ★ 每轮都重算，而不是只在结束时算一次：桌面端是**跟着看**的，
+          一个只在收尾时更新的瓶颈视图，在最需要它的时候（正卡着）是空的。
+
+        ★ 失败不拖垮 tick，但必须出声 —— 投影悄悄停止更新，
+          界面会一直显示上一份快照，而那看起来和「系统很稳定」一模一样。
+        """
+
+        try:
+            # ★ `scheduling.json` 由控制平面自己写（它才知道真正被执行的 WIP 上限）。
+            #   这里只补 `flow.json` —— 它要的是决策日志，那是引擎这一侧的账。
+            write_flow(self.config.resolved_state_dir(), loop.packets)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("调度/流动投影写入失败（不影响状态推进）：%s", exc)
 
     def _record_judgement(
         self, packet_id: str, rule: str, mode: str, fired: bool, code: str | None
@@ -992,3 +1315,30 @@ def _string_list(value: object) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, str) and item.strip())
+
+
+def _knowledge_source_projection(source: KnowledgeSource) -> dict[str, JsonValue]:
+    return {
+        "selectionId": source.selection_id,
+        "sourceKind": source.source_kind,
+        "localPath": str(source.local_path),
+        "scopeKind": source.scope_kind,
+        "role": str(source.role) if source.role is not None else None,
+        "packetId": str(source.packet_id) if source.packet_id is not None else None,
+    }
+
+
+def _memory_hit_projection(candidate: ContextCandidate, index_version: str) -> dict[str, JsonValue]:
+    memory_ref = candidate.ref.removeprefix("memory:")
+    artifact_path = candidate.artifact_path
+    category = "experience" if "/experience/" in artifact_path else "knowledge"
+    degraded = "degraded: true" in candidate.text
+    return {
+        "memoryRef": memory_ref,
+        "category": category,
+        "artifactPath": artifact_path,
+        "summary": candidate.summary or "",
+        "priority": candidate.priority,
+        "indexVersion": index_version,
+        "degraded": degraded,
+    }

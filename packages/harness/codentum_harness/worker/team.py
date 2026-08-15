@@ -49,7 +49,8 @@ from codentum_harness.context_broker import (
 from codentum_harness.prepare import PreparedExecution
 from codentum_harness.prompt_bundle import WorkerPromptBundle, write_worker_prompt_bundle
 
-from .local import WorkerContextLoader
+from .evidence import MirroredEvidence
+from .local import WorkerContextLoader, WorkerRoleSpecResolver
 
 __all__ = [
     "AgentTeamsCLIError",
@@ -481,10 +482,12 @@ class TeamWorkerRuntime:
         client: AgentTeamsClient | None = None,
         role_specs: tuple[RoleSpec, ...] | None = None,
         context_loader: WorkerContextLoader | None = None,
+        role_spec_resolver: WorkerRoleSpecResolver | None = None,
         context_char_budget: int | None = None,
         worker_runtime: str = "copaw",
         worker_name_prefix: str = "codentum",
         create_wait_timeout_seconds: float = 300.0,
+        project_state_dir: Path | str | None = None,
     ) -> None:
         if context_loader is not None and context_char_budget is None:
             raise ValueError("context_char_budget is required when context_loader is provided")
@@ -496,10 +499,14 @@ class TeamWorkerRuntime:
         specs = load_builtin_role_specs() if role_specs is None else role_specs
         self._role_specs = {spec.id: spec for spec in specs}
         self._context_loader = context_loader
+        self._role_spec_resolver = role_spec_resolver
         self._context_char_budget = context_char_budget or DEFAULT_INTENT_CONTEXT_CHAR_BUDGET
         self._worker_runtime = worker_runtime
         self._worker_name_prefix = worker_name_prefix
         self._create_wait_timeout_seconds = create_wait_timeout_seconds
+        self._project_evidence_root = (
+            None if project_state_dir is None else Path(project_state_dir) / "evidence"
+        )
         self._sessions: dict[str, _TeamSession] = {}
 
     async def spawn(self, req: SpawnRequest) -> WorkerHandle:
@@ -507,7 +514,7 @@ class TeamWorkerRuntime:
         return await self._spawn(prepared)
 
     def _prepare(self, req: SpawnRequest) -> PreparedExecution:
-        spec = self._load_role_spec(req.role)
+        spec = self._resolve_role_spec(req, self._load_role_spec(req.role))
         effective_req = req if req.tools else replace(req, tools=tuple(spec.tools))
         context_candidates = self._context_candidates(effective_req, spec)
         context = assemble_context_bundle(
@@ -522,6 +529,11 @@ class TeamWorkerRuntime:
             mount_paths=tuple(m.mount_path for m in effective_req.mounts),
             context=context,
         )
+
+    def _resolve_role_spec(self, req: SpawnRequest, spec: RoleSpec) -> RoleSpec:
+        if self._role_spec_resolver is None:
+            return spec
+        return self._role_spec_resolver(req, spec)
 
     def _context_candidates(
         self,
@@ -552,10 +564,14 @@ class TeamWorkerRuntime:
             runtime_ref=f"agentteams://worker/{worker_name}",
         )
         evidence_dir = workspace / ".codentum" / "evidence" / worker_id
+        mirror_dir = (
+            None if self._project_evidence_root is None else self._project_evidence_root / worker_id
+        )
         session = _TeamSession(
             handle=handle,
             request=req,
             evidence_dir=evidence_dir,
+            mirror_evidence_dir=mirror_dir,
             agentteams_worker=worker_name,
         )
         self._sessions[worker_id] = session
@@ -793,19 +809,20 @@ class _TeamSession:
         request: SpawnRequest,
         evidence_dir: Path,
         agentteams_worker: str,
+        mirror_evidence_dir: Path | None = None,
     ) -> None:
         self.handle = handle
         self.request = request
         self.evidence_dir = evidence_dir
         self.agentteams_worker = agentteams_worker
         self.events_file = evidence_dir / "events.jsonl"
+        self._evidence = MirroredEvidence(evidence_dir, mirror_evidence_dir)
         self.events: list[WorkerEvent] = []
         self.task_spec: AgentTeamsTaskSpec | None = None
         self.dispatch_receipt: AgentTeamsDispatchReceipt | None = None
         self.outcome: WorkerOutcome | None = None
 
     def write_manifest(self, workspace: Path, *, worker_runtime: str) -> None:
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
         manifest = {
             "worker_id": self.handle.worker_id,
             "packet_id": self.handle.packet_id,
@@ -822,18 +839,20 @@ class _TeamSession:
                 "model": self.request.routing.model,
             },
         }
-        (self.evidence_dir / "manifest.json").write_text(
+        self._evidence.write_text(
+            "manifest.json",
             json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def write_checkpoint0(self, context: ContextBundle | None) -> CheckpointRef:
-        return write_initial_checkpoint(
+        checkpoint = write_initial_checkpoint(
             worker_id=self.handle.worker_id,
             request=self.request,
             evidence_dir=self.evidence_dir,
             context=context,
         )
+        self._evidence.mirror_file("checkpoints/0000.json")
+        return checkpoint
 
     def write_prompt_bundle(
         self,
@@ -842,53 +861,47 @@ class _TeamSession:
         *,
         skills_dir: Path | str | None = None,
     ) -> WorkerPromptBundle:
-        return write_worker_prompt_bundle(
+        bundle = write_worker_prompt_bundle(
             request=self.request,
             role_spec=role_spec,
             evidence_dir=self.evidence_dir,
             context=context,
             skills_dir=skills_dir,
         )
+        self._evidence.mirror_tree("prompt")
+        return bundle
 
     def write_status(self, status: AgentTeamsWorkerStatus) -> None:
-        agentteams_dir = self.evidence_dir / "agentteams"
-        agentteams_dir.mkdir(parents=True, exist_ok=True)
-        (agentteams_dir / "status.json").write_text(
+        self._evidence.write_text(
+            "agentteams/status.json",
             json.dumps(asdict(status), ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def write_dispatch(self, receipt: AgentTeamsDispatchReceipt) -> None:
-        agentteams_dir = self.evidence_dir / "agentteams"
-        agentteams_dir.mkdir(parents=True, exist_ok=True)
-        (agentteams_dir / "dispatch.json").write_text(
+        self._evidence.write_text(
+            "agentteams/dispatch.json",
             json.dumps(asdict(receipt), ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def write_result(self, result: AgentTeamsTaskResult) -> None:
-        agentteams_dir = self.evidence_dir / "agentteams"
-        agentteams_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             **asdict(result),
             "evidence": list(result.evidence),
             "reason_code": str(result.reason_code),
         }
-        (agentteams_dir / "result.json").write_text(
+        self._evidence.write_text(
+            "agentteams/result.json",
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def write_error(self, exc: Exception) -> None:
-        agentteams_dir = self.evidence_dir / "agentteams"
-        agentteams_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "error_type": type(exc).__name__,
             "detail": str(exc),
         }
-        (agentteams_dir / "error.json").write_text(
+        self._evidence.write_text(
+            "agentteams/error.json",
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def append(self, kind: str, payload: dict[str, object]) -> None:
@@ -899,9 +912,10 @@ class _TeamSession:
             payload=payload,
         )
         self.events.append(event)
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
-        with self.events_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(event), ensure_ascii=False, sort_keys=True) + "\n")
+        self._evidence.append_text(
+            "events.jsonl",
+            json.dumps(asdict(event), ensure_ascii=False, sort_keys=True) + "\n",
+        )
 
 
 def _worker_name(prefix: str, role: RoleId, packet_id: str, attempt: int) -> str:

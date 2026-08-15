@@ -18,6 +18,7 @@ import logging
 import shutil
 import tempfile
 from collections.abc import Iterator
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -159,6 +160,29 @@ def _inject(loop: ReconcileLoop, packet: WorkPacket) -> None:
     )
 
 
+def _write_scheduling(
+    state_dir: Path,
+    *,
+    running: int = 4,
+    review: int = 2,
+) -> None:
+    (state_dir / "scheduling.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "wipLimits": {
+                    "running": running,
+                    "review": review,
+                },
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 # ════════════════════════════════════════════════════════════════
 #  Tests: 状态加载
 # ════════════════════════════════════════════════════════════════
@@ -290,6 +314,51 @@ class TestReadyToRunning:
         report = empty_loop.tick()
         t = [x for x in report.transitions if x.packet_id == "wp-000005"][0]
         assert t.to_state == "blocked"
+
+    def test_running_wip_limit_keeps_excess_ready_in_queue(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """running WIP 满不是 blocked；多出来的 ready 留在队列等下一轮容量。"""
+        _write_scheduling(tmp_state_dir, running=1, review=2)
+        first = _make_packet("wp-wip001", state="ready", owns=("src/a/",))
+        second = _make_packet("wp-wip002", state="ready", owns=("src/b/",))
+        _inject(empty_loop, first)
+        _inject(empty_loop, second)
+
+        report = empty_loop.tick()
+
+        started = [t.packet_id for t in report.transitions if t.to_state == "running"]
+        assert started == ["wp-wip001"]
+        assert empty_loop.packet(PacketId("wp-wip001")).state == "running"
+        assert empty_loop.packet(PacketId("wp-wip002")).state == "ready"
+
+        projection = json.loads((tmp_state_dir / "scheduling.json").read_text(encoding="utf-8"))
+        assert projection["current"]["running"] == 1
+        assert projection["current"]["ready"] == 1
+        assert projection["capacity"]["running"] == 0
+
+    def test_ready_queue_prefers_critical_path_before_packet_id(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """WIP 只有 1 时，长依赖链的 packet 抢先启动，而不是 id 小者先跑。"""
+        _write_scheduling(tmp_state_dir, running=1, review=2)
+        short = _make_packet("wp-aaaaaa", state="ready", owns=("src/short/",))
+        long = _make_packet("wp-zzzzzz", state="ready", owns=("src/long/",))
+        child = _make_packet(
+            "wp-child1",
+            state="pending",
+            deps=("wp-zzzzzz",),
+            owns=("src/child/",),
+        )
+        _inject(empty_loop, short)
+        _inject(empty_loop, long)
+        _inject(empty_loop, child)
+
+        report = empty_loop.tick()
+
+        started = [t.packet_id for t in report.transitions if t.to_state == "running"]
+        assert started == ["wp-zzzzzz"]
+        assert empty_loop.packet(PacketId("wp-aaaaaa")).state == "ready"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -432,6 +501,30 @@ class TestRunningToReview:
 
         report = empty_loop.tick()
         assert empty_loop.packet(PacketId("wp-000008")).state == "running"
+
+    def test_review_wip_limit_delays_worker_settle(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """review 列满时，running worker 先不 settle，防止评审在制品继续堆积。"""
+        _write_scheduling(tmp_state_dir, running=4, review=1)
+        mock = _MockWorkerRuntime(outcome=_completed_outcome())
+        empty_loop.worker_runtime = mock
+
+        running = _make_packet("wp-aaa001", state="ready", owns=("src/running/",))
+        occupied_review = _make_packet("wp-zzz001", state="review", owns=("src/review/",))
+        _inject(empty_loop, running)
+        _inject(empty_loop, occupied_review)
+
+        empty_loop.tick()
+        assert empty_loop.packet(PacketId("wp-aaa001")).state == "running"
+
+        report = empty_loop.tick()
+        transitions_for_running = [
+            t for t in report.transitions if t.packet_id == "wp-aaa001"
+        ]
+        assert transitions_for_running == []
+        assert empty_loop.packet(PacketId("wp-aaa001")).state == "running"
+        assert empty_loop.packet(PacketId("wp-zzz001")).state == "review"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -889,6 +982,7 @@ class TestStateDirSelfHeals:
         loop.tick()
 
         assert (state_dir / "graph.json").is_file(), "graph.json 没有被补回来"
+        assert (state_dir / "scheduling.json").is_file()
         assert (state_dir / "decisions.jsonl").is_file()
         assert (state_dir / "packets").is_dir()
         assert (state_dir / "evidence").is_dir()
@@ -907,6 +1001,7 @@ class TestStateDirSelfHeals:
         loop.tick()
 
         assert (state_dir / "graph.json").is_file()
+        assert (state_dir / "scheduling.json").is_file()
         assert (state_dir / "packets").is_dir()
 
     def test_healing_does_not_overwrite_surviving_state(self, tmp_path: Path) -> None:
@@ -930,6 +1025,22 @@ class TestStateDirSelfHeals:
         assert survivor.read_text(encoding="utf-8") == '{"id": "wp-survivor01"}'
         assert (state_dir / "decisions.jsonl").read_text(encoding="utf-8") == '{"kept": true}\n'
         assert (state_dir / "graph.json").is_file()
+
+    def test_ensure_state_dir_writes_scheduling_projection(self, tmp_path: Path) -> None:
+        """C 读 scheduling.json，不自行推算 WIP、容量和队列。"""
+
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+
+        loop.ensure_state_dir()
+
+        projection = json.loads((state_dir / "scheduling.json").read_text(encoding="utf-8"))
+        assert projection["schemaVersion"] == 1
+        assert projection["wipLimits"] == {"review": 2, "running": 4}
+        assert projection["current"]["running"] == 0
+        assert projection["capacity"] == {"review": 2, "running": 4}
+        assert projection["readyQueue"] == []
+        assert projection["policy"]["ordering"] == "critical_path_desc_then_packet_id"
 
     def test_healing_is_reported_not_silent(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -1013,4 +1124,188 @@ class TestIncrementalPersistence:
         #   而不是只在最后落一次
         assert len(seen_during_tick) >= 2, (
             f"整轮只落盘了 {len(seen_during_tick)} 次 —— 慢 worker 会让状态长时间不可见"
+        )
+
+
+# ════════════════════════════════════════════════════════════════
+#  决策日志：flow.json 要算的那段历史
+#
+#  ★ `DecisionRecord` 的 schema 冻结于 2026-08-02、被 contracts 导出 ——
+#    但**全仓库没有任何一处构造过它**。`decisions.jsonl` 被
+#    ensure_state_dir() 建成空文件，然后一直是空的。
+#
+#    后果不是「少一个日志」：**每个 packet 在每个状态停了多久，
+#    这段历史根本不存在**。流动效率、等待 p80、瓶颈都算不出来 ——
+#    不是算法没写，是没有可算的东西。
+# ════════════════════════════════════════════════════════════════
+
+
+class TestDecisionLog:
+    def _lines(self, state_dir: Path) -> list[dict[str, object]]:
+        path = state_dir / "decisions.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+    def test_every_transition_is_recorded(self, empty_loop: ReconcileLoop, tmp_state_dir: Path) -> None:
+        """★ 挂在 `_apply_transition` 上，因为那是 reconcile **唯一**修改状态的地方。
+
+        挂在别处必然漏 —— 而漏掉的那几条转移会让 flow 的时长凭空少一段，
+        且没有任何东西会报错。
+        """
+
+        _inject(empty_loop, _make_packet("wp-dec00001", state="pending"))
+        empty_loop.tick()
+
+        rows = self._lines(tmp_state_dir)
+        assert rows, "转移发生了，decisions.jsonl 仍是空的"
+        assert all(row["action"] == "packet_transitioned" for row in rows)
+
+    def test_records_conform_to_the_frozen_contract(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """★ 用**契约模型**回读，而不是自己断言几个字段。
+
+        自己写断言只能覆盖想到的字段；用冻结的模型解析，
+        任何不合规（缺字段、reasonCode 带空格或中文）都会被拒。
+        """
+
+        from codentum_contracts.state import DecisionRecord
+
+        _inject(empty_loop, _make_packet("wp-dec00002", state="pending"))
+        empty_loop.tick()
+
+        for row in self._lines(tmp_state_dir):
+            record = DecisionRecord.model_validate(row)
+            assert record.packetId == "wp-dec00002"
+            assert record.at, "没有时间戳 —— flow 的全部计算都靠它"
+            # reasonCode 必须机器可读：控制平面据此决策，桌面端据此分类
+            assert record.reasonCode.startswith("Reconcile.")
+
+    def test_log_is_append_only(self, empty_loop: ReconcileLoop, tmp_state_dir: Path) -> None:
+        """★ 只追加不改写 —— 覆盖会把历史抹掉，而历史正是要算的东西。"""
+
+        _inject(empty_loop, _make_packet("wp-dec00003", state="pending"))
+        empty_loop.tick()
+        first = len(self._lines(tmp_state_dir))
+
+        _inject(empty_loop, _make_packet("wp-dec00004", state="pending", owns=("src/other/",)))
+        empty_loop.tick()
+
+        assert len(self._lines(tmp_state_dir)) > first, "第二轮把第一轮覆盖了"
+
+    def test_transition_survives_a_broken_log(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """★ 记账失败不能拖垮状态推进 —— 但也不能静默。
+
+        一个因为磁盘写不进去就卡住整条流水线的日志，比没有日志更糟。
+        """
+
+        real_open = Path.open
+
+        def boom(self: Path, *args: Any, **kwargs: Any) -> Any:
+            # ★ 只拦「决策日志的**追加**」。范围窄一格再窄一格是有原因的：
+            #   打掉整个 Path.open 会连 packet 落盘一起坏（那测的是磁盘坏了）；
+            #   只按文件名拦又会打到 ensure_state_dir() 建空文件那一步（'w' 模式），
+            #   而那发生在转移**之前** —— 测的就变成「目录自愈坏了」。
+            #   要测的是「日志追加失败时状态推进照常」，所以只拦 'a'。
+            if self.name == "decisions.jsonl" and "a" in str(kwargs.get("mode", args[0] if args else "")):
+                raise OSError("disk full")
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", boom)
+        _inject(empty_loop, _make_packet("wp-dec00005", state="pending"))
+        report = empty_loop.tick()
+
+        assert report.transitions, "日志写不进去，状态推进也停了"
+
+
+# ════════════════════════════════════════════════════════════════
+#  产出合入：「accepted」必须意味着东西真的进了项目
+# ════════════════════════════════════════════════════════════════
+
+
+class TestResultIntegration:
+    def _reviewable(self, loop: ReconcileLoop, pid: str) -> None:
+        packet = _make_packet(pid, state="review").model_copy(
+            update={"evidence": (EvidenceRef("file:model/result.json"),), "attempts": 1}
+        )
+        _inject(loop, packet)
+
+    def test_integration_failure_blocks_instead_of_looping(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 合入失败转 blocked，不是留在 review。
+
+        留在 review 会每轮重试合并，而失败原因（工作区不干净、改了别人的
+        路径、合并冲突）通常不会自己消失 —— 那只是把一次失败变成无限次失败。
+        """
+
+        empty_loop.result_integrator = lambda _p: (False, "工作区有未提交的改动")
+        self._reviewable(empty_loop, "wp-integ0001")
+        empty_loop.tick()
+
+        packet = empty_loop.packets[PacketId("wp-integ0001")]
+        assert packet.state == "blocked"
+
+    def test_accepted_detail_says_whether_anything_was_merged(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 「合入了 3 处」与「压根没合」在状态上**都是 accepted**。
+
+        不把结论写进 detail 的话，这两件事从外面完全分辨不出来 ——
+        而那正是这条缺口原本的样子：验收通过只是一句状态字符串。
+        """
+
+        empty_loop.result_integrator = lambda _p: (True, "**未合入**：找不到工作区")
+        self._reviewable(empty_loop, "wp-integ0002")
+        report = empty_loop.tick()
+
+        (transition,) = [t for t in report.transitions if t.to_state == "accepted"]
+        assert "未合入" in transition.detail, "accepted 了，却看不出到底合没合"
+
+    def test_no_integrator_keeps_the_old_behaviour(self, empty_loop: ReconcileLoop) -> None:
+        """没注入合入器时保持原样 —— 控制平面不自己做 git。"""
+
+        assert empty_loop.result_integrator is None
+        self._reviewable(empty_loop, "wp-integ0003")
+        empty_loop.tick()
+        assert empty_loop.packets[PacketId("wp-integ0003")].state == "accepted"
+
+
+class TestPause:
+    def test_paused_stops_new_packets_from_starting(self, empty_loop: ReconcileLoop) -> None:
+        """★ 暂停 = 不再放新的 packet 进 running。"""
+
+        empty_loop.paused = True
+        _inject(empty_loop, _make_packet("wp-pause0001", state="ready"))
+        empty_loop.tick()
+        assert empty_loop.packets[PacketId("wp-pause0001")].state == "ready"
+
+        empty_loop.paused = False
+        empty_loop.tick()
+        assert empty_loop.packets[PacketId("wp-pause0001")].state == "running", (
+            "解除暂停后没有恢复开工 —— 那就不是暂停，是停死了"
+        )
+
+    def test_paused_still_settles_and_accepts_running_work(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 暂停**不打断**已经在跑的。
+
+        打断一个正在跑的 worker，它手上握着的路径锁会变成**没有主人的锁** ——
+        那比不暂停糟得多。所以暂停只挡在 ready→running，
+        settle 与验收必须照常走，否则「等在跑的收尾」这句话无法兑现。
+        """
+
+        empty_loop.paused = True
+        packet = _make_packet("wp-pause0002", state="review").model_copy(
+            update={"evidence": (EvidenceRef("file:model/result.json"),), "attempts": 1}
+        )
+        _inject(empty_loop, packet)
+        empty_loop.tick()
+
+        assert empty_loop.packets[PacketId("wp-pause0002")].state == "accepted", (
+            "暂停把验收也挡住了 —— 在跑的活永远收不了尾"
         )

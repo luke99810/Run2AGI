@@ -138,6 +138,28 @@ def test_spawn_writes_evidence_manifest_and_event_log(git_repo: Path, tmp_path: 
     assert events[1]["payload"]["path"] == "checkpoints/0000.json"
 
 
+def test_spawn_mirrors_evidence_to_project_state_dir(git_repo: Path, tmp_path: Path) -> None:
+    """C 读取主项目 .codentum/evidence，不读取隔离 worktree。"""
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    runtime = LocalWorkerRuntime(
+        repo_root=git_repo,
+        project_state_dir=git_repo / ".codentum",
+    )
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    primary = workspace / ".codentum" / "evidence" / handle.worker_id
+    mirror = git_repo / ".codentum" / "evidence" / handle.worker_id
+
+    assert json.loads((mirror / "manifest.json").read_text(encoding="utf-8"))["worker_id"] == (
+        handle.worker_id
+    )
+    assert (mirror / "events.jsonl").read_text(encoding="utf-8") == (
+        primary / "events.jsonl"
+    ).read_text(encoding="utf-8")
+    assert (mirror / "checkpoints" / "0000.json").exists()
+    assert (mirror / "prompt" / "manifest.json").exists()
+
+
 def test_spawn_fills_empty_tools_from_rolespec(git_repo: Path, tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     empty_tools_req = request(workspace)
@@ -186,6 +208,45 @@ def test_spawn_reads_active_skill_prompt_from_project_shared_space(
     assert prompt_manifest["skill_source"] == "project_shared"
     assert "# Shared Frontend Skill" in system_prompt
     assert "# Frontend Skill" not in system_prompt
+
+
+def test_spawn_uses_role_spec_resolver_before_prompt_bundle(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    _write_shared_skill(
+        git_repo / ".codentum" / "skills" / "shared",
+        "local-dynamic-test",
+        "# Dynamic Local Skill\n\nUse the uploaded project skill.",
+    )
+
+    def resolve(req: SpawnRequest, spec: RoleSpec) -> RoleSpec:
+        assert req.packet_id == "wp-abcdef"
+        return spec.model_copy(
+            update={
+                "skills": (
+                    *(spec.skills or ()),
+                    RoleSkill(id="local-dynamic-test", scope="role", state="active"),
+                )
+            }
+        )
+
+    runtime = LocalWorkerRuntime(
+        repo_root=git_repo,
+        role_specs=(role_spec(),),
+        role_spec_resolver=resolve,
+    )
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    prompt_manifest = json.loads(
+        (evidence_dir / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
+    system_prompt = (evidence_dir / "prompt" / "system.md").read_text(encoding="utf-8")
+
+    assert prompt_manifest["skill_refs"] == ["local-dynamic-test"]
+    assert "# Dynamic Local Skill" in system_prompt
 
 
 def test_spawn_injects_packet_intent_from_workpacket_file(git_repo: Path, tmp_path: Path) -> None:
@@ -354,3 +415,112 @@ def _write_packet(repo: Path, packet: WorkPacket) -> None:
         json.dumps(dump_state(packet), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+
+# ══════════════════════════════════════════════════════════════
+#  空仓库：打开一个新文件夹就提需求，是最基本的用户流程
+#
+#  ★ 上面那个 git_repo 夹具**每次都建了一个提交** —— 正是它让这个缺陷
+#    一直没被发现。夹具假设了顺利路径，于是「用户刚 git init 的空目录」
+#    这条真实路径从来没有被测过。
+#
+#    实测现象（2026-08-15 生成命中账本时撞到）：
+#      spawn 失败，packet wp-xxx 保持 ready 并释放锁：
+#      WorktreeIsolationError: fatal: invalid reference: HEAD
+#
+#    后果不是崩溃，是 packet 永远停在 ready，而用户只看到「什么都没发生」。
+# ══════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def empty_git_repo(tmp_path: Path) -> Path:
+    """刚 `git init`、**一个提交都没有**的仓库 —— 新项目的真实起点。"""
+
+    repo = tmp_path / "fresh"
+    repo.mkdir()
+    run_git(repo, "init")
+    run_git(repo, "config", "user.name", "tester")
+    run_git(repo, "config", "user.email", "tester@example.com")
+    return repo
+
+
+def test_worktree_on_a_repo_without_commits_says_what_to_do(
+    empty_git_repo: Path, tmp_path: Path
+) -> None:
+    """★ 错误必须**说清怎么办**，而不是把 git 的原文抛给用户。
+
+    `fatal: invalid reference: HEAD` 对写代码的人都不够直白，
+    对「打开一个空文件夹提需求」的使用者更是完全无从下手。
+    """
+
+    from codentum_harness.worker.worktree import GitWorktreeManager, WorktreeIsolationError
+
+    isolation = GitWorktreeManager(empty_git_repo)
+    with pytest.raises(WorktreeIsolationError) as excinfo:
+        isolation.create(tmp_path / "workers" / "wp-1")
+
+    message = str(excinfo.value)
+    assert "没有任何提交" in message, f"错误没说清根因：{message}"
+    assert "ensure_project_initialized" in message, "错误没给出可执行的下一步"
+
+
+def test_ensure_project_initialized_creates_the_first_commit(empty_git_repo: Path) -> None:
+    """空仓库 → 建一个空的初始提交，之后 worktree 可用。"""
+
+    from codentum_harness.worker.worktree import ensure_project_initialized
+
+    result = ensure_project_initialized(empty_git_repo)
+
+    assert result.changed is True
+    assert run_git(empty_git_repo, "rev-parse", "HEAD").strip()
+
+
+def test_ensure_project_initialized_never_touches_a_repo_with_history(git_repo: Path) -> None:
+    """★ 这条是安全判据，不是功能判据。
+
+    在别人已有的仓库历史上加一个提交，是**不可接受的副作用** ——
+    使用者把 Codentum 指向一个真实项目时，它绝不能往那段历史里写东西。
+    只有「一个提交都没有」的仓库才允许被初始化。
+    """
+
+    from codentum_harness.worker.worktree import ensure_project_initialized
+
+    before = run_git(git_repo, "rev-parse", "HEAD").strip()
+    log_before = run_git(git_repo, "log", "--oneline").strip()
+
+    result = ensure_project_initialized(git_repo)
+
+    assert result.changed is False, "动了一个已有历史的仓库"
+    assert run_git(git_repo, "rev-parse", "HEAD").strip() == before
+    assert run_git(git_repo, "log", "--oneline").strip() == log_before
+
+
+def test_ensure_project_initialized_inits_a_plain_folder(tmp_path: Path) -> None:
+    """连 .git 都没有的普通文件夹 —— 桌面端「打开一个新目录」的最常见形态。"""
+
+    from codentum_harness.worker.worktree import ensure_project_initialized
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    result = ensure_project_initialized(plain)
+
+    assert result.changed is True
+    assert (plain / ".git").exists()
+    assert run_git(plain, "rev-parse", "HEAD").strip()
+
+
+def test_spawn_works_after_initialization(empty_git_repo: Path, tmp_path: Path) -> None:
+    """★ 端到端：初始化之后，最基本的那条路径真的走得通。
+
+    前面几条测的是各段；这条测的是「打开空文件夹 → 提需求」不再卡死。
+    """
+
+    from codentum_harness.worker.worktree import ensure_project_initialized
+
+    ensure_project_initialized(empty_git_repo)
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    runtime = LocalWorkerRuntime(repo_root=empty_git_repo)
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    assert handle.runtime_ref == str(workspace)

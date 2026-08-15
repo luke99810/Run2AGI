@@ -18,6 +18,7 @@ import type {
   SchedulingProjection,
   SkillProjection,
   SnapshotSourceDescriptor,
+  SkillRuntimeProjection,
   StateSnapshot,
   WorkerEventProjection,
   WorkerProjection,
@@ -279,6 +280,7 @@ async function readDirectorySnapshot(
   const roles = parseJsonCollection(context, 'roles/', isRoleSpec, false)
   const skills = parseSkills(context)
   const requirements = parseRequirements(context)
+  const skillProjection = parseJsonFile(context, 'skills/projection.json', isSkillRuntimeProjection, false)
   const mcpServices = parseJsonCollection(context, 'mcp/', isMcpServiceProjection, false)
   const workers = parseWorkers(context, staleAfterMs)
   const scheduling = parseJsonFile(context, 'scheduling.json', isSchedulingProjection, false)
@@ -302,6 +304,7 @@ async function readDirectorySnapshot(
       roles,
       skills,
       requirements,
+      skillProjection,
       mcpServices,
       workers,
       scheduling,
@@ -363,6 +366,7 @@ async function scanStateDirectory(stateDirectory: string): Promise<StateScan> {
   await scanFlatJsonDirectory(stateDirectory, 'packets', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'knowledge', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'roles', directories, warnings, addFile)
+  await scanFlatJsonDirectory(stateDirectory, 'skills', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'mcp', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'requirements', directories, warnings, addFile)
   await scanSharedSkillsDirectory(stateDirectory, directories, warnings, addFile)
@@ -1379,6 +1383,60 @@ function isSkillManifest(value: unknown): value is Omit<SkillProjection, 'instru
     isRecord(reuse) &&
     typeof reuse['crossRole'] === 'boolean' &&
     typeof reuse['crossProject'] === 'boolean'
+  )
+}
+
+function isSkillRuntimeProjection(value: unknown): value is SkillRuntimeProjection {
+  if (
+    !isRecord(value) ||
+    value['schemaVersion'] !== 1 ||
+    typeof value['updatedAt'] !== 'string' ||
+    typeof value['packetId'] !== 'string' ||
+    typeof value['role'] !== 'string' ||
+    typeof value['sharedDir'] !== 'string' ||
+    !Number.isInteger(value['projectedCount']) ||
+    !Array.isArray(value['projected']) ||
+    !isRecord(value['cloudSearch']) ||
+    typeof value['degraded'] !== 'boolean' ||
+    !isStringArray(value['degradationReasons'])
+  ) return false
+
+  const cloudSearch = value['cloudSearch']
+  return (
+    value['projected'].every(isSkillProjectionItem) &&
+    typeof cloudSearch['enabled'] === 'boolean' &&
+    typeof cloudSearch['catalog'] === 'string' &&
+    typeof cloudSearch['query'] === 'string' &&
+    Number.isInteger(cloudSearch['matchedCount']) &&
+    Array.isArray(cloudSearch['selected']) &&
+    cloudSearch['selected'].every(isCloudSkillSelection) &&
+    typeof cloudSearch['degraded'] === 'boolean' &&
+    isStringArray(cloudSearch['degradationReasons'])
+  )
+}
+
+function isSkillProjectionItem(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    typeof value['origin'] === 'string' &&
+    (value['description'] === undefined || typeof value['description'] === 'string') &&
+    (value['sourceId'] === undefined || typeof value['sourceId'] === 'string') &&
+    (value['sourcePath'] === undefined || typeof value['sourcePath'] === 'string') &&
+    (value['sourceCatalog'] === undefined || typeof value['sourceCatalog'] === 'string') &&
+    (value['role'] === undefined || typeof value['role'] === 'string') &&
+    (value['matchScore'] === undefined || isFiniteNumber(value['matchScore']))
+  )
+}
+
+function isCloudSkillSelection(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    typeof value['sourceId'] === 'string' &&
+    (value['matchScore'] === undefined || isFiniteNumber(value['matchScore']))
   )
 }
 

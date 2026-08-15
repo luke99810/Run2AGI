@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +32,7 @@ from codentum_contracts.interfaces import (
 from codentum_contracts.state import (
     Acceptance,
     BudgetGrant,
+    DecisionRecord,
     DependencyEdge,
     DependencyGraph,
     EvidenceRef,
@@ -53,6 +54,17 @@ from codentum_control_plane.evidence import (
     is_acceptance_evidence,
 )
 from codentum_control_plane.guardian import Guardian
+from codentum_control_plane.scheduling import (
+    ReadyQueueEntry,
+    SchedulingConfig,
+    build_ready_queue,
+    build_scheduling_projection,
+    count_packet_states,
+    default_scheduling_config,
+    load_scheduling_config,
+    remaining_capacity,
+    under_wip_limit,
+)
 from codentum_control_plane.state_machine import TransitionTable
 
 from .actions import PacketTransition, ReconcileContext, TickReport
@@ -130,6 +142,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _append_decision_record(root: Path, record: DecisionRecord) -> None:
+    """追加一条 operator 决定到 decisions.jsonl。"""
+    path = root / "decisions.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(record.model_dump_json(exclude_none=True) + "\n")
+
+
+def _load_decisions(root: Path) -> list[DecisionRecord]:
+    """从 decisions.jsonl 读回全部决策（含人工审批/回滚）。"""
+    path = root / "decisions.jsonl"
+    if not path.exists():
+        return []
+    records: list[DecisionRecord] = []
+    for line in path.read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(DecisionRecord.model_validate_json(line))
+        except Exception:  # noqa: BLE001
+            # 坏行不拖垮状态加载，但审计链里的坏行必须出声。
+            logger.warning("忽略无法解析的决策日志行：%.80s", line)
+    return records
+
+
 @dataclass
 class ReconcileLoop:
     """调和循环 —— 控制平面的心脏。
@@ -159,14 +197,74 @@ class ReconcileLoop:
     guardian: Guardian | None = None
     "★ 确定性拦截器。若为 None，不执行运行时不变量检查。"
 
+    paused: bool = False
+    """暂停位：**只挡新开工，不打断已经在跑的**。
+
+    ★ 「安全点暂停」的语义就是这个 —— 打断一个正在跑的 worker，
+      它手上握着的路径锁会变成没有主人的锁，而那比不暂停糟得多。
+      所以暂停的做法是**不再放新的 packet 进 running**，
+      让在跑的自然收尾。
+
+    ★ 挡在 ready→running 而不是 tick 入口：settle（running→review）
+      与验收（review→accepted）必须照常走，否则「等在跑的收尾」
+      这句话本身就无法兑现。
+    """
+
+    result_integrator: Callable[[WorkPacket], tuple[bool, str]] | None = None
+    """把 worker 产出合回主项目的回调。为 None 时**不合入**。
+
+    ★ 由装配点注入而不是控制平面自己做：合入是 git 操作，
+      而控制平面的承诺是「确定性代码，零 LLM，不派生子进程」。
+      注入之后控制平面只做一件事 —— **决定什么时候合**（验收通过时）。
+
+    ★ 为 None 时不合入，这件事必须让人看得见：
+      packet 会是 accepted 而项目里没有东西，那正是这条缺口原本的样子。
+      装配点（EngineService）默认注入真实实现。
+    """
+
+    result_rollbacker: Callable[[WorkPacket], tuple[bool, str]] | None = None
+    """把某个 packet 已合入的产出**回滚**掉（撤销合入）的回调。为 None 时**不回滚**。
+
+    ★ 与 result_integrator 对称：回滚是 git 操作（revert 合入提交），
+      同样由装配点注入而不是控制平面自己做 —— 控制平面只负责
+      「记录这条人工回滚决定 + 决定什么时候回滚」。
+
+    ★ 回滚不是状态转换：packet 仍是 accepted（它的工作确实被验收过），
+      回滚是一条追加在 decisions.jsonl 里、actor=operator 的独立决定，
+      审计链完整、可追溯。
+    """
+
+    max_running: int | None = None
+    """同时处于 running 的 packet 上限（WIP 限制）。None = 不限。
+
+    ★ 这不是性能调优，是**止损**。2026-08-13 实测：8 个 packet 同时
+      调模型时出现 `Connection error` —— 并发本身把请求打挂了。
+      而失败的那几个会重试，重试又加剧并发，成本和失败率一起上去。
+
+    ★ 精益调度里这就是 WIP 限制：**在制品越多，单件周期越长**。
+      控制平面是唯一知道全局有多少 packet 在跑的地方，
+      所以这条限制只能在这里执行 —— 放到 worker 侧各自为政拦不住总量。
+
+    ★ 它同时是 `.codentum/scheduling.json` 里 `wipLimits.running` 的**唯一真实来源**。
+      没有真正执行的限制，就不该往那个文件里写数字 ——
+      写了就是「声明了但没人执行」，而桌面端会照着它渲染。
+    """
+
     # ── 内部状态（由 load_state() 填充）─────────────────────
 
     _packets: dict[PacketId, WorkPacket] = field(default_factory=dict, init=False)
     _dep_graph: DependencyGraph | None = field(default_factory=lambda: None, init=False)
     _lock_table: LockTable = field(default_factory=LockTable, init=False)
     _active_workers: dict[PacketId, WorkerHandle] = field(default_factory=dict, init=False)
+    _decisions: list[DecisionRecord] = field(default_factory=list, init=False)
     _tick_count: int = field(default=0, init=False)
     _dirty: bool = field(default=False, init=False)
+    _scheduling_config: SchedulingConfig = field(
+        default_factory=default_scheduling_config,
+        init=False,
+    )
+    _ready_queue_entries: tuple[ReadyQueueEntry, ...] = field(default=(), init=False)
+    _ready_to_start: frozenset[PacketId] = field(default_factory=frozenset, init=False)
 
     _state_dir_ensured: bool = field(default=False, init=False)
     """是否已经铺过一次状态目录。
@@ -276,7 +374,11 @@ class ReconcileLoop:
                 self._packets[packet.id] = packet
 
         self._active_workers.clear()
+        self._decisions = _load_decisions(root)
         self._tick_count = 0
+        self._scheduling_config = load_scheduling_config(root)
+        self._ready_queue_entries = ()
+        self._ready_to_start = frozenset()
         self._dirty = False
 
     def save_state(self) -> None:
@@ -343,6 +445,7 @@ class ReconcileLoop:
         )
 
         self._write_budget(root)
+        self._write_scheduling(root)
         self.ensure_state_dir()
 
         self._dirty = False
@@ -379,6 +482,27 @@ class ReconcileLoop:
             "utf-8",
         )
 
+    def _write_scheduling(self, root: Path) -> None:
+        """把 WIP 上限、当前计数和 ready 队列投影到 scheduling.json。"""
+        root.mkdir(parents=True, exist_ok=True)
+        payload = (
+            json.dumps(
+                build_scheduling_projection(
+                    packets=tuple(self._packets.values()),
+                    config=self._scheduling_config,
+                    ready_queue=self._ready_queue_entries,
+                    selected_to_start=self._ready_to_start,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        target = root / "scheduling.json"
+        if target.exists() and target.read_text(encoding="utf-8") == payload:
+            return
+        target.write_text(payload, encoding="utf-8")
+
     def _heal_state_dir_if_missing(self) -> None:
         """常态下只做几次 stat；确实缺东西了才走完整的补齐流程。
 
@@ -390,6 +514,7 @@ class ReconcileLoop:
         root = Path(self.state_dir)
         required = (
             root / "graph.json",
+            root / "scheduling.json",
             root / "decisions.jsonl",
             root / "packets",
             root / "evidence",
@@ -472,6 +597,13 @@ class ReconcileLoop:
         #   这次出现在了修它的代码里。判据是「补完之后它在不在」。
         if budget_was_missing and (root / "budget.json").exists():
             healed.append("budget.json")
+
+        scheduling_was_missing = not (root / "scheduling.json").exists()
+        if not scheduling_was_missing:
+            self._scheduling_config = load_scheduling_config(root)
+        self._write_scheduling(root)
+        if scheduling_was_missing and (root / "scheduling.json").exists():
+            healed.append("scheduling.json")
 
         # ★ 补过东西就**出声**。
         #
@@ -572,7 +704,27 @@ class ReconcileLoop:
 
         # 构建依赖状态缓存（一次遍历，后续所有 packet 复用）
         dep_states = {pid: p.state for pid, p in self._packets.items()}
-        ctx = ReconcileContext(dep_states=dep_states)
+        self._scheduling_config = load_scheduling_config(self.state_dir)
+        self._ready_queue_entries = build_ready_queue(
+            self._packets,
+            lock_table=self._lock_table,
+            dep_states=dep_states,
+        )
+        counts = count_packet_states(tuple(self._packets.values()))
+        running_capacity = remaining_capacity("running", counts, self._scheduling_config)
+        allowed_entries = (
+            self._ready_queue_entries
+            if running_capacity is None
+            else self._ready_queue_entries[:running_capacity]
+        )
+        self._ready_to_start = frozenset(entry.packet_id for entry in allowed_entries)
+        self._write_scheduling(Path(self.state_dir))
+        ctx = ReconcileContext(
+            dep_states=dep_states,
+            scheduling=self._scheduling_config,
+            ready_queue=tuple(entry.packet_id for entry in self._ready_queue_entries),
+            ready_to_start=self._ready_to_start,
+        )
 
         for pid in sorted(self._packets):
             packet = self._packets[pid]
@@ -638,13 +790,15 @@ class ReconcileLoop:
         if state == "pending":
             return self._try_pending_to_ready(packet, ctx)
         elif state == "ready":
-            return self._try_ready_to_running(packet)
+            return self._try_ready_to_running(packet, ctx)
         elif state == "running":
-            return self._try_running_to_review(packet)
+            return self._try_running_to_review(packet, ctx)
         elif state == "blocked":
             return self._try_blocked_to_ready(packet, ctx)
         elif state == "review":
             return self._try_review_to_accepted(packet)
+        elif state == "rejected":
+            return self._try_rejected_to_ready(packet, ctx)
 
         return None
 
@@ -675,7 +829,9 @@ class ReconcileLoop:
 
     # ── ready → running ──────────────────────────────────────
 
-    def _try_ready_to_running(self, packet: WorkPacket) -> PacketTransition | None:
+    def _try_ready_to_running(
+        self, packet: WorkPacket, ctx: ReconcileContext
+    ) -> PacketTransition | None:
         """ready → running：获取路径锁，生成 worker 实例。
 
         两条路：
@@ -689,6 +845,18 @@ class ReconcileLoop:
                 detail="ready 但 ownsPaths 为空，无写权限无法执行",
                 evidence_refs=(),
             )
+
+        if self.paused:
+            # ★ 与撞 WIP 上限同一条语义：保持 ready，下轮再看。不是失败。
+            return None
+
+        config = ctx.scheduling or self._scheduling_config
+        if packet.id not in ctx.ready_to_start:
+            return None
+
+        counts = count_packet_states(tuple(self._packets.values()))
+        if not under_wip_limit("running", counts, config):
+            return None
 
         # 获取路径锁
         now = _now_iso()
@@ -776,12 +944,19 @@ class ReconcileLoop:
 
     # ── running → review / blocked ───────────────────────────
 
-    def _try_running_to_review(self, packet: WorkPacket) -> PacketTransition | None:
+    def _try_running_to_review(
+        self, packet: WorkPacket, ctx: ReconcileContext
+    ) -> PacketTransition | None:
         """检查 running packet 的 worker 是否已经结束。
 
         没有 WorkerRuntime 时 → 跳过（无法判定是否完成，留给外部驱动）。
         """
         if self.worker_runtime is None:
+            return None
+
+        config = ctx.scheduling or self._scheduling_config
+        counts = count_packet_states(tuple(self._packets.values()))
+        if not under_wip_limit("review", counts, config):
             return None
 
         handle = self._active_workers.get(packet.id)
@@ -937,19 +1112,61 @@ class ReconcileLoop:
 
     # ── review → accepted / rejected ─────────────────────────
 
+    def _integrate_before_accepting(
+        self, packet: WorkPacket
+    ) -> tuple[PacketTransition | None, str]:
+        """验收通过后、真正标 accepted 之前，把产出合回主项目。
+
+        ★ 「accepted」必须意味着**东西真的进了项目**，否则它只是一句状态字符串：
+          packet 显示验收通过，而使用者打开项目什么都没有。
+
+        ★ 合入失败转 **blocked** 而不是留在 review：
+          留在 review 会每轮重试合并，而失败原因（工作区不干净、改了别人的路径、
+          合并冲突）通常不会自己消失 —— 那样只是把一次失败变成无限次失败。
+
+        返回 `(转移 | None, 结论)`：转移非 None 表示**已经转到 blocked**，
+        调用方应直接返回它；结论无论成败都要写进 accepted 的 detail。
+        """
+
+        if self.result_integrator is None:
+            return None, ""
+        try:
+            ok, detail = self.result_integrator(packet)
+        except Exception as exc:  # noqa: BLE001
+            ok, detail = False, f"合入过程异常：{type(exc).__name__}: {exc}"
+        if ok:
+            logger.info("packet %s 合入：%s", packet.id, detail)
+            # ★ 即使成功也把结论带回 accepted 的 detail —— 「没有改动」
+            #   「没有执行记录」「找不到工作区」都属于「**没有合入任何东西**」，
+            #   它们与「合入了 N 处」在状态上都是 accepted，
+            #   不写出来就分辨不出。
+            return None, detail
+        logger.warning("packet %s 合入失败，转 blocked：%s", packet.id, detail)
+        return self._apply_transition(
+            packet, target="blocked", detail=f"验收通过但合入失败：{detail}", evidence_refs=()
+        ), detail
+
     def _try_review_to_accepted(self, packet: WorkPacket) -> PacketTransition | None:
         """review → accepted：运行门禁判定。
 
         优先使用 gate_runner（若已配置），否则退回到简单证据检查。
         """
+        if packet.acceptance.kind == "manual":
+            return self._try_manual_acceptance(packet)
+
         if self.gate_runner is not None:
             # 用 gate_runner 跑门禁
             gate_id = "review"
             if self.transition_table is not None:
                 # 查 TransitionTable 看需要哪个门禁
                 try:
-                    verdict = self.transition_table.check(
-                        role=packet.role,
+                    # ★ 用 check_system 而不是 check(role=packet.role, ...)。
+                    #   后者问的是「coder 能不能触发签字」—— 而调和循环不是角色，
+                    #   它在门禁通过后**代为应用**。问错了人，就把
+                    #   「不能给自己签字」变成了「没有人能签字」。
+                    verdict = self.transition_table.check_system(
+                        packet_role=packet.role,
+                        acceptance_author=packet.acceptance.authoredBy,
                         current="review",
                         target="accepted",
                         evidence=packet.evidence,
@@ -965,10 +1182,15 @@ class ReconcileLoop:
             if not gate_result.passed:
                 return None
 
+            blocked, note = self._integrate_before_accepting(packet)
+            if blocked is not None:
+                return blocked
+
             return self._apply_transition(
                 packet,
                 target="accepted",
-                detail=f"门禁 {gate_id!r} 通过：{gate_result.detail}",
+                detail=f"门禁 {gate_id!r} 通过：{gate_result.detail}"
+                + (f"｜合入：{note}" if note else ""),
                 evidence_refs=gate_result.evidence_refs,
             )
 
@@ -1000,16 +1222,212 @@ class ReconcileLoop:
             )
             return None
 
+        blocked, note = self._integrate_before_accepting(packet)
+        if blocked is not None:
+            return blocked
+
         return self._apply_transition(
             packet,
             target="accepted",
-            detail=f"验收门禁通过（{len(real)} 条证据）",
+            detail=f"验收门禁通过（{len(real)} 条证据）" + (f"｜合入：{note}" if note else ""),
             evidence_refs=real,
         )
+
+    # ── review → accepted（manual 验收）────────────────────────
+
+    def _try_manual_acceptance(self, packet: WorkPacket) -> PacketTransition | None:
+        """manual 验收：机器判不了，人工审批才是验收。
+
+        ★ 堵 2026-08-12 那个洞：kind=manual 的谓词永远不会被执行，
+          「产生一条真实证据」就等于「验收通过」。这里要求操作者显式
+          approve，否则永远停在 review —— 有证据 ≠ 有人签字。
+        """
+        # ★ 取 approve / reject 里**时间最新的那一条**，而不是先查 reject。
+        #
+        #   先查 reject 的后果是：一个被驳回过的 packet **再也批不通**。
+        #   rejected → ready → 重做 → review，而那条旧 reject 还在日志里，
+        #   于是又被同一条决定打回 —— operator 后来的批准被静默忽略。
+        #
+        #   实测：先 reject 再 approve，`_try_manual_acceptance` 推到 rejected。
+        #   人工审批的语义是「最后一次表态算数」，不是「一票否决且永久有效」。
+        decision = self._latest_operator_decision(packet.id, ("approve", "reject"))
+        if decision is None:
+            return None  # 等待人工审批，留在 review
+
+        if decision.action == "reject":
+            detail = "人工驳回（operator）"
+            if decision.detail:
+                detail += f"：{decision.detail}"
+            return self._apply_transition(
+                packet, target="rejected", detail=detail, evidence_refs=(),
+            )
+
+        blocked, note = self._integrate_before_accepting(packet)
+        if blocked is not None:
+            return blocked
+        return self._apply_transition(
+            packet,
+            target="accepted",
+            detail="人工审批通过（operator）" + (f"｜合入：{note}" if note else ""),
+            evidence_refs=(),
+        )
+
+    def _try_rejected_to_ready(
+        self, packet: WorkPacket, ctx: ReconcileContext
+    ) -> PacketTransition | None:
+        """rejected → ready：打回重做，重新进入调度。
+
+        ★ rejected 不是终态（状态机文档写死）。打回的 packet 依赖未变，
+          直接放回 ready，让它在下一轮被重新调度。
+        """
+        return self._apply_transition(
+            packet, target="ready", detail="打回重做，重新调度", evidence_refs=(),
+        )
+
+    # ════════════════════════════════════════════════════════════
+    #  人工审批 / 回滚（operator 动作）
+    # ════════════════════════════════════════════════════════════
+
+    def approve(self, packet_id: PacketId, *, note: str | None = None) -> DecisionRecord:
+        """操作者审批通过一个 manual 验收的 packet。
+
+        ★ 只记录决定，不直接改状态：reconcile 下一轮 tick 看到这条
+          approve 决定后，才会把 review → accepted。状态推进仍然只有
+          _apply_transition 一个出口，审批决定是它的前置条件。
+        """
+        return self._record_operator_decision(packet_id, action="approve", note=note)
+
+    def reject(self, packet_id: PacketId, *, note: str | None = None) -> DecisionRecord:
+        """操作者驳回一个 packet（打回重做）。"""
+        return self._record_operator_decision(packet_id, action="reject", note=note)
+
+    def rollback(self, packet_id: PacketId, *, note: str | None = None) -> tuple[bool, str]:
+        """操作者回滚一个已合入的 packet 产出。
+
+        ★ 记录一条 actor=operator、action=rollback 的决定，然后调用注入的
+          result_rollbacker 执行真正的撤销（git revert）。控制平面本身不碰 git。
+        """
+        if packet_id not in self._packets:
+            raise ValueError(f"unknown packet: {packet_id}")
+        self._record_operator_decision(packet_id, action="rollback", note=note)
+        if self.result_rollbacker is None:
+            return False, "未配置 result_rollbacker：回滚决定已记录，但未执行撤销"
+        packet = self._packets[packet_id]
+        try:
+            ok, detail = self.result_rollbacker(packet)
+        except Exception as exc:  # noqa: BLE001
+            ok, detail = False, f"回滚异常：{type(exc).__name__}: {exc}"
+        return ok, detail
+
+    def _record_operator_decision(
+        self, packet_id: PacketId, *, action: str, note: str | None
+    ) -> DecisionRecord:
+        """写一条 operator 决定（append 到 decisions.jsonl + 内存）。"""
+        if packet_id not in self._packets:
+            raise ValueError(f"unknown packet: {packet_id}")
+        record = DecisionRecord(
+            at=_now_iso(),
+            actor="operator",
+            action=action,
+            packetId=packet_id,
+            reasonCode=f"Operator.{action}",
+            detail=note or None,
+        )
+        _append_decision_record(Path(self.state_dir), record)
+        self._decisions.append(record)
+        return record
+
+    def _latest_operator_decision(
+        self, packet_id: PacketId, actions: tuple[str, ...]
+    ) -> DecisionRecord | None:
+        """取这几个动作里**时间最新**的一条 operator 决定（无则 None）。
+
+        ★ 与 `_operator_decision` 的区别是要害所在：那个是「某个动作的最新一条」，
+          这个是「**这些动作之间**谁最后表的态」。
+          用前者去判 approve/reject 的先后，等于两条时间线各自独立 ——
+          而人工审批的语义是「最后一次表态算数」。
+        """
+
+        for record in reversed(self._decisions):
+            if (
+                record.actor == "operator"
+                and record.action in actions
+                and record.packetId == packet_id
+            ):
+                return record
+        return None
+
+    def _operator_decision(self, packet_id: PacketId, action: str) -> DecisionRecord | None:
+        """取最新一条指定动作的 operator 决定（无则 None）。"""
+        for record in reversed(self._decisions):
+            if (
+                record.actor == "operator"
+                and record.action == action
+                and record.packetId == packet_id
+            ):
+                return record
+        return None
 
     # ════════════════════════════════════════════════════════════
     #  内部辅助
     # ════════════════════════════════════════════════════════════
+
+    def _append_decision(
+        self,
+        packet: WorkPacket,
+        from_state: PacketState,
+        to_state: PacketState,
+        detail: str,
+    ) -> None:
+        """把一次状态转移追加到 `decisions.jsonl`。
+
+        ════════════════════════════════════════════════════════
+         ★ 这条日志的契约冻结于 2026-08-02，而从来没有一处写过它
+        ════════════════════════════════════════════════════════
+
+        `DecisionRecord` 定义完整、schema 冻结、被 `__init__` 导出 ——
+        但**全仓库没有任何一处构造过它**。`decisions.jsonl` 被
+        `ensure_state_dir()` 建成空文件，然后一直是空的。
+
+        后果具体而且致命：**每个 packet 在每个状态停了多久，这段历史根本不存在。**
+        于是流动效率、等待 p80、瓶颈这些都算不出来 ——
+        不是算法没写，是**没有可算的东西**。
+
+        ★ 挂在 `_apply_transition` 上，因为那是 reconcile **唯一**修改状态的地方。
+          挂在别处必然漏。
+
+        ════════════════════════════════════════════════════════
+         ★ actor 字段的一处取舍（契约缺口，记在案）
+        ════════════════════════════════════════════════════════
+
+        `DecisionRecord.actor` 只允许 `RoleId | "operator"` ——
+        **没有「控制平面自己」这个取值**，而状态转移恰恰是控制平面决定的。
+
+        这里填 packet 的角色（读作「这个角色的活动了」），
+        真正的决策者放进机器可读的 `reasonCode`（`Reconcile.*`）。
+
+        不改契约是因为它冻结了（I3），改它要三人同意 + 新 ADR + 变更窗口；
+        而这个缺口不影响任何判定 —— 但它是**真实的建模缺口**，不该假装没有。
+        """
+
+        try:
+            record = DecisionRecord(
+                at=_now_iso(),
+                actor=packet.role,
+                action="packet_transitioned",
+                packetId=packet.id,
+                reasonCode=f"Reconcile.{from_state}_to_{to_state}",
+                detail=detail or None,
+            )
+            path = Path(self.state_dir) / "decisions.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(record.model_dump_json(exclude_none=True) + "\n")
+        except OSError as exc:
+            # ★ 记账失败不能拖垮状态推进 —— 但也不能静默：
+            #   日志悄悄停止增长，会让 flow.json 上的数字变成假数，
+            #   而那比没有 flow.json 更糟。
+            logger.warning("决策日志写入失败（状态推进不受影响）：%s", exc)
 
     def _apply_transition(
         self,
@@ -1034,6 +1452,8 @@ class ReconcileLoop:
 
         new_packet = packet.model_copy(update=updates)
         self._packets[packet.id] = new_packet
+
+        self._append_decision(packet, old_state, target, detail)
 
         return PacketTransition(
             packet_id=packet.id,

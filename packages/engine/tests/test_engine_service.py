@@ -16,12 +16,14 @@ from pathlib import Path
 import pytest
 from codentum_delivery.protocol import CAPABILITY_NAMES, validate_handshake, validate_receipt
 from codentum_engine.intake import (
+    RequirementRecord,
     build_packet_for_requirement,
     choose_acceptance_author,
     new_packet_id,
 )
 from codentum_engine.service import IMPLEMENTED_CAPABILITIES, EngineConfig, EngineService
 from codentum_engine.session import EngineSession
+from codentum_harness.worker import TeamWorkerRuntime
 
 _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS_LLM_API_KEY")
 
@@ -66,6 +68,11 @@ def _command(action: str, run_id: str, project: Path, **payload: object) -> dict
         "payload": {"projectRoot": str(project), **payload},
         "requestedAt": "2026-08-10T12:00:00.000Z",
     }
+
+
+class _Request:
+    def __init__(self, packet_id: object) -> None:
+        self.packet_id = packet_id
 
 
 # ══════════════════════════════════════════════════════════════
@@ -114,6 +121,15 @@ def test_without_a_model_key_requirements_is_not_advertised(project: Path, no_ke
     assert isinstance(capabilities, dict)
     assert capabilities["requirements"] is False
     assert "unavailableReason" in handshake
+
+
+def test_worker_runtime_mode_team_selects_team_runtime(project: Path, fake_key: None) -> None:
+    """Team-mode 不是测试孤岛；生产装配能真的选到 TeamWorkerRuntime。"""
+
+    service = _service(project, worker_runtime_mode="team")
+    runtime = service._build_worker_runtime()
+
+    assert isinstance(runtime, TeamWorkerRuntime)
 
 
 def test_state_revision_survives_a_restart(project: Path, fake_key: None) -> None:
@@ -263,6 +279,16 @@ def test_knowledge_resource_selection_is_indexed_into_memory_context(
     assert "indexVersion: sha256:" in memory_candidates[0].text
     assert "CNY 成本归因" in memory_candidates[0].text
     assert list((project / ".codentum" / "memory" / "index" / "entries").glob("*.json"))
+    projection = json.loads(
+        (project / ".codentum" / "memory" / "projection.json").read_text(encoding="utf-8")
+    )
+    assert projection["packetId"] == str(packet_id)
+    assert projection["indexVersion"].startswith("sha256:")
+    assert projection["sourceCount"] == 1
+    assert projection["indexedRefCount"] == 1
+    assert projection["retrievalCount"] >= 1
+    assert projection["retrievals"][0]["category"] == "knowledge"
+    assert projection["retrievals"][0]["memoryRef"].startswith("mem:sha256:")
 
 
 def test_unknown_payload_fields_are_archived_not_dropped(project: Path, fake_key: None) -> None:
@@ -316,12 +342,18 @@ def test_submit_without_key_is_rejected_not_silently_queued(project: Path, no_ke
 
 def test_unimplemented_action_is_rejected_not_silently_applied(project: Path, fake_key: None) -> None:
     """★ 走到这里说明网关的能力检查放行了一个没实现的动作。
-    静默回 applied 会让「暂停」看起来生效了。"""
+    静默回 applied 会让那个动作看起来生效了。
+
+    ★ 这条原先用 `pause_at_safe_point` 举例。2026-08-15 暂停被真的实现之后，
+      它变红了 —— 举例用的动作必须是**当下确实没实现**的那个，
+      否则这条测试测的是「一个已实现的动作被拒」，语义正好反了。
+      改用 `fork_from_checkpoint`（`IMPLEMENTED_CAPABILITIES` 里明确列了理由）。
+    """
 
     service = _service(project)
-    receipt = service.command(_command("pause_at_safe_point", service.run_id, project))
+    receipt = service.command(_command("fork_from_checkpoint", service.run_id, project))
     assert receipt["status"] == "rejected"
-    assert receipt["reason"] == "action_not_implemented:pause_at_safe_point"
+    assert receipt["reason"] == "action_not_implemented:fork_from_checkpoint"
 
 
 def test_admission_runs_before_anything_is_written(project: Path, fake_key: None) -> None:
@@ -566,6 +598,126 @@ def test_role_skills_are_projected_into_project_shared_space(
     assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text("utf-8")
 
 
+def test_selected_local_skill_is_projected_and_added_to_runtime_role_spec(
+    project: Path,
+    fake_key: None,
+    tmp_path: Path,
+) -> None:
+    """★ 前端已经能选本地 Skill；引擎必须把它变成 Worker 真能读的共享 Skill。"""
+
+    service = _service(project)
+    packet_id = new_packet_id()
+    local_skill = tmp_path / "uploaded-skill"
+    local_skill.mkdir()
+    (local_skill / "SKILL.md").write_text(
+        "---\n"
+        "name: 上传的前端审计 Skill\n"
+        "description: 本地上传给 coder 使用\n"
+        "---\n\n"
+        "# 上传的前端审计 Skill\n\n"
+        "检查响应式布局、键盘可达性和错误态。\n",
+        encoding="utf-8",
+    )
+    service._requirements.save(
+        RequirementRecord(
+            packet_id=str(packet_id),
+            text="实现登录页并检查键盘可达性",
+            submitted_at="2026-08-15T00:00:00.000Z",
+            command_id="cmd-local-skill",
+            payload={
+                "resourceSelectionContract": "codentum.resource-selection.v1",
+                "resourceSelections": [
+                    {
+                        "id": "managed:local-skill",
+                        "kind": "skill",
+                        "scope": "role",
+                        "roleId": "coder",
+                        "sourceKind": "folder",
+                        "localPath": str(local_skill),
+                    }
+                ],
+            },
+        )
+    )
+
+    request = _Request(packet_id)
+    base = next(spec for spec in service._role_specs if spec.id == "coder")
+    resolved = service._role_spec_for_request(request, base)
+    injected = [skill.id for skill in (resolved.skills or ()) if skill.id.startswith("local-")]
+
+    assert len(injected) == 1
+    shared = project / ".codentum" / "skills" / "shared" / injected[0]
+    assert "键盘可达性" in (shared / "SKILL.md").read_text(encoding="utf-8")
+    manifest = json.loads((shared / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["origin"] == "local"
+    projection = json.loads((project / ".codentum" / "skills" / "projection.json").read_text("utf-8"))
+    assert projection["projectedCount"] == 1
+    assert projection["projected"][0]["origin"] == "local"
+
+
+def test_cloud_skill_catalog_is_searched_by_requirement_and_projected(
+    project: Path,
+    fake_key: None,
+    tmp_path: Path,
+) -> None:
+    """★ 云 Skills 不是静态展示：配置 catalog 后按需求文本检索并注入当前 Worker。"""
+
+    catalog = tmp_path / "cloud-skills.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "skills": [
+                    {
+                        "id": "frontend-accessibility",
+                        "name": "前端可访问性审计",
+                        "description": "面向登录页、表单、键盘导航和 accessibility 的检查",
+                        "roles": ["coder"],
+                        "tags": ["frontend", "accessibility", "登录", "键盘"],
+                        "body": "# 前端可访问性审计\n\n提交前检查 tab 顺序、aria 和错误提示。",
+                    },
+                    {
+                        "id": "database-indexing",
+                        "name": "数据库索引",
+                        "description": "PostgreSQL 查询优化",
+                        "roles": ["coder"],
+                        "tags": ["postgres", "index"],
+                        "body": "# 数据库索引\n\n检查查询计划。",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service = _service(project, cloud_skills_catalog=str(catalog))
+    packet_id = new_packet_id()
+    service._requirements.save(
+        RequirementRecord(
+            packet_id=str(packet_id),
+            text="实现登录页，需要 accessibility 和键盘导航审计",
+            submitted_at="2026-08-15T00:00:00.000Z",
+            command_id="cmd-cloud-skill",
+            payload={},
+        )
+    )
+
+    request = _Request(packet_id)
+    base = next(spec for spec in service._role_specs if spec.id == "coder")
+    resolved = service._role_spec_for_request(request, base)
+    injected = [skill.id for skill in (resolved.skills or ()) if skill.id.startswith("cloud-")]
+
+    assert len(injected) == 1
+    shared = project / ".codentum" / "skills" / "shared" / injected[0]
+    assert "# 前端可访问性审计" in (shared / "SKILL.md").read_text(encoding="utf-8")
+    manifest = json.loads((shared / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["origin"] == "cloud"
+    assert manifest["sourceSkillId"] == "frontend-accessibility"
+    projection = json.loads((project / ".codentum" / "skills" / "projection.json").read_text("utf-8"))
+    assert projection["cloudSearch"]["enabled"] is True
+    assert projection["cloudSearch"]["matchedCount"] == 1
+
+
 def test_mcp_services_are_projected_into_project_state(
     project: Path,
     fake_key: None,
@@ -675,6 +827,12 @@ def test_sedimented_memory_is_retrieved_without_any_knowledge_sources(
     ]
     assert memory_candidates, "没有知识资源时，沉淀下来的经验一条都没被读到"
     assert any("ImportError" in c.text for c in memory_candidates)
+    projection = json.loads(
+        (project / ".codentum" / "memory" / "projection.json").read_text(encoding="utf-8")
+    )
+    assert projection["sourceCount"] == 0
+    assert projection["retrievalCount"] >= 1
+    assert any(hit["category"] == "experience" for hit in projection["retrievals"])
 
 
 # ══════════════════════════════════════════════════════════════
@@ -828,3 +986,200 @@ def test_judgement_hits_are_recorded_to_disk(project: Path, fake_key: None) -> N
 
     shadow = [row for row in rows if row["mode"] == "shadow"]
     assert shadow, "影子判据一条记录都没有 —— 影子期攒不到任何证据"
+
+
+# ══════════════════════════════════════════════════════════════
+#  项目初始化：打开一个新文件夹就提需求
+#
+#  ★ 上面那个 `project` 夹具是 `git init` **不带提交** —— 也就是说
+#    本文件此前那 33 条测试，一直跑在一个 **worker 根本起不来**的项目上，
+#    却全部是绿的。它们测的是准入与状态，碰不到 worktree 那一层。
+#
+#    真实现象（2026-08-15 实测）：
+#      spawn 失败，packet wp-xxx 保持 ready 并释放锁：
+#      WorktreeIsolationError: fatal: invalid reference: HEAD
+#
+#    后果不是崩溃 —— 是 packet 永远停在 ready，使用者只看到「什么都没发生」。
+# ══════════════════════════════════════════════════════════════
+
+
+def test_engine_startup_makes_a_fresh_repo_worktree_ready(project: Path, fake_key: None) -> None:
+    """★ 引擎起来之后，隔离层必须**真的能用** —— 不只是「初始化函数被调过」。
+
+    断言落在 `GitWorktreeManager.create()` 能成功，而不是「HEAD 存在」：
+    后者是前者的必要条件，测前者才是测这件事本身。
+    """
+
+    from codentum_harness.worker import GitWorktreeManager
+
+    _service(project)  # 构造即初始化
+
+    workspace = project.parent / "codentum-workers" / "probe"
+    assert GitWorktreeManager(project).create(workspace).exists()
+
+
+def test_engine_startup_never_rewrites_a_project_that_has_history(
+    tmp_path: Path, fake_key: None
+) -> None:
+    """★ 安全判据：使用者把 Codentum 指向一个真实项目时，
+    它绝不能往那段历史里写东西。
+    """
+
+    repo = tmp_path / "real-project"
+    repo.mkdir()
+    for args in (
+        ["init", "-q"], ["config", "user.name", "t"], ["config", "user.email", "t@e.com"],
+    ):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "real work"], cwd=repo, check=True, capture_output=True)
+
+    def head_log() -> str:
+        return subprocess.run(
+            ["git", "log", "--oneline"], cwd=repo, check=True, capture_output=True, text=True
+        ).stdout
+
+    before = head_log()
+    _service(repo)
+    assert head_log() == before, "引擎在使用者已有的仓库历史上加了提交"
+
+
+def test_plain_folder_without_git_is_initialized(tmp_path: Path, fake_key: None) -> None:
+    """连 `.git` 都没有的普通目录 —— 桌面端「打开一个新文件夹」的最常见形态。"""
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    service = _service(plain)
+
+    assert (plain / ".git").exists()
+    assert service._project_init is not None
+    assert service._project_init.changed is True
+
+
+def test_scheduling_and_flow_projections_land_during_a_real_run(
+    project: Path, fake_key: None
+) -> None:
+    """★ 缺口 ③ 的接线判据：C 的读取与显示早就写好了，卡在没有权威数据源。
+
+    这条守的不是「投影算得对」（那在 test_projections.py），
+    而是**它到底有没有在真实运行里被写出来**。
+    """
+
+    service = _service(project)
+    service.command(_command("submit_requirement", service.run_id, project, requirement="做一个待办清单"))
+    for thread in service._workers:
+        thread.join(timeout=60)
+
+    state_dir = project / ".codentum"
+    scheduling = json.loads((state_dir / "scheduling.json").read_text("utf-8"))
+    flow = json.loads((state_dir / "flow.json").read_text("utf-8"))
+
+    assert scheduling["schemaVersion"] == 1
+    # ★ WIP 上限必须是**真正被执行的**那个（控制平面的 wip_limiter 默认值），
+    #   而不是投影自己编的数字。
+    assert scheduling["wipLimits"] == {"running": 4, "review": 2}
+    # ★ readyQueue 必须是字符串数组 —— 桌面端守卫 fail-closed，
+    #   形状不对会让整个文件被拒
+    assert all(isinstance(x, str) for x in scheduling["readyQueue"])
+    assert flow["schemaVersion"] == 1
+
+    # 决策日志必须有内容，否则 flow 里的时长全部来自空气
+    decisions = (state_dir / "decisions.jsonl").read_text("utf-8").strip()
+    assert decisions, "转移发生过，decisions.jsonl 却是空的 —— flow 无据可算"
+
+
+def test_engine_wires_the_result_integrator(project: Path, fake_key: None) -> None:
+    """★ 缺口 ⑥ 的接线判据：合入器必须真的被注入。
+
+    没注入的话，packet 会是 accepted 而项目里什么都没有 ——
+    而那正是这条缺口原本的样子：**「验收通过」只是一句状态字符串**。
+
+    这条守的是「接上了」；合入本身的行为判据在
+    packages/harness/tests/test_integrate.py（7 条）。
+    """
+
+    loop = _service(project)._build_loop()
+    assert loop.result_integrator is not None, "合入器没被注入 —— accepted 不代表东西进了项目"
+
+
+# ══════════════════════════════════════════════════════════════
+#  暂停 / 恢复 / 停止（缺口 ①）
+# ══════════════════════════════════════════════════════════════
+
+
+def test_pause_without_running_workers_is_applied(project: Path, fake_key: None) -> None:
+    """★ 没有 worker 在跑时，此刻就是安全点 —— 回 applied。"""
+
+    service = _service(project)
+    receipt = service.command(_command("pause_at_safe_point", service.run_id, project))
+    validate_receipt(receipt, "cmd-pause_at_safe_point-1")
+    assert receipt["status"] == "applied"
+    assert service._paused is True
+
+
+def test_resume_is_idempotent(project: Path, fake_key: None) -> None:
+    """★ 没暂停时 resume 也回 applied，而不是报错。
+
+    桌面端可能在不确定状态下重发；把它判成错误只会制造噪音，
+    而噪音会淹掉真正该看的那条。
+    """
+
+    service = _service(project)
+    for _ in range(2):
+        receipt = service.command(_command("resume", service.run_id, project))
+        assert receipt["status"] == "applied"
+    assert service._paused is False
+
+
+def test_stop_then_further_commands_are_rejected(project: Path, fake_key: None) -> None:
+    """★ 停了就是停了 —— 之后的命令必须被拒，不能静默接受。"""
+
+    service = _service(project)
+    assert service.command(_command("stop", service.run_id, project))["status"] == "applied"
+
+    after = service.command(_command("submit_requirement", service.run_id, project, requirement="再来一个"))
+    assert after["status"] == "rejected"
+    assert after["reason"] == "engine_stopping"
+
+
+def test_the_three_new_capabilities_are_advertised(project: Path, fake_key: None) -> None:
+    """★ 能力表与实现必须一致。
+
+    报 false 的那五项是**正确行为**不是欠账：网关会以 capability_unavailable
+    直接拒绝，桌面端也就不会显示成可用。报一个什么都不做的 true 才是病。
+    """
+
+    capabilities = _service(project).handshake()["capabilities"]
+    assert isinstance(capabilities, dict)
+    for name in ("pauseAtSafePoint", "resume", "stop"):
+        assert capabilities[name] is True, f"{name} 实现了却没报出来"
+    for name in ("keepMemory", "appendPrompt", "insertModule", "planConfirmation", "forkFromCheckpoint"):
+        assert capabilities[name] is False, f"{name} 没实现却报了 true"
+
+
+def test_pause_with_running_workers_says_waiting_not_applied(
+    project: Path, fake_key: None
+) -> None:
+    """★ 「暂停请求已收到」与「已经停住了」是两件事。
+
+    都回 applied 的话，使用者会以为已经停住了，
+    **而实际上 worker 还在写文件**。协议里本来就有 waiting_safe_point 这个状态。
+    """
+
+    import threading
+
+    service = _service(project)
+    still_running = threading.Event()
+    worker = threading.Thread(target=still_running.wait, daemon=True)
+    worker.start()
+    service._workers.append(worker)
+    try:
+        receipt = service.command(_command("pause_at_safe_point", service.run_id, project))
+        validate_receipt(receipt, "cmd-pause_at_safe_point-1")
+        assert receipt["status"] == "waiting_safe_point"
+        assert "仍在执行" in str(receipt["reason"])
+    finally:
+        still_running.set()
+        worker.join(timeout=5)

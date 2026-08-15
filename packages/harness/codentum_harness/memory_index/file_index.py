@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -44,9 +45,12 @@ class MemoryIndexConflictError(MemoryIndexError):
 class PersistentMemoryIndex:
     """Small deterministic MemoryIndex backed by JSON files.
 
-    This implementation intentionally avoids vector retrieval. The semantic mode
-    returns a degraded lexical fallback so callers can see that the least
-    deterministic tier was requested without pretending embeddings exist.
+    SEMANTIC mode is a deterministic TF-IDF vector-space model with cosine
+    ranking — no neural embeddings, no third-party deps. The frozen MemoryIndex
+    protocol requires retrieval to be reproducible for replay, so the "vector
+    similarity" tier is a statistical bag-of-words VSM: it ranks by weighted
+    term importance (rare terms count more via idf) rather than boolean overlap,
+    but stays fully deterministic — same corpus + same query → same ranking.
     """
 
     def __init__(self, root: Path | str) -> None:
@@ -70,7 +74,7 @@ class PersistentMemoryIndex:
         entries = self._eligible_entries(query)
         ranked = _rank(entries, query)
         selected, degraded_by_budget = _fit_budget(ranked[: query.limit], query.char_budget)
-        degraded = degraded_by_budget or query.mode == RetrievalMode.SEMANTIC
+        degraded = degraded_by_budget
         return RetrievalResult(
             entries=tuple(selected),
             index_version=self.version_now(),
@@ -251,6 +255,9 @@ def _rank(entries: list[MemoryEntry], query: RetrievalQuery) -> list[MemoryEntry
         ranked = [entry for entry in entries if _structural_score(entry, terms) > 0]
         return sorted(ranked, key=lambda item: (-_structural_score(item, terms), item.ref))
 
+    if query.mode == RetrievalMode.SEMANTIC:
+        return _semantic_rank(entries, query)
+
     terms = _tokens(query.q)
     ranked = [entry for entry in entries if _lexical_score(entry, terms) > 0]
     return sorted(ranked, key=lambda item: (-_lexical_score(item, terms), item.ref))
@@ -306,6 +313,73 @@ def _lexical_score(entry: MemoryEntry, terms: frozenset[str]) -> int:
         return 0
     haystack = _tokens(entry.text)
     return len(terms & haystack)
+
+
+def _semantic_rank(entries: list[MemoryEntry], query: RetrievalQuery) -> list[MemoryEntry]:
+    """TF-IDF 向量空间模型 + 余弦相似度排序。
+
+    ★ 确定性：idf 由「本轮 eligible 语料」计算，语料确定 → 向量确定 →
+      排名确定。这与冻结契约「同 query + 同 index_version → 逐条相同结果」
+      的要求一致，且不引入随机采样 / 时间加权等非确定手段。
+
+    ★ 与 LEXICAL 的区别：LEXICAL 是布尔重叠计数（命中一个词 +1），
+      SEMANTIC 是加权连续相似度 —— 稀有词（df 低、idf 高）比常见词更值钱，
+      于是「命中一个稀有词」可以压过「命中两个常见词」。这是统计意义上的
+      「语义」向量检索，不是神经网络 embedding —— 不夸大，也不假装有。
+    """
+    if not entries:
+        return []
+    query_freqs = _token_freqs(query.q)
+    if not query_freqs:
+        # 空查询无词项，无任何方向 —— 语义检索不返回无相似度的条目。
+        return []
+
+    corpus = [_token_freqs(entry.text) for entry in entries]
+    document_freq: dict[str, int] = {}
+    for freqs in corpus:
+        for term in freqs:
+            document_freq[term] = document_freq.get(term, 0) + 1
+
+    n = len(entries)
+    idf = {
+        term: math.log((n + 1.0) / (df + 1.0)) + 1.0
+        for term, df in document_freq.items()
+    }
+
+    query_vector = {term: count * idf[term] for term, count in query_freqs.items() if term in idf}
+    if not query_vector:
+        # 查询词项与语料零重叠 —— 没有任何条目与之语义相似。
+        return []
+    query_norm = math.sqrt(sum(weight * weight for weight in query_vector.values())) or 1.0
+
+    scored: list[tuple[float, MemoryEntry]] = []
+    for entry, freqs in zip(entries, corpus, strict=True):
+        doc_vector = {term: count * idf[term] for term, count in freqs.items() if term in idf}
+        if not doc_vector:
+            continue
+        doc_norm = math.sqrt(sum(weight * weight for weight in doc_vector.values())) or 1.0
+        dot = sum(query_vector.get(term, 0.0) * weight for term, weight in doc_vector.items())
+        similarity = dot / (query_norm * doc_norm)
+        if similarity > 0.0:
+            scored.append((similarity, entry))
+    scored.sort(key=lambda item: (-item[0], item[1].ref))
+    return [entry for _, entry in scored]
+
+
+def _token_freqs(text: str) -> dict[str, int]:
+    """词项频次（含 CJK n-gram 展开）。与 `_tokens` 同一套分词，但保留计数。
+
+    ★ TF 需要频次而非集合：`_tokens` 返回 frozenset 丢了「一个词出现几次」，
+      TF-IDF 的 tf 分量必须依赖计数。
+    """
+    freqs: dict[str, int] = {}
+    for match in _WORD_RE.finditer(text):
+        token = match.group(0).lower()
+        freqs[token] = freqs.get(token, 0) + 1
+        if _is_cjk_token(token):
+            for gram in _ngrams(token, min_size=2, max_size=6):
+                freqs[gram] = freqs.get(gram, 0) + 1
+    return freqs
 
 
 def _tokens(text: str) -> frozenset[str]:
