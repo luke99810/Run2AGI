@@ -1272,3 +1272,40 @@ class TestResultIntegration:
         self._reviewable(empty_loop, "wp-integ0003")
         empty_loop.tick()
         assert empty_loop.packets[PacketId("wp-integ0003")].state == "accepted"
+
+
+class TestPause:
+    def test_paused_stops_new_packets_from_starting(self, empty_loop: ReconcileLoop) -> None:
+        """★ 暂停 = 不再放新的 packet 进 running。"""
+
+        empty_loop.paused = True
+        _inject(empty_loop, _make_packet("wp-pause0001", state="ready"))
+        empty_loop.tick()
+        assert empty_loop.packets[PacketId("wp-pause0001")].state == "ready"
+
+        empty_loop.paused = False
+        empty_loop.tick()
+        assert empty_loop.packets[PacketId("wp-pause0001")].state == "running", (
+            "解除暂停后没有恢复开工 —— 那就不是暂停，是停死了"
+        )
+
+    def test_paused_still_settles_and_accepts_running_work(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 暂停**不打断**已经在跑的。
+
+        打断一个正在跑的 worker，它手上握着的路径锁会变成**没有主人的锁** ——
+        那比不暂停糟得多。所以暂停只挡在 ready→running，
+        settle 与验收必须照常走，否则「等在跑的收尾」这句话无法兑现。
+        """
+
+        empty_loop.paused = True
+        packet = _make_packet("wp-pause0002", state="review").model_copy(
+            update={"evidence": (EvidenceRef("file:model/result.json"),), "attempts": 1}
+        )
+        _inject(empty_loop, packet)
+        empty_loop.tick()
+
+        assert empty_loop.packets[PacketId("wp-pause0002")].state == "accepted", (
+            "暂停把验收也挡住了 —— 在跑的活永远收不了尾"
+        )

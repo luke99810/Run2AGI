@@ -130,7 +130,26 @@ _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS
 #
 #   加实现的时候记得同步这里；忘了同步的后果是「实现了但用不了」，
 #   比「没实现」更难查。
-IMPLEMENTED_CAPABILITIES: tuple[str, ...] = ("requirements",)
+IMPLEMENTED_CAPABILITIES: tuple[str, ...] = (
+    "requirements",
+    "pauseAtSafePoint",
+    "resume",
+    "stop",
+)
+"""真正实现了的动作。
+
+★ 其余五项**仍然报 false**，而且那是正确行为，不是欠账没还：
+  报 false 之后网关会以 capability_unavailable 直接拒绝，
+  桌面端也就不会把它们显示成可用。**报一个什么都不做的 true 才是病。**
+
+  · keepMemory        —— 目前 `stop` 本来就不清记忆，这个开关没有可区分的语义。
+                         等真有「停止并遗忘」那一档时再开，否则它是个假选项。
+  · appendPrompt      —— 只能对**还没开工**的 packet 追加；对正在跑的
+                         worker 注入上下文没有实现。做一半会让人以为整条都通。
+  · insertModule      —— 要往既有计划里插节点并重排依赖，不是加一个 packet。
+  · planConfirmation  —— 计划目前自动落地；确认要改成「先挂起再确认」的流程。
+  · forkFromCheckpoint —— 需要检查点与分叉，工程量最大的一项。
+"""
 
 
 def _now_iso() -> str:
@@ -275,6 +294,7 @@ class EngineService:
     _key_env: str | None = field(init=False)
     _mcp: McpToolbox | None = field(default=None, init=False)
     _project_init: ProjectInit | None = field(default=None, init=False)
+    _paused: bool = field(default=False, init=False)
     _stopped: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
@@ -454,6 +474,12 @@ class EngineService:
 
         if action == "submit_requirement":
             return self._submit_requirement(command_id, command)
+        if action == "pause_at_safe_point":
+            return self._pause_at_safe_point(command_id)
+        if action == "resume":
+            return self._resume(command_id)
+        if action == "stop":
+            return self._stop(command_id)
 
         # ★ 走到这里说明网关的能力检查放行了一个我们没实现的动作 ——
         #   要么是能力表写错了，要么是网关被绕过了。两种都该说清楚，
@@ -480,6 +506,60 @@ class EngineService:
             "stopped": True,
             "pendingWorkers": len(still_running),
         }
+
+    # ══════════════════════════════════════════════════════════
+    #  暂停 / 恢复 / 停止
+    # ══════════════════════════════════════════════════════════
+
+    def _pause_at_safe_point(self, command_id: str) -> dict[str, JsonValue]:
+        """在安全点暂停：**不再放新的 packet 开工，等在跑的自然收尾**。
+
+        ★ 不打断正在跑的 worker。它手上握着路径锁，进程被打断而锁没释放的话，
+          下次启动会看到一把没有主人的锁 —— 那比不暂停糟得多。
+          `shutdown()` 的注释里已经立过这条规矩，这里是同一条。
+
+        ★ 回执状态区分两种情况，因为它们对使用者意味着不同的事：
+          还有 worker 在跑 → `waiting_safe_point`（**暂停请求已接受，但还没到点**）
+          没有在跑的       → `applied`（此刻就是安全点）
+          都回 applied 的话，使用者会以为已经停住了，而实际上还在写文件。
+        """
+
+        self._paused = True
+        alive = [t for t in self._workers if t.is_alive()]
+        logger.info("已请求在安全点暂停（%d 个 worker 仍在收尾）", len(alive))
+        if alive:
+            return self._receipt(
+                command_id, "waiting_safe_point",
+                reason=f"{len(alive)} 个 worker 仍在执行，到达安全点后暂停",
+            )
+        return self._receipt(command_id, "applied")
+
+    def _resume(self, command_id: str) -> dict[str, JsonValue]:
+        """解除暂停。
+
+        ★ 幂等：没暂停时 resume 也回 applied 而不是报错 ——
+          桌面端可能在不确定状态下重发，把它判成错误只会制造噪音。
+        """
+
+        self._paused = False
+        logger.info("已解除暂停")
+        return self._receipt(command_id, "applied")
+
+    def _stop(self, command_id: str) -> dict[str, JsonValue]:
+        """停止本次运行。
+
+        ★ 复用 `shutdown()` 而不是另写一套：那里已经处理了
+          「不强杀、等 worker 收尾」这件事。两套停止逻辑迟早会分叉，
+          而分叉的那一天没有人会发现。
+        """
+
+        result = self.shutdown()
+        pending = result.get("pendingWorkers", 0)
+        logger.info("已停止（%s 个 worker 未在超时内收尾）", pending)
+        return self._receipt(
+            command_id, "applied",
+            reason=None if pending == 0 else f"{pending} 个 worker 未在超时内收尾",
+        )
 
     # ══════════════════════════════════════════════════════════
     #  submit_requirement
@@ -597,6 +677,8 @@ class EngineService:
                 #   时间差定位的。装配看起来不像会做 I/O 的事，所以更需要打点。
                 logger.info("装配完成，开始 tick")
                 for _ in range(max_ticks):
+                    # ★ 每轮都同步暂停位：暂停命令可能在 tick 之间到达。
+                    loop.paused = self._paused
                     report = loop.tick()
                     # ★ 先落盘再记日志：日志丢了只是少条线索，
                     #   状态没落盘则是桌面端看到假象。

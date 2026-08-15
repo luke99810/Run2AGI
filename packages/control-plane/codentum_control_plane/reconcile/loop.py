@@ -171,6 +171,19 @@ class ReconcileLoop:
     guardian: Guardian | None = None
     "★ 确定性拦截器。若为 None，不执行运行时不变量检查。"
 
+    paused: bool = False
+    """暂停位：**只挡新开工，不打断已经在跑的**。
+
+    ★ 「安全点暂停」的语义就是这个 —— 打断一个正在跑的 worker，
+      它手上握着的路径锁会变成没有主人的锁，而那比不暂停糟得多。
+      所以暂停的做法是**不再放新的 packet 进 running**，
+      让在跑的自然收尾。
+
+    ★ 挡在 ready→running 而不是 tick 入口：settle（running→review）
+      与验收（review→accepted）必须照常走，否则「等在跑的收尾」
+      这句话本身就无法兑现。
+    """
+
     result_integrator: Callable[[WorkPacket], tuple[bool, str]] | None = None
     """把 worker 产出合回主项目的回调。为 None 时**不合入**。
 
@@ -790,6 +803,10 @@ class ReconcileLoop:
                 detail="ready 但 ownsPaths 为空，无写权限无法执行",
                 evidence_refs=(),
             )
+
+        if self.paused:
+            # ★ 与撞 WIP 上限同一条语义：保持 ready，下轮再看。不是失败。
+            return None
 
         config = ctx.scheduling or self._scheduling_config
         if packet.id not in ctx.ready_to_start:
