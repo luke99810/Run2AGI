@@ -258,6 +258,92 @@ class TransitionTable:
 
         return TransitionVerdict(allowed=True, requires_gate=self._table[key])
 
+    def check_system(
+        self,
+        *,
+        packet_role: RoleId,
+        acceptance_author: RoleId | None,
+        current: PacketState,
+        target: PacketState,
+        evidence: Sequence[EvidenceRef] = (),
+    ) -> TransitionVerdict:
+        """**控制平面**（不是某个角色）驱动的转移判定。
+
+        ════════════════════════════════════════════════════════
+         ★ 为什么需要它：`check(role=packet.role, ...)` 是范畴错误
+        ════════════════════════════════════════════════════════
+
+        契约对 `RoleSpec.transitions` 的定义是「此角色可**触发**的状态转换」——
+        role 是**触发者**，不是 packet 的归属者。
+
+        而调和循环不是一个角色：它在门禁通过后**代为应用**转移。
+        拿 packet 自己的 role 去问「你能不能触发签字」，问的是错的人 ——
+        而它恰好把「**不能给自己签字**」变成了「**没有人能签字**」：
+
+            coder 的 packet 走到 review → 问表「coder 能不能 review→accepted」
+            → coder 没声明 → 拒绝 → **永远停在 review**
+
+        实测就是如此，所以 `enforce_role_transitions` 一直默认关着 ——
+        一条本来正确的规则，因为问错了人而等价于死锁。
+
+        ════════════════════════════════════════════════════════
+         ★ 这里问的三件事
+        ════════════════════════════════════════════════════════
+
+        1. 有没有**别的角色**能触发它（`签字人 = 声明者 − packet 自己的角色`）
+           —— 这是 I2「不能给自己的活签字」在状态机层的落点，
+           与准入层的 `check_self_review` 是同一条不变量的两个强制点。
+        2. I6：证据必须存在。
+        3. 该跑哪道门 —— 由**签字人**声明（reviewer 要 `review`、
+           integrator 要 `self-test`，两者都对，因为触发者不同）。
+
+        ★ 签字人的挑选是**显式且确定**的：优先验收作者（它写的判据，
+          由它签最自然），否则按名字排序取第一个。
+          不写清楚的话，「跑了哪道门」会变成一个没人答得上来的问题。
+        """
+
+        if current == target or current in TERMINAL_STATES:
+            return self.check(
+                role=packet_role, current=current, target=target, evidence=evidence
+            )
+
+        declared = self.roles_allowing(current, target)
+        if not declared:
+            return TransitionVerdict(
+                allowed=False,
+                reason="unknown_transition",
+                detail=f"没有任何角色声明过 {current} → {target}",
+            )
+
+        signers = declared - {packet_role}
+        if not signers:
+            return TransitionVerdict(
+                allowed=False,
+                reason="role_not_permitted",
+                detail=(
+                    f"{current} → {target} 只有 {sorted(declared)} 能触发，"
+                    f"而这个 packet 自己就是 {packet_role!r} —— "
+                    "不能给自己的活签字（I2）。"
+                ),
+            )
+
+        if not evidence:
+            return TransitionVerdict(
+                allowed=False,
+                reason="missing_evidence",
+                detail=(
+                    f"{current} → {target} 缺少证据引用。"
+                    "★ I6：状态推进必须附证据，声明不算。"
+                ),
+            )
+
+        signer = (
+            acceptance_author
+            if acceptance_author is not None and acceptance_author in signers
+            else sorted(signers)[0]
+        )
+        return TransitionVerdict(allowed=True, requires_gate=self._table[(signer, current, target)])
+
     def assert_allowed(
         self,
         *,

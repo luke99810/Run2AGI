@@ -1098,8 +1098,13 @@ class ReconcileLoop:
             if self.transition_table is not None:
                 # 查 TransitionTable 看需要哪个门禁
                 try:
-                    verdict = self.transition_table.check(
-                        role=packet.role,
+                    # ★ 用 check_system 而不是 check(role=packet.role, ...)。
+                    #   后者问的是「coder 能不能触发签字」—— 而调和循环不是角色，
+                    #   它在门禁通过后**代为应用**。问错了人，就把
+                    #   「不能给自己签字」变成了「没有人能签字」。
+                    verdict = self.transition_table.check_system(
+                        packet_role=packet.role,
+                        acceptance_author=packet.acceptance.authoredBy,
                         current="review",
                         target="accepted",
                         evidence=packet.evidence,

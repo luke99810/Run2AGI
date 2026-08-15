@@ -224,20 +224,21 @@ class EngineConfig:
       Team-mode 是装配选择，不是给控制平面新增第二套入口。
     """
 
-    enforce_role_transitions: bool = False
+    enforce_role_transitions: bool = True
     """是否把 RoleSpec 派生的 TransitionTable 装进 ReconcileLoop。
 
-    ★ 默认 False，而且这个默认值需要解释 —— 因为它看起来像是在关护栏。
+    ★ 2026-08-15 起默认 **True**。此前默认 False 是因为一处建模缺陷：
 
-    打开它会让 coder 的 packet **永远停在 review**：`_try_review_to_accepted`
-    用 `role=packet.role` 去查表，而 `review → accepted` 只有 reviewer 声明了
-    （coder 只声明了 running→review / running→blocked）。也就是说表是对的
-    ——「coder 不能给自己的活签字」正是想要的语义 —— 但 reconcile 问表的
-    方式（拿 packet 自己的 role 去问）让这条规则等价于「没有人能签字」。
+      `_try_review_to_accepted` 用 `check(role=packet.role, ...)` 查表，
+      而契约里 `RoleSpec.transitions` 的定义是「此角色可**触发**的转换」——
+      role 是触发者，不是 packet 的归属者。调和循环不是角色，它在门禁通过后
+      **代为应用**。问错了人的后果很具体：coder 没声明 review→accepted，
+      于是「不能给自己的活签字」变成了「**没有人能签字**」，
+      packet 永远停在 review。
 
-    这是 A 自己模块里的一处建模问题，不是配置问题，**不应该在入口层绕过**。
-    `tests/test_role_transition_gap.py` 用一条测试把两个分支都钉住了：
-    打开会停在 review，关掉才会走完。修好之后那条测试会变红。
+    ★ 修法是补一个系统侧查询 `TransitionTable.check_system()`：
+      签字人 = 声明者 − packet 自己的角色（**I2 在状态机层的落点**），
+      门禁由签字人声明。修的是范畴错误本身，不是在入口层绕过。
     """
 
     def resolved_state_dir(self) -> Path:
