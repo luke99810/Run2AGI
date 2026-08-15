@@ -82,7 +82,7 @@ from codentum_harness.runtime import (
     build_local_worker_runtime,
     build_model_gateway,
 )
-from codentum_harness.worker import LocalWorkerRuntime
+from codentum_harness.worker import LocalWorkerRuntime, ensure_project_initialized
 from codentum_roles.loader import (
     RoleMcpLoadError,
     RoleSkillLoadError,
@@ -242,6 +242,7 @@ class EngineService:
     _workers: list[threading.Thread] = field(default_factory=list, init=False)
     _key_env: str | None = field(init=False)
     _mcp: McpToolbox | None = field(default=None, init=False)
+    _project_init: object = field(default=None, init=False)
     _stopped: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
@@ -258,6 +259,20 @@ class EngineService:
         #   ★ 这比「目录根本不存在」更糟：不存在时桌面端显示「尚未初始化」，
         #     残缺时它显示的是一串错误。2026-08-11 实机第一次打开项目就撞上了，
         #     而且**是引擎引入的回归** —— 在它之前新项目压根没有 .codentum/。
+        # ★ 项目必须可被 worktree 隔离使用，否则每个 packet 都会卡在 ready。
+        #
+        #   桌面端最常见的用法就是「打开一个新文件夹 → 提一个需求」，
+        #   而刚 git init 的仓库没有 HEAD，`git worktree add` 必然失败。
+        #   失败之后调和循环看不到任何转换、认为系统已稳定并正常退出 ——
+        #   **使用者只看到「什么都没发生」**。
+        #
+        #   ★ 这一步只在「不是 git 仓库」或「一个提交都没有」时动手；
+        #     已有历史的仓库一律不碰（那是别人的历史）。
+        #     做没做、做了什么，都写进 handshake 与日志。
+        self._project_init = ensure_project_initialized(self.config.project_root)
+        if self._project_init.changed:
+            logger.info("项目初始化：%s", self._project_init.detail)
+
         self._role_specs = load_builtin_role_specs()
         self._requirements = RequirementStore(state_dir)
         self._key_env = _resolve_key_env(self.config.api_key_env)

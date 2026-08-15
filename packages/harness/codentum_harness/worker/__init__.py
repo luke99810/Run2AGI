@@ -13,7 +13,12 @@ from .team import (
     AgentTeamsWorkerStatus,
     TeamWorkerRuntime,
 )
-from .worktree import GitWorktreeManager, WorktreeIsolationError
+from .worktree import (
+    GitWorktreeManager,
+    ProjectInit,
+    WorktreeIsolationError,
+    ensure_project_initialized,
+)
 
 __all__ = [
     "AgentTeamsCLIError",
@@ -26,6 +31,8 @@ __all__ = [
     "AgentTeamsWorkerSpec",
     "AgentTeamsWorkerStatus",
     "GitWorktreeManager",
+    "ProjectInit",
+    "ensure_project_initialized",
     "LocalWorkerRuntime",
     "TeamWorkerRuntime",
     "WorkerContextLoader",

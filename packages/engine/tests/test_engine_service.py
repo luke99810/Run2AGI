@@ -828,3 +828,72 @@ def test_judgement_hits_are_recorded_to_disk(project: Path, fake_key: None) -> N
 
     shadow = [row for row in rows if row["mode"] == "shadow"]
     assert shadow, "影子判据一条记录都没有 —— 影子期攒不到任何证据"
+
+
+# ══════════════════════════════════════════════════════════════
+#  项目初始化：打开一个新文件夹就提需求
+#
+#  ★ 上面那个 `project` 夹具是 `git init` **不带提交** —— 也就是说
+#    本文件此前那 33 条测试，一直跑在一个 **worker 根本起不来**的项目上，
+#    却全部是绿的。它们测的是准入与状态，碰不到 worktree 那一层。
+#
+#    真实现象（2026-08-15 实测）：
+#      spawn 失败，packet wp-xxx 保持 ready 并释放锁：
+#      WorktreeIsolationError: fatal: invalid reference: HEAD
+#
+#    后果不是崩溃 —— 是 packet 永远停在 ready，使用者只看到「什么都没发生」。
+# ══════════════════════════════════════════════════════════════
+
+
+def test_engine_startup_makes_a_fresh_repo_worktree_ready(project: Path, fake_key: None) -> None:
+    """★ 引擎起来之后，隔离层必须**真的能用** —— 不只是「初始化函数被调过」。
+
+    断言落在 `GitWorktreeManager.create()` 能成功，而不是「HEAD 存在」：
+    后者是前者的必要条件，测前者才是测这件事本身。
+    """
+
+    from codentum_harness.worker import GitWorktreeManager
+
+    _service(project)  # 构造即初始化
+
+    workspace = project.parent / "codentum-workers" / "probe"
+    assert GitWorktreeManager(project).create(workspace).exists()
+
+
+def test_engine_startup_never_rewrites_a_project_that_has_history(
+    tmp_path: Path, fake_key: None
+) -> None:
+    """★ 安全判据：使用者把 Codentum 指向一个真实项目时，
+    它绝不能往那段历史里写东西。
+    """
+
+    repo = tmp_path / "real-project"
+    repo.mkdir()
+    for args in (
+        ["init", "-q"], ["config", "user.name", "t"], ["config", "user.email", "t@e.com"],
+    ):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "real work"], cwd=repo, check=True, capture_output=True)
+
+    def head_log() -> str:
+        return subprocess.run(
+            ["git", "log", "--oneline"], cwd=repo, check=True, capture_output=True, text=True
+        ).stdout
+
+    before = head_log()
+    _service(repo)
+    assert head_log() == before, "引擎在使用者已有的仓库历史上加了提交"
+
+
+def test_plain_folder_without_git_is_initialized(tmp_path: Path, fake_key: None) -> None:
+    """连 `.git` 都没有的普通目录 —— 桌面端「打开一个新文件夹」的最常见形态。"""
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    service = _service(plain)
+
+    assert (plain / ".git").exists()
+    assert service._project_init.changed is True  # type: ignore[union-attr]
