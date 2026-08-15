@@ -234,22 +234,6 @@ class ReconcileLoop:
       审计链完整、可追溯。
     """
 
-    max_running: int | None = None
-    """同时处于 running 的 packet 上限（WIP 限制）。None = 不限。
-
-    ★ 这不是性能调优，是**止损**。2026-08-13 实测：8 个 packet 同时
-      调模型时出现 `Connection error` —— 并发本身把请求打挂了。
-      而失败的那几个会重试，重试又加剧并发，成本和失败率一起上去。
-
-    ★ 精益调度里这就是 WIP 限制：**在制品越多，单件周期越长**。
-      控制平面是唯一知道全局有多少 packet 在跑的地方，
-      所以这条限制只能在这里执行 —— 放到 worker 侧各自为政拦不住总量。
-
-    ★ 它同时是 `.codentum/scheduling.json` 里 `wipLimits.running` 的**唯一真实来源**。
-      没有真正执行的限制，就不该往那个文件里写数字 ——
-      写了就是「声明了但没人执行」，而桌面端会照着它渲染。
-    """
-
     # ── 内部状态（由 load_state() 填充）─────────────────────
 
     _packets: dict[PacketId, WorkPacket] = field(default_factory=dict, init=False)
