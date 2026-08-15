@@ -1,6 +1,6 @@
 """Worker runtime implementations and Git worktree isolation."""
 
-from .local import LocalWorkerRuntime, WorkerContextLoader, WorkerRunner
+from .local import LocalWorkerRuntime, WorkerContextLoader, WorkerRoleSpecResolver, WorkerRunner
 from .team import (
     AgentTeamsClient,
     AgentTeamsCLIError,
@@ -39,6 +39,7 @@ __all__ = [
     "LocalWorkerRuntime",
     "TeamWorkerRuntime",
     "WorkerContextLoader",
+    "WorkerRoleSpecResolver",
     "WorkerRunner",
     "WorktreeIsolationError",
 ]

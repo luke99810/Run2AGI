@@ -210,6 +210,45 @@ def test_spawn_reads_active_skill_prompt_from_project_shared_space(
     assert "# Frontend Skill" not in system_prompt
 
 
+def test_spawn_uses_role_spec_resolver_before_prompt_bundle(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    _write_shared_skill(
+        git_repo / ".codentum" / "skills" / "shared",
+        "local-dynamic-test",
+        "# Dynamic Local Skill\n\nUse the uploaded project skill.",
+    )
+
+    def resolve(req: SpawnRequest, spec: RoleSpec) -> RoleSpec:
+        assert req.packet_id == "wp-abcdef"
+        return spec.model_copy(
+            update={
+                "skills": (
+                    *(spec.skills or ()),
+                    RoleSkill(id="local-dynamic-test", scope="role", state="active"),
+                )
+            }
+        )
+
+    runtime = LocalWorkerRuntime(
+        repo_root=git_repo,
+        role_specs=(role_spec(),),
+        role_spec_resolver=resolve,
+    )
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    prompt_manifest = json.loads(
+        (evidence_dir / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
+    system_prompt = (evidence_dir / "prompt" / "system.md").read_text(encoding="utf-8")
+
+    assert prompt_manifest["skill_refs"] == ["local-dynamic-test"]
+    assert "# Dynamic Local Skill" in system_prompt
+
+
 def test_spawn_injects_packet_intent_from_workpacket_file(git_repo: Path, tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     _write_packet(

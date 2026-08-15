@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from codentum_delivery.protocol import CAPABILITY_NAMES, validate_handshake, validate_receipt
 from codentum_engine.intake import (
+    RequirementRecord,
     build_packet_for_requirement,
     choose_acceptance_author,
     new_packet_id,
@@ -67,6 +68,11 @@ def _command(action: str, run_id: str, project: Path, **payload: object) -> dict
         "payload": {"projectRoot": str(project), **payload},
         "requestedAt": "2026-08-10T12:00:00.000Z",
     }
+
+
+class _Request:
+    def __init__(self, packet_id: object) -> None:
+        self.packet_id = packet_id
 
 
 # ══════════════════════════════════════════════════════════════
@@ -584,6 +590,126 @@ def test_role_skills_are_projected_into_project_shared_space(
     assert "# Review Skill" in (shared_dir / "review" / "SKILL.md").read_text("utf-8")
     assert "# Security Skill" in (shared_dir / "security" / "SKILL.md").read_text("utf-8")
     assert "# Testing Skill" in (shared_dir / "testing" / "SKILL.md").read_text("utf-8")
+
+
+def test_selected_local_skill_is_projected_and_added_to_runtime_role_spec(
+    project: Path,
+    fake_key: None,
+    tmp_path: Path,
+) -> None:
+    """★ 前端已经能选本地 Skill；引擎必须把它变成 Worker 真能读的共享 Skill。"""
+
+    service = _service(project)
+    packet_id = new_packet_id()
+    local_skill = tmp_path / "uploaded-skill"
+    local_skill.mkdir()
+    (local_skill / "SKILL.md").write_text(
+        "---\n"
+        "name: 上传的前端审计 Skill\n"
+        "description: 本地上传给 coder 使用\n"
+        "---\n\n"
+        "# 上传的前端审计 Skill\n\n"
+        "检查响应式布局、键盘可达性和错误态。\n",
+        encoding="utf-8",
+    )
+    service._requirements.save(
+        RequirementRecord(
+            packet_id=str(packet_id),
+            text="实现登录页并检查键盘可达性",
+            submitted_at="2026-08-15T00:00:00.000Z",
+            command_id="cmd-local-skill",
+            payload={
+                "resourceSelectionContract": "codentum.resource-selection.v1",
+                "resourceSelections": [
+                    {
+                        "id": "managed:local-skill",
+                        "kind": "skill",
+                        "scope": "role",
+                        "roleId": "coder",
+                        "sourceKind": "folder",
+                        "localPath": str(local_skill),
+                    }
+                ],
+            },
+        )
+    )
+
+    request = _Request(packet_id)
+    base = next(spec for spec in service._role_specs if spec.id == "coder")
+    resolved = service._role_spec_for_request(request, base)
+    injected = [skill.id for skill in (resolved.skills or ()) if skill.id.startswith("local-")]
+
+    assert len(injected) == 1
+    shared = project / ".codentum" / "skills" / "shared" / injected[0]
+    assert "键盘可达性" in (shared / "SKILL.md").read_text(encoding="utf-8")
+    manifest = json.loads((shared / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["origin"] == "local"
+    projection = json.loads((project / ".codentum" / "skills" / "projection.json").read_text("utf-8"))
+    assert projection["projectedCount"] == 1
+    assert projection["projected"][0]["origin"] == "local"
+
+
+def test_cloud_skill_catalog_is_searched_by_requirement_and_projected(
+    project: Path,
+    fake_key: None,
+    tmp_path: Path,
+) -> None:
+    """★ 云 Skills 不是静态展示：配置 catalog 后按需求文本检索并注入当前 Worker。"""
+
+    catalog = tmp_path / "cloud-skills.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "skills": [
+                    {
+                        "id": "frontend-accessibility",
+                        "name": "前端可访问性审计",
+                        "description": "面向登录页、表单、键盘导航和 accessibility 的检查",
+                        "roles": ["coder"],
+                        "tags": ["frontend", "accessibility", "登录", "键盘"],
+                        "body": "# 前端可访问性审计\n\n提交前检查 tab 顺序、aria 和错误提示。",
+                    },
+                    {
+                        "id": "database-indexing",
+                        "name": "数据库索引",
+                        "description": "PostgreSQL 查询优化",
+                        "roles": ["coder"],
+                        "tags": ["postgres", "index"],
+                        "body": "# 数据库索引\n\n检查查询计划。",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service = _service(project, cloud_skills_catalog=str(catalog))
+    packet_id = new_packet_id()
+    service._requirements.save(
+        RequirementRecord(
+            packet_id=str(packet_id),
+            text="实现登录页，需要 accessibility 和键盘导航审计",
+            submitted_at="2026-08-15T00:00:00.000Z",
+            command_id="cmd-cloud-skill",
+            payload={},
+        )
+    )
+
+    request = _Request(packet_id)
+    base = next(spec for spec in service._role_specs if spec.id == "coder")
+    resolved = service._role_spec_for_request(request, base)
+    injected = [skill.id for skill in (resolved.skills or ()) if skill.id.startswith("cloud-")]
+
+    assert len(injected) == 1
+    shared = project / ".codentum" / "skills" / "shared" / injected[0]
+    assert "# 前端可访问性审计" in (shared / "SKILL.md").read_text(encoding="utf-8")
+    manifest = json.loads((shared / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["origin"] == "cloud"
+    assert manifest["sourceSkillId"] == "frontend-accessibility"
+    projection = json.loads((project / ".codentum" / "skills" / "projection.json").read_text("utf-8"))
+    assert projection["cloudSearch"]["enabled"] is True
+    assert projection["cloudSearch"]["matchedCount"] == 1
 
 
 def test_mcp_services_are_projected_into_project_state(

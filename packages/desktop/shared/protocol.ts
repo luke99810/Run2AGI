@@ -170,6 +170,46 @@ export interface McpServiceProjection {
   readonly error?: string
 }
 
+export interface SkillProjectionItem {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+  readonly origin: 'local' | 'cloud' | string
+  readonly sourceId?: string
+  readonly sourcePath?: string
+  readonly sourceCatalog?: string
+  readonly role?: string
+  readonly matchScore?: number
+}
+
+export interface SkillCloudSearchProjection {
+  readonly enabled: boolean
+  readonly catalog: string
+  readonly query: string
+  readonly matchedCount: number
+  readonly selected: readonly {
+    readonly id: string
+    readonly name: string
+    readonly sourceId: string
+    readonly matchScore?: number
+  }[]
+  readonly degraded: boolean
+  readonly degradationReasons: readonly string[]
+}
+
+export interface SkillRuntimeProjection {
+  readonly schemaVersion: 1
+  readonly updatedAt: string
+  readonly packetId: string
+  readonly role: string
+  readonly sharedDir: string
+  readonly projectedCount: number
+  readonly projected: readonly SkillProjectionItem[]
+  readonly cloudSearch: SkillCloudSearchProjection
+  readonly degraded: boolean
+  readonly degradationReasons: readonly string[]
+}
+
 export interface StateSnapshot {
   readonly source: SnapshotSourceDescriptor
   readonly revision: string
@@ -181,6 +221,7 @@ export interface StateSnapshot {
   readonly evidence: readonly Evidence[]
   readonly knowledge: KnowledgeFile | null
   readonly roles: readonly RoleSpec[]
+  readonly skillProjection: SkillRuntimeProjection | null
   readonly mcpServices: readonly McpServiceProjection[]
   readonly workers: readonly WorkerProjection[]
   readonly warnings: readonly string[]

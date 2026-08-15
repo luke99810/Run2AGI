@@ -14,6 +14,7 @@ import type {
 import type {
   McpServiceProjection,
   SnapshotSourceDescriptor,
+  SkillRuntimeProjection,
   StateSnapshot,
   WorkerEventProjection,
   WorkerProjection,
@@ -265,6 +266,7 @@ async function readDirectorySnapshot(
   const evidence = parseJsonCollection(context, 'evidence/', isEvidence, true, true)
   const knowledge = parseKnowledge(context)
   const roles = parseJsonCollection(context, 'roles/', isRoleSpec, false)
+  const skillProjection = parseJsonFile(context, 'skills/projection.json', isSkillRuntimeProjection, false)
   const mcpServices = parseJsonCollection(context, 'mcp/', isMcpServiceProjection, false)
   const workers = parseWorkers(context, staleAfterMs)
 
@@ -284,6 +286,7 @@ async function readDirectorySnapshot(
       evidence,
       knowledge,
       roles,
+      skillProjection,
       mcpServices,
       workers,
       warnings: unique(context.warnings)
@@ -341,6 +344,7 @@ async function scanStateDirectory(stateDirectory: string): Promise<StateScan> {
   await scanFlatJsonDirectory(stateDirectory, 'packets', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'knowledge', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'roles', directories, warnings, addFile)
+  await scanFlatJsonDirectory(stateDirectory, 'skills', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'mcp', directories, warnings, addFile)
 
   const evidencePath = join(stateDirectory, 'evidence')
@@ -1122,6 +1126,60 @@ function isMcpServiceProjection(value: unknown): value is McpServiceProjection {
     isStringArray(value['tools']) &&
     (value['configSource'] === undefined || typeof value['configSource'] === 'string') &&
     (value['error'] === undefined || typeof value['error'] === 'string')
+  )
+}
+
+function isSkillRuntimeProjection(value: unknown): value is SkillRuntimeProjection {
+  if (
+    !isRecord(value) ||
+    value['schemaVersion'] !== 1 ||
+    typeof value['updatedAt'] !== 'string' ||
+    typeof value['packetId'] !== 'string' ||
+    typeof value['role'] !== 'string' ||
+    typeof value['sharedDir'] !== 'string' ||
+    !Number.isInteger(value['projectedCount']) ||
+    !Array.isArray(value['projected']) ||
+    !isRecord(value['cloudSearch']) ||
+    typeof value['degraded'] !== 'boolean' ||
+    !isStringArray(value['degradationReasons'])
+  ) return false
+
+  const cloudSearch = value['cloudSearch']
+  return (
+    value['projected'].every(isSkillProjectionItem) &&
+    typeof cloudSearch['enabled'] === 'boolean' &&
+    typeof cloudSearch['catalog'] === 'string' &&
+    typeof cloudSearch['query'] === 'string' &&
+    Number.isInteger(cloudSearch['matchedCount']) &&
+    Array.isArray(cloudSearch['selected']) &&
+    cloudSearch['selected'].every(isCloudSkillSelection) &&
+    typeof cloudSearch['degraded'] === 'boolean' &&
+    isStringArray(cloudSearch['degradationReasons'])
+  )
+}
+
+function isSkillProjectionItem(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    typeof value['origin'] === 'string' &&
+    (value['description'] === undefined || typeof value['description'] === 'string') &&
+    (value['sourceId'] === undefined || typeof value['sourceId'] === 'string') &&
+    (value['sourcePath'] === undefined || typeof value['sourcePath'] === 'string') &&
+    (value['sourceCatalog'] === undefined || typeof value['sourceCatalog'] === 'string') &&
+    (value['role'] === undefined || typeof value['role'] === 'string') &&
+    (value['matchScore'] === undefined || isFiniteNumber(value['matchScore']))
+  )
+}
+
+function isCloudSkillSelection(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    typeof value['sourceId'] === 'string' &&
+    (value['matchScore'] === undefined || isFiniteNumber(value['matchScore']))
   )
 }
 

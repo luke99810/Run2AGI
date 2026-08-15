@@ -60,6 +60,21 @@ loader 会校验引用的 Skill manifest 必须存在、id 与目录名一致，
 `active` 的 Skill 正文。这样 C 的 Skills 面板从项目 RoleSpec 派生选项时，背后有 B 的
 真源文件、项目共享副本和运行时输入链路，而不是静态字符串。
 
+### 本地 / 云 Skills
+
+自定义本地 Skill 由桌面端作为 `resourceSelections.kind = "skill"` 随需求提交；
+引擎在 Worker 准备阶段读取本地文件或文件夹内的 `SKILL.md`，生成稳定 id 后投影到
+`.codentum/skills/shared/local-*/`，并只追加到当前请求匹配的 RoleSpec 中。
+
+云 Skill 不在默认启动时联网。配置 `--cloud-skills-catalog <file-or-https-url>` 或
+`CODENTUM_CLOUD_SKILLS_CATALOG=<file-or-https-url>` 后，主 Agent 会用需求文本与目标角色
+检索 catalog，最多注入 `--cloud-skill-limit` 个匹配项，投影到
+`.codentum/skills/shared/cloud-*/`。最近一次本地/云注入事实会写入
+`.codentum/skills/projection.json`，供 C 的 Skills 面板展示。
+
+仓库提供了一个离线 catalog 示例：`cloud_skills/catalog.sample.json`。生产环境可替换为
+阿里云 Skills 门户或团队内部可信 catalog 的导出结果；catalog 只描述 Skill 正文，不承载密钥。
+
 ### 内置 MCP 服务清单
 
 | MCP 服务 | 状态 | 工具入口 | 说明 |

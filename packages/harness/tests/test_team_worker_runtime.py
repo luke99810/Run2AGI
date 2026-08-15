@@ -240,6 +240,44 @@ def test_team_spawn_reads_active_skill_prompt_from_project_shared_space(tmp_path
     assert "# Frontend Skill" not in system_prompt
 
 
+def test_team_spawn_uses_role_spec_resolver_before_dispatch_prompt(tmp_path: Path) -> None:
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    _write_shared_skill(
+        tmp_path / ".codentum" / "skills" / "shared",
+        "cloud-dynamic-test",
+        "# Dynamic Cloud Skill\n\nUse the selected cloud skill.",
+    )
+
+    def resolve(req: SpawnRequest, spec: RoleSpec) -> RoleSpec:
+        assert req.packet_id == "wp-abcdef"
+        return spec.model_copy(
+            update={
+                "skills": (
+                    *(spec.skills or ()),
+                    RoleSkill(id="cloud-dynamic-test", scope="role", state="active"),
+                )
+            }
+        )
+
+    client = FakeAgentTeamsClient()
+    runtime = TeamWorkerRuntime(
+        repo_root=tmp_path,
+        client=client,
+        role_specs=(role_spec(),),
+        role_spec_resolver=resolve,
+    )
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    evidence_dir = workspace / ".codentum" / "evidence" / handle.worker_id
+    prompt_manifest = json.loads(
+        (evidence_dir / "prompt" / "manifest.json").read_text(encoding="utf-8")
+    )
+    system_prompt = (evidence_dir / "prompt" / "system.md").read_text(encoding="utf-8")
+
+    assert prompt_manifest["skill_refs"] == ["cloud-dynamic-test"]
+    assert "# Dynamic Cloud Skill" in system_prompt
+
+
 def test_team_spawn_records_agentteams_error_as_failed_outcome(tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     client = FakeAgentTeamsClient(create_error=RuntimeError("docker daemon unavailable"))

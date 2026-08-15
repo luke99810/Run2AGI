@@ -55,7 +55,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from codentum_contracts.state import ModelRouting, PacketId, RoleSpec, WorkPacket, dump_state
+from codentum_contracts.state import ModelRouting, PacketId, RoleSkill, RoleSpec, WorkPacket, dump_state
 from codentum_control_plane.admission import AdmissionChecker
 from codentum_control_plane.budget import BudgetTracker
 from codentum_control_plane.gates import GateRunner, register_builtin_gates
@@ -114,6 +114,7 @@ from .intake import (
     new_packet_id,
 )
 from .session import EngineSession
+from .skill_registry import SkillRegistryError, resolve_dynamic_skills
 
 __all__ = ["ENGINE_VERSION", "EngineConfig", "EngineService"]
 
@@ -223,6 +224,17 @@ class EngineConfig:
     ★ 这个开关不改变 contracts：控制平面仍只调用 `WorkerRuntime.spawn(req)`。
       Team-mode 是装配选择，不是给控制平面新增第二套入口。
     """
+
+    cloud_skills_catalog: str | None = None
+    """云 Skills catalog 地址或本地 JSON 文件。
+
+    为 None 时不主动联网检索，保证本地演示和测试可确定；给出文件路径或
+    HTTPS URL 后，主 Agent 会按本次需求文本和角色从 catalog 里检索匹配
+    Skill，并投影到 `.codentum/skills/shared/` 后再启动 Worker。
+    """
+
+    cloud_skill_limit: int = 3
+    "每个 Worker 从云 catalog 自动注入的 Skill 上限。"
 
     enforce_role_transitions: bool = True
     """是否把 RoleSpec 派生的 TransitionTable 装进 ReconcileLoop。
@@ -804,6 +816,7 @@ class EngineService:
                 ),
                 role_specs=self._role_specs,
                 context_loader=self._context_loader,
+                role_spec_resolver=self._role_spec_for_request,
             )
 
         if self.config.enable_tool_loop:
@@ -827,6 +840,7 @@ class EngineService:
                 ),
                 role_specs=self._role_specs,
                 context_loader=self._context_loader,
+                role_spec_resolver=self._role_spec_for_request,
                 context_char_budget=self.config.context_char_budget,
                 project_state_dir=self.config.resolved_state_dir(),
             )
@@ -842,7 +856,51 @@ class EngineService:
             ),
             role_specs=self._role_specs,
             context_loader=self._context_loader,
+            role_spec_resolver=self._role_spec_for_request,
         )
+
+    def _role_spec_for_request(self, request: Any, role_spec: RoleSpec) -> RoleSpec:
+        """按当前请求把项目/云 Skill 注入 RoleSpec，不改变 contracts。
+
+        桌面端把本地上传的 Skill 作为 ``resourceSelections`` 传来；云 Skill
+        由本配置给出的 catalog 检索。二者最后都投影进项目共享空间，让 Local
+        和 Team Worker 写 prompt 时走同一套读取逻辑。
+        """
+
+        requirement_record = self._requirements.record_for(str(request.packet_id))
+        if requirement_record is None:
+            return role_spec
+        payload = requirement_record.get("payload")
+        text = requirement_record.get("text")
+        if not isinstance(payload, dict) or not isinstance(text, str):
+            return role_spec
+
+        try:
+            resolution = resolve_dynamic_skills(
+                payload=payload,
+                requirement_text=text,
+                packet_id=request.packet_id,
+                role=role_spec.id,
+                shared_dir=self.config.resolved_state_dir() / "skills" / "shared",
+                projection_dir=self.config.resolved_state_dir() / "skills",
+                cloud_catalog=self.config.cloud_skills_catalog,
+                cloud_limit=self.config.cloud_skill_limit,
+            )
+        except (OSError, SkillRegistryError) as exc:
+            logger.warning("Skill 动态解析失败，沿用原 RoleSpec：%s", exc)
+            return role_spec
+
+        if not resolution.skill_ids:
+            return role_spec
+
+        existing = list(role_spec.skills or ())
+        seen = {skill.id for skill in existing}
+        for skill_id in resolution.skill_ids:
+            if skill_id in seen:
+                continue
+            existing.append(RoleSkill(id=skill_id, scope="role", state="active"))
+            seen.add(skill_id)
+        return role_spec.model_copy(update={"skills": tuple(existing)})
 
     def _context_loader(self, request: Any, role_spec: RoleSpec) -> tuple[ContextCandidate, ...]:
         """把需求原文送进模型上下文 —— 08-10 那个缺陷的可运行性修复。

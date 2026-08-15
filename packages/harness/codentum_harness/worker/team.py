@@ -50,7 +50,7 @@ from codentum_harness.prepare import PreparedExecution
 from codentum_harness.prompt_bundle import WorkerPromptBundle, write_worker_prompt_bundle
 
 from .evidence import MirroredEvidence
-from .local import WorkerContextLoader
+from .local import WorkerContextLoader, WorkerRoleSpecResolver
 
 __all__ = [
     "AgentTeamsCLIError",
@@ -482,6 +482,7 @@ class TeamWorkerRuntime:
         client: AgentTeamsClient | None = None,
         role_specs: tuple[RoleSpec, ...] | None = None,
         context_loader: WorkerContextLoader | None = None,
+        role_spec_resolver: WorkerRoleSpecResolver | None = None,
         context_char_budget: int | None = None,
         worker_runtime: str = "copaw",
         worker_name_prefix: str = "codentum",
@@ -498,6 +499,7 @@ class TeamWorkerRuntime:
         specs = load_builtin_role_specs() if role_specs is None else role_specs
         self._role_specs = {spec.id: spec for spec in specs}
         self._context_loader = context_loader
+        self._role_spec_resolver = role_spec_resolver
         self._context_char_budget = context_char_budget or DEFAULT_INTENT_CONTEXT_CHAR_BUDGET
         self._worker_runtime = worker_runtime
         self._worker_name_prefix = worker_name_prefix
@@ -512,7 +514,7 @@ class TeamWorkerRuntime:
         return await self._spawn(prepared)
 
     def _prepare(self, req: SpawnRequest) -> PreparedExecution:
-        spec = self._load_role_spec(req.role)
+        spec = self._resolve_role_spec(req, self._load_role_spec(req.role))
         effective_req = req if req.tools else replace(req, tools=tuple(spec.tools))
         context_candidates = self._context_candidates(effective_req, spec)
         context = assemble_context_bundle(
@@ -527,6 +529,11 @@ class TeamWorkerRuntime:
             mount_paths=tuple(m.mount_path for m in effective_req.mounts),
             context=context,
         )
+
+    def _resolve_role_spec(self, req: SpawnRequest, spec: RoleSpec) -> RoleSpec:
+        if self._role_spec_resolver is None:
+            return spec
+        return self._role_spec_resolver(req, spec)
 
     def _context_candidates(
         self,

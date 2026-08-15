@@ -25,6 +25,7 @@ from codentum_harness.worker import (
     LocalWorkerRuntime,
     TeamWorkerRuntime,
     WorkerContextLoader,
+    WorkerRoleSpecResolver,
     WorkerRunner,
 )
 
@@ -268,6 +269,7 @@ def build_local_worker_runtime(
     *,
     role_specs: tuple[RoleSpec, ...] | None = None,
     context_loader: WorkerContextLoader | None = None,
+    role_spec_resolver: WorkerRoleSpecResolver | None = None,
 ) -> LocalWorkerRuntime:
     """Assemble LocalWorkerRuntime without exposing harness internals to callers."""
 
@@ -278,6 +280,7 @@ def build_local_worker_runtime(
         runner=build_runner(config.runner, role_specs=role_specs),
         role_specs=role_specs,
         context_loader=context_loader,
+        role_spec_resolver=role_spec_resolver,
         context_char_budget=config.context_char_budget,
         project_state_dir=config.project_state_dir,
     )
@@ -288,6 +291,7 @@ def build_team_worker_runtime(
     *,
     role_specs: tuple[RoleSpec, ...] | None = None,
     context_loader: WorkerContextLoader | None = None,
+    role_spec_resolver: WorkerRoleSpecResolver | None = None,
     client: AgentTeamsClient | None = None,
 ) -> TeamWorkerRuntime:
     """Assemble an AgentTeams-backed WorkerRuntime without changing contracts."""
@@ -319,6 +323,7 @@ def build_team_worker_runtime(
         client=resolved_client,
         role_specs=role_specs,
         context_loader=context_loader,
+        role_spec_resolver=role_spec_resolver,
         context_char_budget=config.context_char_budget,
         worker_runtime=config.worker_runtime,
         worker_name_prefix=config.worker_name_prefix,
