@@ -88,6 +88,7 @@ from codentum_harness.runtime import (
 from codentum_harness.worker import (
     LocalWorkerRuntime,
     integrate_worker_result,
+    rollback_worker_result,
     ProjectInit,
     ensure_project_initialized,
 )
@@ -733,6 +734,7 @@ class EngineService:
             guardian=Guardian(),
             transition_table=self._transition_table(),
             result_integrator=self._integrate_result,
+            result_rollbacker=self._rollback_result,
         )
         loop.worker_runtime = self._build_worker_runtime()
         return loop
@@ -1157,6 +1159,19 @@ class EngineService:
             owns_paths=tuple(packet.ownsPaths),
         )
         return result.merged, result.detail
+
+    def _rollback_result(self, packet: WorkPacket) -> tuple[bool, str]:
+        """把某个 packet 已合入的产出回滚掉（撤销合入）。
+
+        ★ 与 _integrate_result 对称：合入是 merge，回滚是 revert 那个
+          merge 提交。真正的 git 操作在 harness 的 rollback_worker_result，
+          装配点只负责把 packet 映射到项目仓库。
+        """
+        result = rollback_worker_result(
+            self.config.project_root,
+            packet_id=str(packet.id),
+        )
+        return result.rolled_back, result.detail
 
     def _write_projections(self, loop: ReconcileLoop) -> None:
         """重算 `.codentum/flow.json`。

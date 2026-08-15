@@ -142,6 +142,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _append_decision_record(root: Path, record: DecisionRecord) -> None:
+    """追加一条 operator 决定到 decisions.jsonl。"""
+    path = root / "decisions.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(record.model_dump_json(exclude_none=True) + "\n")
+
+
+def _load_decisions(root: Path) -> list[DecisionRecord]:
+    """从 decisions.jsonl 读回全部决策（含人工审批/回滚）。"""
+    path = root / "decisions.jsonl"
+    if not path.exists():
+        return []
+    records: list[DecisionRecord] = []
+    for line in path.read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(DecisionRecord.model_validate_json(line))
+        except Exception:  # noqa: BLE001
+            # 坏行不拖垮状态加载，但审计链里的坏行必须出声。
+            logger.warning("忽略无法解析的决策日志行：%.80s", line)
+    return records
+
+
 @dataclass
 class ReconcileLoop:
     """调和循环 —— 控制平面的心脏。
@@ -196,6 +222,18 @@ class ReconcileLoop:
       装配点（EngineService）默认注入真实实现。
     """
 
+    result_rollbacker: Callable[[WorkPacket], tuple[bool, str]] | None = None
+    """把某个 packet 已合入的产出**回滚**掉（撤销合入）的回调。为 None 时**不回滚**。
+
+    ★ 与 result_integrator 对称：回滚是 git 操作（revert 合入提交），
+      同样由装配点注入而不是控制平面自己做 —— 控制平面只负责
+      「记录这条人工回滚决定 + 决定什么时候回滚」。
+
+    ★ 回滚不是状态转换：packet 仍是 accepted（它的工作确实被验收过），
+      回滚是一条追加在 decisions.jsonl 里、actor=operator 的独立决定，
+      审计链完整、可追溯。
+    """
+
     max_running: int | None = None
     """同时处于 running 的 packet 上限（WIP 限制）。None = 不限。
 
@@ -218,6 +256,7 @@ class ReconcileLoop:
     _dep_graph: DependencyGraph | None = field(default_factory=lambda: None, init=False)
     _lock_table: LockTable = field(default_factory=LockTable, init=False)
     _active_workers: dict[PacketId, WorkerHandle] = field(default_factory=dict, init=False)
+    _decisions: list[DecisionRecord] = field(default_factory=list, init=False)
     _tick_count: int = field(default=0, init=False)
     _dirty: bool = field(default=False, init=False)
     _scheduling_config: SchedulingConfig = field(
@@ -335,6 +374,7 @@ class ReconcileLoop:
                 self._packets[packet.id] = packet
 
         self._active_workers.clear()
+        self._decisions = _load_decisions(root)
         self._tick_count = 0
         self._scheduling_config = load_scheduling_config(root)
         self._ready_queue_entries = ()
@@ -757,6 +797,8 @@ class ReconcileLoop:
             return self._try_blocked_to_ready(packet, ctx)
         elif state == "review":
             return self._try_review_to_accepted(packet)
+        elif state == "rejected":
+            return self._try_rejected_to_ready(packet, ctx)
 
         return None
 
@@ -1109,6 +1151,9 @@ class ReconcileLoop:
 
         优先使用 gate_runner（若已配置），否则退回到简单证据检查。
         """
+        if packet.acceptance.kind == "manual":
+            return self._try_manual_acceptance(packet)
+
         if self.gate_runner is not None:
             # 用 gate_runner 跑门禁
             gate_id = "review"
@@ -1187,6 +1232,113 @@ class ReconcileLoop:
             detail=f"验收门禁通过（{len(real)} 条证据）" + (f"｜合入：{note}" if note else ""),
             evidence_refs=real,
         )
+
+    # ── review → accepted（manual 验收）────────────────────────
+
+    def _try_manual_acceptance(self, packet: WorkPacket) -> PacketTransition | None:
+        """manual 验收：机器判不了，人工审批才是验收。
+
+        ★ 堵 2026-08-12 那个洞：kind=manual 的谓词永远不会被执行，
+          「产生一条真实证据」就等于「验收通过」。这里要求操作者显式
+          approve，否则永远停在 review —— 有证据 ≠ 有人签字。
+        """
+        rejection = self._operator_decision(packet.id, "reject")
+        if rejection is not None:
+            detail = "人工驳回（operator）"
+            if rejection.detail:
+                detail += f"：{rejection.detail}"
+            return self._apply_transition(
+                packet, target="rejected", detail=detail, evidence_refs=(),
+            )
+        approval = self._operator_decision(packet.id, "approve")
+        if approval is None:
+            return None  # 等待人工审批，留在 review
+
+        blocked, note = self._integrate_before_accepting(packet)
+        if blocked is not None:
+            return blocked
+        return self._apply_transition(
+            packet,
+            target="accepted",
+            detail="人工审批通过（operator）" + (f"｜合入：{note}" if note else ""),
+            evidence_refs=(),
+        )
+
+    def _try_rejected_to_ready(
+        self, packet: WorkPacket, ctx: ReconcileContext
+    ) -> PacketTransition | None:
+        """rejected → ready：打回重做，重新进入调度。
+
+        ★ rejected 不是终态（状态机文档写死）。打回的 packet 依赖未变，
+          直接放回 ready，让它在下一轮被重新调度。
+        """
+        return self._apply_transition(
+            packet, target="ready", detail="打回重做，重新调度", evidence_refs=(),
+        )
+
+    # ════════════════════════════════════════════════════════════
+    #  人工审批 / 回滚（operator 动作）
+    # ════════════════════════════════════════════════════════════
+
+    def approve(self, packet_id: PacketId, *, note: str | None = None) -> DecisionRecord:
+        """操作者审批通过一个 manual 验收的 packet。
+
+        ★ 只记录决定，不直接改状态：reconcile 下一轮 tick 看到这条
+          approve 决定后，才会把 review → accepted。状态推进仍然只有
+          _apply_transition 一个出口，审批决定是它的前置条件。
+        """
+        return self._record_operator_decision(packet_id, action="approve", note=note)
+
+    def reject(self, packet_id: PacketId, *, note: str | None = None) -> DecisionRecord:
+        """操作者驳回一个 packet（打回重做）。"""
+        return self._record_operator_decision(packet_id, action="reject", note=note)
+
+    def rollback(self, packet_id: PacketId, *, note: str | None = None) -> tuple[bool, str]:
+        """操作者回滚一个已合入的 packet 产出。
+
+        ★ 记录一条 actor=operator、action=rollback 的决定，然后调用注入的
+          result_rollbacker 执行真正的撤销（git revert）。控制平面本身不碰 git。
+        """
+        if packet_id not in self._packets:
+            raise ValueError(f"unknown packet: {packet_id}")
+        self._record_operator_decision(packet_id, action="rollback", note=note)
+        if self.result_rollbacker is None:
+            return False, "未配置 result_rollbacker：回滚决定已记录，但未执行撤销"
+        packet = self._packets[packet_id]
+        try:
+            ok, detail = self.result_rollbacker(packet)
+        except Exception as exc:  # noqa: BLE001
+            ok, detail = False, f"回滚异常：{type(exc).__name__}: {exc}"
+        return ok, detail
+
+    def _record_operator_decision(
+        self, packet_id: PacketId, *, action: str, note: str | None
+    ) -> DecisionRecord:
+        """写一条 operator 决定（append 到 decisions.jsonl + 内存）。"""
+        if packet_id not in self._packets:
+            raise ValueError(f"unknown packet: {packet_id}")
+        record = DecisionRecord(
+            at=_now_iso(),
+            actor="operator",
+            action=action,
+            packetId=packet_id,
+            reasonCode=f"Operator.{action}",
+            detail=note or None,
+        )
+        _append_decision_record(Path(self.state_dir), record)
+        self._decisions.append(record)
+        return record
+
+    def _operator_decision(self, packet_id: PacketId, action: str) -> DecisionRecord | None:
+        """取最新一条指定动作的 operator 决定（无则 None）。"""
+        for record in reversed(self._decisions):
+            if (
+                record.actor == "operator"
+                and record.action == action
+                and record.packetId == packet_id
+            ):
+                return record
+        return None
 
     # ════════════════════════════════════════════════════════════
     #  内部辅助

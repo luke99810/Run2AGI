@@ -10,7 +10,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from codentum_harness.worker import GitWorktreeManager, integrate_worker_result
+from codentum_harness.worker import GitWorktreeManager, integrate_worker_result, rollback_worker_result
 from codentum_harness.worker.worktree import ensure_project_initialized
 
 
@@ -182,3 +182,53 @@ def test_two_packets_on_disjoint_paths_both_merge(tmp_path: Path) -> None:
 
     assert (repo / "workspace" / "alpha" / "m.py").exists()
     assert (repo / "workspace" / "beta" / "m.py").exists()
+
+
+# ══════════════════════════════════════════════════════════════
+#  回滚：撤销已合入的产出
+# ══════════════════════════════════════════════════════════════
+
+
+def test_rollback_reverts_an_integrated_packet(tmp_path: Path) -> None:
+    """★ 合入是 merge，回滚是 revert 那个 merge 提交 —— 文件真的没了。"""
+
+    repo = _project(tmp_path)
+    ws = _worktree(repo, tmp_path)
+    (ws / "workspace").mkdir(parents=True)
+    (ws / "workspace" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+
+    merged = integrate_worker_result(repo, ws, packet_id="wp-abc123", owns_paths=("workspace/",))
+    assert merged.merged, merged.detail
+    assert (repo / "workspace" / "app.py").exists()
+
+    rolled = rollback_worker_result(repo, packet_id="wp-abc123")
+    assert rolled.rolled_back, rolled.detail
+    assert rolled.commit is not None
+    assert not (repo / "workspace" / "app.py").exists(), "revert 之后文件应该回到合入前的状态（不存在）"
+
+
+def test_rollback_without_integration_is_idempotent_success(tmp_path: Path) -> None:
+    """★ 没有合入提交 = 没有可回滚的东西，是幂等成功，不是故障。"""
+
+    repo = _project(tmp_path)
+    rolled = rollback_worker_result(repo, packet_id="wp-never-integrated")
+    assert rolled.rolled_back is True
+    assert rolled.commit is None
+    assert "无可回滚" in rolled.detail
+
+
+def test_rollback_refuses_when_project_tree_is_dirty(tmp_path: Path) -> None:
+    """★ 回滚同样不能冲掉使用者未提交的改动。"""
+
+    repo = _project(tmp_path)
+    ws = _worktree(repo, tmp_path)
+    (ws / "workspace").mkdir(parents=True)
+    (ws / "workspace" / "app.py").write_text("x\n", encoding="utf-8")
+    assert integrate_worker_result(repo, ws, packet_id="wp-abc123", owns_paths=("workspace/",)).merged
+
+    (repo / "我的草稿.txt").write_text("别动我\n", encoding="utf-8")
+    rolled = rollback_worker_result(repo, packet_id="wp-abc123")
+    assert rolled.rolled_back is False
+    assert "未提交的改动" in rolled.detail
+    assert (repo / "我的草稿.txt").read_text(encoding="utf-8") == "别动我\n"
+

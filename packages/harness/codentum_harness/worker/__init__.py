@@ -13,7 +13,7 @@ from .team import (
     AgentTeamsWorkerStatus,
     TeamWorkerRuntime,
 )
-from .integrate import IntegrationResult, integrate_worker_result
+from .integrate import IntegrationResult, RollbackResult, integrate_worker_result, rollback_worker_result
 from .worktree import (
     GitWorktreeManager,
     ProjectInit,
@@ -33,7 +33,9 @@ __all__ = [
     "AgentTeamsWorkerStatus",
     "GitWorktreeManager",
     "IntegrationResult",
+    "RollbackResult",
     "integrate_worker_result",
+    "rollback_worker_result",
     "ProjectInit",
     "ensure_project_initialized",
     "LocalWorkerRuntime",
