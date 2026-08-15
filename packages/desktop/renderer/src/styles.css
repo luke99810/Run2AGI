@@ -50,9 +50,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .brand-row { position: sticky; z-index: 20; top: 0; height: 58px; flex: 0 0 58px; display: grid; grid-template-columns: 34px minmax(0, 1fr) 32px; align-items: center; gap: 9px; padding: 0 12px 0 14px; border-bottom: 1px solid var(--line); background: var(--sidebar); }
-.brand-mark { width: 34px; height: 34px; border: 0; border-radius: 8px; background: #171918; overflow: hidden; }
-.brand-mark svg { display: block; width: 100%; height: 100%; fill: none; stroke: #fff; stroke-width: 2.15; stroke-linecap: round; stroke-linejoin: round; }
-.brand-mark circle { fill: #fff; stroke: none; }
+.brand-mark { width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent; overflow: hidden; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .brand-copy { min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
 .brand-copy strong { font-size: 16px; font-weight: 650; letter-spacing: 0; }
 .brand-copy span { margin-top: 2px; color: var(--quiet); font-size: 11px; white-space: nowrap; }

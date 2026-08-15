@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { StateSnapshot } from '../shared/protocol'
 import { NAVIGATION, type NavigationKey, roleLabel } from '../renderer/src/domain'
 import type { TaskSession } from '../renderer/src/task-library'
+import brandLogo from '../assets/logo.png'
 import { Icon } from './Common'
 
 const PRIMARY_NAV = new Set<NavigationKey>(['conversations', 'plugins', 'knowledge', 'skills', 'cost', 'roles', 'delivery'])
@@ -25,11 +26,7 @@ export function Sidebar({ active, snapshot, tasks, activeTaskId, validationEnabl
     <aside className={`sidebar${collapsed ? ' collapsed' : ''}`}>
       <div className="brand-row">
         <div className="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32">
-            <path d="M20.5 8.3a9 9 0 1 0 0 15.4" />
-            <path d="M18.5 12.2 24 9m-5.5 6.9H25m-6.5 3.9L24 23" />
-            <circle cx="25" cy="8.5" r="1.7" /><circle cx="26" cy="16" r="1.7" /><circle cx="25" cy="23.5" r="1.7" />
-          </svg>
+          <img src={brandLogo} alt="" />
         </div>
         <div className="brand-copy"><strong>Codentum</strong><span>软件研发团队</span></div>
         <button className="icon-button sidebar-toggle" type="button" onClick={onToggle} aria-label={collapsed ? '展开侧栏' : '收起侧栏'}>

@@ -446,8 +446,7 @@ function createApplicationMenu(): void {
 }
 
 function createTray(): void {
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#171918"/><path d="M19 8a9 9 0 1 0 0 16M17 12l6-4m-6 8h7m-7 4 6 4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="25" cy="8" r="1.8" fill="#fff"/><circle cx="26" cy="16" r="1.8" fill="#fff"/><circle cx="25" cy="24" r="1.8" fill="#fff"/></svg>'
-  const icon = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+  const icon = nativeImage.createFromPath(resolve(__dirname, '../../assets/logo.png'))
   if (icon.isEmpty()) return
   tray = new Tray(icon.resize({ width: 16, height: 16 }))
   tray.setToolTip('Codentum')
@@ -467,6 +466,7 @@ function createWindow(): BrowserWindow {
     show: false,
     backgroundColor: '#f7f8fa',
     title: 'Codentum',
+    icon: resolve(__dirname, '../../assets/logo.png'),
     webPreferences: {
       preload: resolve(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
