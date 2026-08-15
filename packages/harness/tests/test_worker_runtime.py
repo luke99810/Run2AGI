@@ -138,6 +138,28 @@ def test_spawn_writes_evidence_manifest_and_event_log(git_repo: Path, tmp_path: 
     assert events[1]["payload"]["path"] == "checkpoints/0000.json"
 
 
+def test_spawn_mirrors_evidence_to_project_state_dir(git_repo: Path, tmp_path: Path) -> None:
+    """C 读取主项目 .codentum/evidence，不读取隔离 worktree。"""
+    workspace = tmp_path / "workers" / "wp-abcdef"
+    runtime = LocalWorkerRuntime(
+        repo_root=git_repo,
+        project_state_dir=git_repo / ".codentum",
+    )
+
+    handle = asyncio.run(runtime.spawn(request(workspace)))
+    primary = workspace / ".codentum" / "evidence" / handle.worker_id
+    mirror = git_repo / ".codentum" / "evidence" / handle.worker_id
+
+    assert json.loads((mirror / "manifest.json").read_text(encoding="utf-8"))["worker_id"] == (
+        handle.worker_id
+    )
+    assert (mirror / "events.jsonl").read_text(encoding="utf-8") == (
+        primary / "events.jsonl"
+    ).read_text(encoding="utf-8")
+    assert (mirror / "checkpoints" / "0000.json").exists()
+    assert (mirror / "prompt" / "manifest.json").exists()
+
+
 def test_spawn_fills_empty_tools_from_rolespec(git_repo: Path, tmp_path: Path) -> None:
     workspace = tmp_path / "workers" / "wp-abcdef"
     empty_tools_req = request(workspace)

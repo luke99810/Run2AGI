@@ -40,6 +40,7 @@ from codentum_harness.context_broker import (
 from codentum_harness.prepare import PreparedExecution
 from codentum_harness.prompt_bundle import WorkerPromptBundle, write_worker_prompt_bundle
 
+from .evidence import MirroredEvidence
 from .worktree import GitWorktreeManager
 
 __all__ = [
@@ -63,6 +64,7 @@ class LocalWorkerRuntime:
         role_specs: tuple[RoleSpec, ...] | None = None,
         context_loader: WorkerContextLoader | None = None,
         context_char_budget: int | None = None,
+        project_state_dir: Path | str | None = None,
     ) -> None:
         if context_loader is not None and context_char_budget is None:
             raise ValueError("context_char_budget is required when context_loader is provided")
@@ -73,6 +75,9 @@ class LocalWorkerRuntime:
         self._role_specs = {spec.id: spec for spec in specs}
         self._context_loader = context_loader
         self._context_char_budget = context_char_budget or DEFAULT_INTENT_CONTEXT_CHAR_BUDGET
+        self._project_evidence_root = (
+            None if project_state_dir is None else Path(project_state_dir) / "evidence"
+        )
         self._sessions: dict[str, _Session] = {}
 
     async def spawn(self, req: SpawnRequest) -> WorkerHandle:
@@ -123,7 +128,15 @@ class LocalWorkerRuntime:
             runtime_ref=str(workspace),
         )
         evidence_dir = workspace / ".codentum" / "evidence" / worker_id
-        session = _Session(handle=handle, request=req, evidence_dir=evidence_dir)
+        mirror_dir = (
+            None if self._project_evidence_root is None else self._project_evidence_root / worker_id
+        )
+        session = _Session(
+            handle=handle,
+            request=req,
+            evidence_dir=evidence_dir,
+            mirror_evidence_dir=mirror_dir,
+        )
         session.write_manifest(workspace)
         checkpoint = session.write_checkpoint0(prepared.context)
         session.write_prompt_bundle(
@@ -225,17 +238,24 @@ class LocalWorkerRuntime:
 
 
 class _Session:
-    def __init__(self, *, handle: WorkerHandle, request: SpawnRequest, evidence_dir: Path) -> None:
+    def __init__(
+        self,
+        *,
+        handle: WorkerHandle,
+        request: SpawnRequest,
+        evidence_dir: Path,
+        mirror_evidence_dir: Path | None = None,
+    ) -> None:
         self.handle = handle
         self.request = request
         self.evidence_dir = evidence_dir
         self.events_file = evidence_dir / "events.jsonl"
+        self._evidence = MirroredEvidence(evidence_dir, mirror_evidence_dir)
         self.events: list[WorkerEvent] = []
         self.task: asyncio.Task[WorkerOutcome] | None = None
         self.outcome: WorkerOutcome | None = None
 
     def write_manifest(self, workspace: Path) -> None:
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
         manifest = {
             "worker_id": self.handle.worker_id,
             "packet_id": self.handle.packet_id,
@@ -246,18 +266,20 @@ class _Session:
             "mounts": [asdict(m) for m in self.request.mounts],
             "created_at": datetime.now(UTC).isoformat(),
         }
-        (self.evidence_dir / "manifest.json").write_text(
+        self._evidence.write_text(
+            "manifest.json",
             json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def write_checkpoint0(self, context: ContextBundle | None) -> CheckpointRef:
-        return write_initial_checkpoint(
+        checkpoint = write_initial_checkpoint(
             worker_id=self.handle.worker_id,
             request=self.request,
             evidence_dir=self.evidence_dir,
             context=context,
         )
+        self._evidence.mirror_file("checkpoints/0000.json")
+        return checkpoint
 
     def write_prompt_bundle(
         self,
@@ -266,13 +288,15 @@ class _Session:
         *,
         skills_dir: Path | str | None = None,
     ) -> WorkerPromptBundle:
-        return write_worker_prompt_bundle(
+        bundle = write_worker_prompt_bundle(
             request=self.request,
             role_spec=role_spec,
             evidence_dir=self.evidence_dir,
             context=context,
             skills_dir=skills_dir,
         )
+        self._evidence.mirror_tree("prompt")
+        return bundle
 
     def append(self, kind: str, payload: dict[str, object]) -> None:
         event = WorkerEvent(
@@ -282,6 +306,7 @@ class _Session:
             payload=payload,
         )
         self.events.append(event)
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
-        with self.events_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(event), ensure_ascii=False, sort_keys=True) + "\n")
+        self._evidence.append_text(
+            "events.jsonl",
+            json.dumps(asdict(event), ensure_ascii=False, sort_keys=True) + "\n",
+        )

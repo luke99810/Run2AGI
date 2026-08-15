@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from codentum_contracts.state import PacketId, PacketState
+from codentum_control_plane.scheduling import SchedulingConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,3 +49,12 @@ class ReconcileContext:
 
     dep_states: dict[PacketId, PacketState] = field(default_factory=dict)
     "已解析的依赖状态缓存。包外不可见。"
+
+    scheduling: SchedulingConfig | None = None
+    "本轮使用的调度配置。None 只用于极旧测试路径。"
+
+    ready_queue: tuple[PacketId, ...] = ()
+    "本轮按关键路径排序后的 ready 队列。"
+
+    ready_to_start: frozenset[PacketId] = frozenset()
+    "本轮在 WIP 容量内允许进入 running 的 packet。"

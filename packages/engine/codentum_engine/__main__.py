@@ -81,6 +81,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key-env", default=None)
     parser.add_argument("--model-timeout-seconds", type=float, default=180.0)
     parser.add_argument(
+        "--worker-runtime",
+        choices=("local", "team"),
+        default="local",
+        help=(
+            "选择 WorkerRuntime 产品模式：local=隔离 git worktree 本地执行；"
+            "team=经 AgentTeams 创建 Worker、派发并回收结果"
+        ),
+    )
+    parser.add_argument(
         "--enforce-role-transitions",
         action="store_true",
         help="装载 RoleSpec 派生的 TransitionTable（见 EngineConfig 里的说明：现在打开会让 coder packet 停在 review）",
@@ -293,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
             packet_budget_cny=args.packet_budget_cny,
             api_key_env=args.api_key_env,
             model_timeout_seconds=args.model_timeout_seconds,
+            worker_runtime_mode=args.worker_runtime,
             enforce_role_transitions=args.enforce_role_transitions,
             mcp_config_dir=Path(args.mcp_config_dir).resolve() if args.mcp_config_dir else None,
         )
