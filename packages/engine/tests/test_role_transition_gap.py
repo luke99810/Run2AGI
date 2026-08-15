@@ -111,12 +111,31 @@ def _seed(project: Path, packet: WorkPacket) -> Path:
     return state_dir
 
 
-def _run(project: Path, *, enforce: bool) -> WorkPacket:
+def _run(project: Path, *, enforce: bool, approve: bool = False) -> WorkPacket:
+    """跑到稳定态并返回那个 packet。
+
+    ★ `approve=True`：夹具用的是 `acceptance.kind="manual"`（那样不必铺一个
+      真实工作区），而 2026-08-15 起 **manual 验收必须 operator 显式批准** ——
+      此前它靠「有证据」就能过，那是个真实的洞（有证据 ≠ 有人签字）。
+
+      这两条测试的对象是**角色转换表**，人工批准只是它的合法前置。
+      不补批准的话，packet 会停在 review，而红的原因与转换表无关 ——
+      那样这组测试测的就不是它声称测的东西了。
+
+    ★ 默认 **False**，只在真的需要的那两条里打开。
+      第一版默认 True，结果把 `test_gates_still_reject_control_plane_bookkeeping_as_evidence`
+      弄红了 —— 那条测的是「只有 sys: 簿记时不得验收」，
+      而无差别批准正好绕过了它。**夹具的默认值不该替某条测试做决定。**
+    """
+
     service = EngineService(
         EngineConfig(project_root=project, enforce_role_transitions=enforce)
     )
     loop = service._build_loop()  # noqa: SLF001
     loop.load_state()
+    if approve:
+        for packet_id in loop.packets:
+            loop.approve(packet_id, note="测试夹具：manual 验收的人工批准")
     loop.run_until_stable(max_ticks=10)
     loop.save_state()
     return next(iter(loop.packets.values()))
@@ -151,7 +170,7 @@ def test_enabling_role_transitions_no_longer_strands_coder_packets(project: Path
     """
 
     _seed(project, _seeded := _reviewed_packet("wp-stranded01"))
-    packet = _run(project, enforce=True)
+    packet = _run(project, enforce=True, approve=True)
     assert packet.state == "accepted", "打开角色转换表之后，coder 的 packet 仍然推不动"
 
 
@@ -235,7 +254,7 @@ def test_without_the_table_the_same_packet_is_accepted(project: Path) -> None:
     """
 
     _seed(project, _reviewed_packet("wp-accepted01"))
-    packet = _run(project, enforce=False)
+    packet = _run(project, enforce=False, approve=True)
     assert packet.state == "accepted"
 
 
