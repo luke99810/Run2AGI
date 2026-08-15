@@ -22,6 +22,7 @@ from codentum_engine.intake import (
 )
 from codentum_engine.service import IMPLEMENTED_CAPABILITIES, EngineConfig, EngineService
 from codentum_engine.session import EngineSession
+from codentum_harness.worker import TeamWorkerRuntime
 
 _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS_LLM_API_KEY")
 
@@ -114,6 +115,15 @@ def test_without_a_model_key_requirements_is_not_advertised(project: Path, no_ke
     assert isinstance(capabilities, dict)
     assert capabilities["requirements"] is False
     assert "unavailableReason" in handshake
+
+
+def test_worker_runtime_mode_team_selects_team_runtime(project: Path, fake_key: None) -> None:
+    """Team-mode 不是测试孤岛；生产装配能真的选到 TeamWorkerRuntime。"""
+
+    service = _service(project, worker_runtime_mode="team")
+    runtime = service._build_worker_runtime()
+
+    assert isinstance(runtime, TeamWorkerRuntime)
 
 
 def test_state_revision_survives_a_restart(project: Path, fake_key: None) -> None:
@@ -263,6 +273,16 @@ def test_knowledge_resource_selection_is_indexed_into_memory_context(
     assert "indexVersion: sha256:" in memory_candidates[0].text
     assert "CNY 成本归因" in memory_candidates[0].text
     assert list((project / ".codentum" / "memory" / "index" / "entries").glob("*.json"))
+    projection = json.loads(
+        (project / ".codentum" / "memory" / "projection.json").read_text(encoding="utf-8")
+    )
+    assert projection["packetId"] == str(packet_id)
+    assert projection["indexVersion"].startswith("sha256:")
+    assert projection["sourceCount"] == 1
+    assert projection["indexedRefCount"] == 1
+    assert projection["retrievalCount"] >= 1
+    assert projection["retrievals"][0]["category"] == "knowledge"
+    assert projection["retrievals"][0]["memoryRef"].startswith("mem:sha256:")
 
 
 def test_unknown_payload_fields_are_archived_not_dropped(project: Path, fake_key: None) -> None:
@@ -675,6 +695,12 @@ def test_sedimented_memory_is_retrieved_without_any_knowledge_sources(
     ]
     assert memory_candidates, "没有知识资源时，沉淀下来的经验一条都没被读到"
     assert any("ImportError" in c.text for c in memory_candidates)
+    projection = json.loads(
+        (project / ".codentum" / "memory" / "projection.json").read_text(encoding="utf-8")
+    )
+    assert projection["sourceCount"] == 0
+    assert projection["retrievalCount"] >= 1
+    assert any(hit["category"] == "experience" for hit in projection["retrievals"])
 
 
 # ══════════════════════════════════════════════════════════════
@@ -919,8 +945,12 @@ def test_scheduling_and_flow_projections_land_during_a_real_run(
     flow = json.loads((state_dir / "flow.json").read_text("utf-8"))
 
     assert scheduling["schemaVersion"] == 1
-    # ★ WIP 上限必须是**真正被执行的**那个 —— 引擎默认 3，且 reconcile 真的按它拦
-    assert scheduling["wipLimits"] == {"running": 3}
+    # ★ WIP 上限必须是**真正被执行的**那个（控制平面的 wip_limiter 默认值），
+    #   而不是投影自己编的数字。
+    assert scheduling["wipLimits"] == {"running": 4, "review": 2}
+    # ★ readyQueue 必须是字符串数组 —— 桌面端守卫 fail-closed，
+    #   形状不对会让整个文件被拒
+    assert all(isinstance(x, str) for x in scheduling["readyQueue"])
     assert flow["schemaVersion"] == 1
 
     # 决策日志必须有内容，否则 flow 里的时长全部来自空气

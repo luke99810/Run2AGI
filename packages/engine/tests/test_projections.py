@@ -18,7 +18,7 @@ from codentum_contracts.state import (
     Provenance,
     WorkPacket,
 )
-from codentum_engine.projections import write_flow, write_scheduling
+from codentum_engine.projections import write_flow
 
 # ══════════════════════════════════════════════════════════════
 #  C 的读取侧校验规则（镜像）
@@ -122,63 +122,58 @@ def _decision(pid: str, at: str, frm: str, to: str) -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════
-#  scheduling.json
+#  scheduling.json —— 由**控制平面**写（B 的 scheduling 模块）
+#
+#  ★ 这里测的不是引擎的代码，而是**跨语言接缝**：控制平面产出的形状
+#    必须过得了桌面端 fail-closed 的守卫。放在这一层是因为
+#    C 的守卫镜像在本文件里，而 engine 可以 import control-plane。
 # ══════════════════════════════════════════════════════════════
 
 
-def test_wip_limit_is_only_written_when_actually_enforced(tmp_path: Path) -> None:
-    """★ 没有真正执行的限制，就不该往文件里写数字。
+def test_control_plane_scheduling_projection_passes_the_desktop_guard() -> None:
+    """★ 回归测试：`readyQueue` 曾经是**对象数组**，而桌面端要的是字符串数组。
 
-    写了就是「声明了但没人执行」—— 而桌面端会照着它渲染，
-    使用者会以为系统在按这个上限调度。
-    C 的契约也是这么定的：未提供的状态显示「—」，**C 不推算默认值**。
+    守卫是 fail-closed 的（`isStringArray`）—— 形状不对会让
+    **整个 scheduling.json 被拒**，于是 WIP、队列、关键路径全都显示不出来。
+
+    ★ 而这个失败在 Python 侧没有任何信号：守卫写在 TypeScript 里，
+      控制平面的测试全绿。两边各测各的，接缝上没有人。
     """
 
-    packets = {PacketId("wp-aaa001"): _packet("wp-aaa001", "ready")}
-
-    write_scheduling(tmp_path, packets, max_running=None, revision=1)
-    assert json.loads((tmp_path / "scheduling.json").read_text("utf-8"))["wipLimits"] == {}
-
-    write_scheduling(tmp_path, packets, max_running=3, revision=1)
-    data = json.loads((tmp_path / "scheduling.json").read_text("utf-8"))
-    assert data["wipLimits"] == {"running": 3}
-    _assert_scheduling_shape(data)
-
-
-def test_ready_queue_matches_the_actual_pull_order(tmp_path: Path) -> None:
-    """★ 报一个和实际不同的顺序，比不报更误导。
-
-    reconcile 的拉取顺序是 `sorted(self._packets)` —— 界面上排在最前的那个
-    必须就是下一个真的会跑的。
-    """
+    from codentum_control_plane.scheduling import (
+        build_ready_queue,
+        build_scheduling_projection,
+        default_scheduling_config,
+    )
+    from codentum_control_plane.locks import LockTable
 
     packets = {
-        PacketId(pid): _packet(pid, state)
-        for pid, state in [("wp-aaa00c", "ready"), ("wp-aaa00a", "ready"), ("wp-aaa00b", "running")]
+        PacketId("wp-aaa00a"): _packet("wp-aaa00a", "ready"),
+        PacketId("wp-aaa00b"): _packet("wp-aaa00b", "ready", deps=("wp-aaa00a",)),
     }
-    write_scheduling(tmp_path, packets, max_running=2, revision=1)
+    queue = build_ready_queue(
+        packets,
+        lock_table=LockTable(),
+        dep_states={pid: p.state for pid, p in packets.items()},
+    )
+    projection = build_scheduling_projection(
+        packets=tuple(packets.values()),
+        config=default_scheduling_config(),
+        ready_queue=queue,
+        selected_to_start=frozenset(),
+    )
 
-    data = json.loads((tmp_path / "scheduling.json").read_text("utf-8"))
-    assert data["readyQueue"] == ["wp-aaa00a", "wp-aaa00c"], "顺序必须与 sorted(packets) 一致"
-    assert "wp-aaa00b" not in data["readyQueue"], "running 的不该出现在 ready 队列里"
-
-
-def test_critical_path_follows_the_dependency_chain(tmp_path: Path) -> None:
-    """★ 由 A 算而不是 C 算：C 手上只有当前快照。
-
-    两边各算一遍必然在某个时刻不一致，**而不一致时没有任何东西会报错**。
-    """
-
-    packets = {
-        PacketId("wp-aaa00a"): _packet("wp-aaa00a", "pending"),
-        PacketId("wp-aaa00b"): _packet("wp-aaa00b", "pending", deps=("wp-aaa00a",)),
-        PacketId("wp-aaa00c"): _packet("wp-aaa00c", "pending", deps=("wp-aaa00b",)),
-        PacketId("wp-aaa00x"): _packet("wp-aaa00x", "pending"),
-    }
-    write_scheduling(tmp_path, packets, max_running=2, revision=1)
-
-    data = json.loads((tmp_path / "scheduling.json").read_text("utf-8"))
-    assert data["criticalPath"] == ["wp-aaa00a", "wp-aaa00b", "wp-aaa00c"]
+    _assert_scheduling_shape(projection)
+    ready_queue = projection["readyQueue"]
+    assert isinstance(ready_queue, list)
+    assert all(isinstance(x, str) for x in ready_queue), (
+        "readyQueue 必须是字符串数组，否则桌面端会拒掉整个文件"
+    )
+    # 丰富信息可以留，但要另开字段 —— 未知键会被守卫忽略
+    assert projection["readyQueueDetail"], "队列的排序依据不该因为改形状而丢失"
+    assert projection["criticalPath"] == ["wp-aaa00a", "wp-aaa00b"], (
+        "criticalPath 要的是**链本身**，不是 readyQueueDetail 里那个链长整数"
+    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -289,9 +284,7 @@ def test_writes_are_atomic(tmp_path: Path) -> None:
     """
 
     packets = {PacketId("wp-aaa001"): _packet("wp-aaa001", "ready")}
-    write_scheduling(tmp_path, packets, max_running=1, revision=1)
     write_flow(tmp_path, packets)
 
     assert not list(tmp_path.glob("*.tmp")), "临时文件没有被替换掉"
-    json.loads((tmp_path / "scheduling.json").read_text("utf-8"))
     json.loads((tmp_path / "flow.json").read_text("utf-8"))

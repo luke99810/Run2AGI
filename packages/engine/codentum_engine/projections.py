@@ -1,4 +1,4 @@
-"""桌面端投影：`.codentum/scheduling.json` 与 `.codentum/flow.json`。
+"""桌面端投影：`.codentum/flow.json`（scheduling.json 由控制平面写）。
 
 ════════════════════════════════════════════════════════════════
  ★ 这两个文件为什么必须由 A 算，而不是 C 推
@@ -21,8 +21,8 @@ C 的集成契约写得很明确：
 这两个文件是给人看着做决定的。一个编出来的瓶颈会把人引向错误的地方，
 比没有瓶颈信息更糟。所以：
 
-  · `wipLimits` 只报**真正被执行的**限制（`ReconcileLoop.max_running`）。
-    没有强制的限制就不写 —— 写了就是「声明了但没人执行」。
+  · `scheduling.json` 由**控制平面**写（`ReconcileLoop._write_scheduling`）——
+    WIP 上限只有在那里才是真正被执行的。这个模块只负责 `flow.json`。
   · 时长全部来自 `decisions.jsonl` 的时间戳，一条也不猜。
   · 没有决策历史时，`flow.json` 写空结构而不是零值 ——
     「0 秒等待」和「不知道等了多久」是两件相反的事。
@@ -40,7 +40,7 @@ from typing import Any
 
 from codentum_contracts.state import PacketId, WorkPacket
 
-__all__ = ["write_flow", "write_scheduling"]
+__all__ = ["write_flow"]
 
 logger = logging.getLogger(__name__)
 
@@ -139,71 +139,6 @@ def _segments_by_packet(
             segments.append(_Segment(state=last_state, start=cursor, end=None))
         result[pid] = segments
     return result
-
-
-def write_scheduling(
-    state_dir: Path,
-    packets: Mapping[PacketId, WorkPacket],
-    *,
-    max_running: int | None,
-    revision: int,
-) -> None:
-    """写 `.codentum/scheduling.json`。"""
-
-    wip_limits: dict[str, int] = {}
-    if max_running is not None:
-        # ★ 只有**真正被执行**的限制才写进来。见模块注释。
-        wip_limits["running"] = max_running
-
-    ready_queue = sorted(str(pid) for pid, p in packets.items() if p.state == "ready")
-
-    payload: dict[str, Any] = {
-        "schemaVersion": 1,
-        "revision": revision,
-        "updatedAt": _now_iso(),
-        "wipLimits": wip_limits,
-        # ★ 顺序必须与 reconcile 实际的拉取顺序一致（`sorted(self._packets)`）。
-        #   报一个和实际不同的顺序，比不报更误导 —— 界面上排在最前的那个
-        #   实际上可能最后才跑。
-        "readyQueue": ready_queue,
-        "criticalPath": _critical_path(packets),
-    }
-    _atomic_write(state_dir / "scheduling.json", payload)
-
-
-def _critical_path(packets: Mapping[PacketId, WorkPacket]) -> list[str]:
-    """未完成 packet 中最长的一条依赖链。
-
-    ★ 由 A 算而不是 C 算：C 手上只有当前快照，而「最长链」要按依赖图求，
-      两边各算一遍必然在某个时刻不一致 —— 而不一致时没有任何东西会报错。
-    """
-
-    pending = {pid: p for pid, p in packets.items() if p.state not in _TERMINAL_STATES}
-    memo: dict[PacketId, list[str]] = {}
-
-    def longest(pid: PacketId, seen: frozenset[PacketId]) -> list[str]:
-        if pid in memo:
-            return memo[pid]
-        if pid in seen:  # 依赖成环时不死循环（准入会拦，这里只是不信任输入）
-            return []
-        packet = pending.get(pid)
-        if packet is None:
-            return []
-        best: list[str] = []
-        for dep in packet.deps:
-            candidate = longest(dep, seen | {pid})
-            if len(candidate) > len(best):
-                best = candidate
-        chain = [*best, str(pid)]
-        memo[pid] = chain
-        return chain
-
-    longest_chain: list[str] = []
-    for pid in sorted(pending):
-        chain = longest(pid, frozenset())
-        if len(chain) > len(longest_chain):
-            longest_chain = chain
-    return longest_chain
 
 
 def write_flow(state_dir: Path, packets: Mapping[PacketId, WorkPacket]) -> None:

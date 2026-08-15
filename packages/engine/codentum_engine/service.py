@@ -49,11 +49,11 @@ import json
 import logging
 import os
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from codentum_contracts.state import ModelRouting, PacketId, RoleSpec, WorkPacket, dump_state
 from codentum_control_plane.admission import AdmissionChecker
@@ -66,6 +66,7 @@ from codentum_delivery.protocol import CAPABILITY_NAMES, PROTOCOL_VERSION, JsonV
 from codentum_harness.context_broker import ContextCandidate
 from codentum_harness.evolution import experience_context_candidates_now
 from codentum_harness.memory_index import (
+    KnowledgeSource,
     PersistentMemoryIndex,
     ResourceSelectionError,
     index_knowledge_sources_now,
@@ -73,14 +74,16 @@ from codentum_harness.memory_index import (
     memory_context_candidates_now,
 )
 from codentum_harness.model_gateway import audited_bailian_pricing
-from codentum_contracts.interfaces import ModelMessage, ModelRequest
+from codentum_contracts.interfaces import ModelMessage, ModelRequest, WorkerRuntime
 from codentum_harness.runtime import (
     LocalWorkerRuntimeConfig,
     ModelGatewayConfig,
     RunnerConfig,
+    TeamWorkerRuntimeConfig,
     TokenPricingConfig,
     build_local_worker_runtime,
     build_model_gateway,
+    build_team_worker_runtime,
 )
 from codentum_harness.worker import (
     LocalWorkerRuntime,
@@ -99,7 +102,7 @@ from .acceptance import build_executing_acceptance_gate
 from .mcp_client import describe_skipped
 from .mcp_toolbox import McpToolbox, build_mcp_toolbox
 from .planner import PlannedTask, build_packets_from_plan, parse_plan, plan_prompt
-from .projections import write_flow, write_scheduling
+from .projections import write_flow
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
@@ -210,17 +213,14 @@ class EngineConfig:
     max_tool_turns: int = DEFAULT_MAX_TURNS
     """工具循环的轮数上限。撞上限时如实报 max_turns_exhausted，不伪装成完成。"""
 
-    max_running: int | None = 3
-    """同时 running 的 packet 上限（WIP 限制）。
+    worker_runtime_mode: Literal["local", "team"] = "local"
+    """WorkerRuntime 产品模式。
 
-    ★ 默认 3 而不是 None，这个默认值需要解释 —— 因为它看起来像在限制吞吐。
-      2026-08-13 实测：8 个 packet 同时调模型时出现 `Connection error`，
-      **并发本身把请求打挂了**；失败的会重试，重试又加剧并发。
-      在制品越多、单件周期越长，这是精益调度的基本结论，不是这里的发明。
+    `local` 是默认模式：在隔离 git worktree 中本地执行工具循环或 one-shot runner。
+    `team` 会选择 B 的 TeamWorkerRuntime，经 AgentTeams 创建 Worker、派发任务并回收结果。
 
-    ★ 它同时是 `.codentum/scheduling.json` 里 `wipLimits.running` 的
-      **唯一真实来源**。设成 None 时那个字段不写 ——
-      桌面端显示「—」，而不是显示一个没人执行的数字。
+    ★ 这个开关不改变 contracts：控制平面仍只调用 `WorkerRuntime.spawn(req)`。
+      Team-mode 是装配选择，不是给控制平面新增第二套入口。
     """
 
     enforce_role_transitions: bool = False
@@ -636,7 +636,6 @@ class EngineService:
             budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
             guardian=Guardian(),
             transition_table=self._transition_table(),
-            max_running=self.config.max_running,
         )
         loop.worker_runtime = self._build_worker_runtime()
         return loop
@@ -781,7 +780,7 @@ class EngineService:
             return None
         return TransitionTable(self._role_specs)
 
-    def _build_worker_runtime(self) -> LocalWorkerRuntime | None:
+    def _build_worker_runtime(self) -> WorkerRuntime | None:
         if self._key_env is None:
             return None
 
@@ -792,6 +791,17 @@ class EngineService:
             },
             api_key_env=self._key_env,
         )
+
+        if self.config.worker_runtime_mode == "team":
+            return build_team_worker_runtime(
+                TeamWorkerRuntimeConfig(
+                    repo_root=self.config.project_root,
+                    context_char_budget=self.config.context_char_budget,
+                    project_state_dir=self.config.resolved_state_dir(),
+                ),
+                role_specs=self._role_specs,
+                context_loader=self._context_loader,
+            )
 
         if self.config.enable_tool_loop:
             # ★ 带工具循环的 runner：模型能真的把代码写进文件。
@@ -815,6 +825,7 @@ class EngineService:
                 role_specs=self._role_specs,
                 context_loader=self._context_loader,
                 context_char_budget=self.config.context_char_budget,
+                project_state_dir=self.config.resolved_state_dir(),
             )
 
         return build_local_worker_runtime(
@@ -824,6 +835,7 @@ class EngineService:
                     gateway_config, timeout_seconds=self.config.model_timeout_seconds
                 ),
                 context_char_budget=self.config.context_char_budget,
+                project_state_dir=self.config.resolved_state_dir(),
             ),
             role_specs=self._role_specs,
             context_loader=self._context_loader,
@@ -852,15 +864,19 @@ class EngineService:
         ]
         payload = requirement_record.get("payload") if requirement_record is not None else {}
         submitted_at = requirement_record.get("submittedAt") if requirement_record is not None else None
+        sources: tuple[KnowledgeSource, ...] = ()
+        indexed_refs: tuple[str, ...] = ()
+        memory_candidates: tuple[ContextCandidate, ...] = ()
+        degradation_reasons: list[str] = []
+        index = PersistentMemoryIndex(self.config.resolved_state_dir() / "memory" / "index")
         try:
             sources = knowledge_sources_from_payload(
                 payload if isinstance(payload, dict) else {},
                 packet_id=request.packet_id,
                 role=role_spec.id,
             )
-            index = PersistentMemoryIndex(self.config.resolved_state_dir() / "memory" / "index")
             if sources:
-                index_knowledge_sources_now(
+                indexed_refs = index_knowledge_sources_now(
                     index,
                     sources,
                     created_at=submitted_at if isinstance(submitted_at, str) else _now_iso(),
@@ -873,37 +889,98 @@ class EngineService:
             #
             #   这个缺陷是静默的：写入侧一直在攒 L0/L1，读取侧一次没读过，
             #   从外面看就是「记忆系统在跑，只是好像没起作用」。
-            candidates.extend(
-                memory_context_candidates_now(
-                    index,
-                    query_text=text,
-                    role_spec=role_spec,
-                    packet_id=request.packet_id,
-                    limit=5,
-                    char_budget=max(1, self.config.context_char_budget // 2),
-                )
+            memory_candidates = memory_context_candidates_now(
+                index,
+                query_text=text,
+                role_spec=role_spec,
+                packet_id=request.packet_id,
+                limit=5,
+                char_budget=max(1, self.config.context_char_budget // 2),
             )
+            candidates.extend(memory_candidates)
+            if not memory_candidates:
+                degradation_reasons.append("no_memory_hits")
             # ★ 经验要单独召回一次，不能和上面那次共用。
             #   上面用**需求文本**做词法检索，对领域知识是对的；
             #   而经验的相关性来自「你是这个角色」，与本次需求内容无关 ——
             #   共用一次的话，词法得分为 0 会把经验全部丢掉，
             #   于是写入侧一直在攒、读取侧一条都出不来。
-            candidates.extend(
-                experience_context_candidates_now(
-                    index,
-                    role_spec=role_spec,
-                    packet_id=request.packet_id,
-                    char_budget=max(1, self.config.context_char_budget // 4),
-                )
+            experience_candidates = experience_context_candidates_now(
+                index,
+                role_spec=role_spec,
+                packet_id=request.packet_id,
+                char_budget=max(1, self.config.context_char_budget // 4),
+            )
+            candidates.extend(experience_candidates)
+            self._write_memory_projection(
+                packet_id=request.packet_id,
+                role_spec=role_spec,
+                index=index,
+                sources=sources,
+                indexed_refs=indexed_refs,
+                candidates=(*memory_candidates, *experience_candidates),
+                degradation_reasons=tuple(degradation_reasons),
             )
         except ResourceSelectionError as exc:
             logger.warning("MemoryIndex 资源选择被拒绝：%s", exc)
+            self._write_memory_projection(
+                packet_id=request.packet_id,
+                role_spec=role_spec,
+                index=index,
+                sources=sources,
+                indexed_refs=indexed_refs,
+                candidates=memory_candidates,
+                degradation_reasons=(f"resource_selection_rejected:{exc}",),
+            )
         return tuple(candidates)
+
+    def _write_memory_projection(
+        self,
+        *,
+        packet_id: PacketId,
+        role_spec: RoleSpec,
+        index: PersistentMemoryIndex,
+        sources: Sequence[KnowledgeSource],
+        indexed_refs: Sequence[str],
+        candidates: Sequence[ContextCandidate],
+        degradation_reasons: Sequence[str],
+    ) -> None:
+        """把 MemoryIndex 的运行事实投影成 C 可直接读取的权威状态。"""
+
+        try:
+            index_version = index.version_now()
+            hits = [_memory_hit_projection(candidate, index_version) for candidate in candidates]
+            reasons = list(degradation_reasons)
+            if any(hit["degraded"] for hit in hits):
+                reasons.append("memory_retrieval_degraded")
+            payload = {
+                "schemaVersion": 1,
+                "updatedAt": _now_iso(),
+                "packetId": str(packet_id),
+                "role": str(role_spec.id),
+                "indexVersion": index_version,
+                "sourceCount": len(sources),
+                "sources": [_knowledge_source_projection(source) for source in sources],
+                "indexedRefCount": len(tuple(indexed_refs)),
+                "indexedRefs": list(indexed_refs),
+                "retrievalCount": len(hits),
+                "retrievals": hits,
+                "degraded": bool(reasons),
+                "degradationReasons": reasons,
+            }
+            projection_dir = self.config.resolved_state_dir() / "memory"
+            projection_dir.mkdir(parents=True, exist_ok=True)
+            (projection_dir / "projection.json").write_text(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("MemoryIndex 投影写入失败：%s", exc)
 
     # ══════════════════════════════════════════════════════════
 
     def _write_projections(self, loop: ReconcileLoop) -> None:
-        """重算 `.codentum/scheduling.json` 与 `flow.json`。
+        """重算 `.codentum/flow.json`。
 
         ★ 每轮都重算，而不是只在结束时算一次：桌面端是**跟着看**的，
           一个只在收尾时更新的瓶颈视图，在最需要它的时候（正卡着）是空的。
@@ -913,15 +990,9 @@ class EngineService:
         """
 
         try:
-            state_dir = self.config.resolved_state_dir()
-            packets = loop.packets
-            write_scheduling(
-                state_dir,
-                packets,
-                max_running=loop.max_running,
-                revision=self.revision,
-            )
-            write_flow(state_dir, packets)
+            # ★ `scheduling.json` 由控制平面自己写（它才知道真正被执行的 WIP 上限）。
+            #   这里只补 `flow.json` —— 它要的是决策日志，那是引擎这一侧的账。
+            write_flow(self.config.resolved_state_dir(), loop.packets)
         except Exception as exc:  # noqa: BLE001
             logger.warning("调度/流动投影写入失败（不影响状态推进）：%s", exc)
 
@@ -1050,3 +1121,30 @@ def _string_list(value: object) -> tuple[str, ...]:
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, str) and item.strip())
+
+
+def _knowledge_source_projection(source: KnowledgeSource) -> dict[str, JsonValue]:
+    return {
+        "selectionId": source.selection_id,
+        "sourceKind": source.source_kind,
+        "localPath": str(source.local_path),
+        "scopeKind": source.scope_kind,
+        "role": str(source.role) if source.role is not None else None,
+        "packetId": str(source.packet_id) if source.packet_id is not None else None,
+    }
+
+
+def _memory_hit_projection(candidate: ContextCandidate, index_version: str) -> dict[str, JsonValue]:
+    memory_ref = candidate.ref.removeprefix("memory:")
+    artifact_path = candidate.artifact_path
+    category = "experience" if "/experience/" in artifact_path else "knowledge"
+    degraded = "degraded: true" in candidate.text
+    return {
+        "memoryRef": memory_ref,
+        "category": category,
+        "artifactPath": artifact_path,
+        "summary": candidate.summary or "",
+        "priority": candidate.priority,
+        "indexVersion": index_version,
+        "degraded": degraded,
+    }

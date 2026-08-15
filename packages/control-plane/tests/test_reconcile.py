@@ -160,6 +160,29 @@ def _inject(loop: ReconcileLoop, packet: WorkPacket) -> None:
     )
 
 
+def _write_scheduling(
+    state_dir: Path,
+    *,
+    running: int = 4,
+    review: int = 2,
+) -> None:
+    (state_dir / "scheduling.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "wipLimits": {
+                    "running": running,
+                    "review": review,
+                },
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 # ════════════════════════════════════════════════════════════════
 #  Tests: 状态加载
 # ════════════════════════════════════════════════════════════════
@@ -291,6 +314,51 @@ class TestReadyToRunning:
         report = empty_loop.tick()
         t = [x for x in report.transitions if x.packet_id == "wp-000005"][0]
         assert t.to_state == "blocked"
+
+    def test_running_wip_limit_keeps_excess_ready_in_queue(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """running WIP 满不是 blocked；多出来的 ready 留在队列等下一轮容量。"""
+        _write_scheduling(tmp_state_dir, running=1, review=2)
+        first = _make_packet("wp-wip001", state="ready", owns=("src/a/",))
+        second = _make_packet("wp-wip002", state="ready", owns=("src/b/",))
+        _inject(empty_loop, first)
+        _inject(empty_loop, second)
+
+        report = empty_loop.tick()
+
+        started = [t.packet_id for t in report.transitions if t.to_state == "running"]
+        assert started == ["wp-wip001"]
+        assert empty_loop.packet(PacketId("wp-wip001")).state == "running"
+        assert empty_loop.packet(PacketId("wp-wip002")).state == "ready"
+
+        projection = json.loads((tmp_state_dir / "scheduling.json").read_text(encoding="utf-8"))
+        assert projection["current"]["running"] == 1
+        assert projection["current"]["ready"] == 1
+        assert projection["capacity"]["running"] == 0
+
+    def test_ready_queue_prefers_critical_path_before_packet_id(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """WIP 只有 1 时，长依赖链的 packet 抢先启动，而不是 id 小者先跑。"""
+        _write_scheduling(tmp_state_dir, running=1, review=2)
+        short = _make_packet("wp-aaaaaa", state="ready", owns=("src/short/",))
+        long = _make_packet("wp-zzzzzz", state="ready", owns=("src/long/",))
+        child = _make_packet(
+            "wp-child1",
+            state="pending",
+            deps=("wp-zzzzzz",),
+            owns=("src/child/",),
+        )
+        _inject(empty_loop, short)
+        _inject(empty_loop, long)
+        _inject(empty_loop, child)
+
+        report = empty_loop.tick()
+
+        started = [t.packet_id for t in report.transitions if t.to_state == "running"]
+        assert started == ["wp-zzzzzz"]
+        assert empty_loop.packet(PacketId("wp-aaaaaa")).state == "ready"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -433,6 +501,30 @@ class TestRunningToReview:
 
         report = empty_loop.tick()
         assert empty_loop.packet(PacketId("wp-000008")).state == "running"
+
+    def test_review_wip_limit_delays_worker_settle(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """review 列满时，running worker 先不 settle，防止评审在制品继续堆积。"""
+        _write_scheduling(tmp_state_dir, running=4, review=1)
+        mock = _MockWorkerRuntime(outcome=_completed_outcome())
+        empty_loop.worker_runtime = mock
+
+        running = _make_packet("wp-aaa001", state="ready", owns=("src/running/",))
+        occupied_review = _make_packet("wp-zzz001", state="review", owns=("src/review/",))
+        _inject(empty_loop, running)
+        _inject(empty_loop, occupied_review)
+
+        empty_loop.tick()
+        assert empty_loop.packet(PacketId("wp-aaa001")).state == "running"
+
+        report = empty_loop.tick()
+        transitions_for_running = [
+            t for t in report.transitions if t.packet_id == "wp-aaa001"
+        ]
+        assert transitions_for_running == []
+        assert empty_loop.packet(PacketId("wp-aaa001")).state == "running"
+        assert empty_loop.packet(PacketId("wp-zzz001")).state == "review"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -890,6 +982,7 @@ class TestStateDirSelfHeals:
         loop.tick()
 
         assert (state_dir / "graph.json").is_file(), "graph.json 没有被补回来"
+        assert (state_dir / "scheduling.json").is_file()
         assert (state_dir / "decisions.jsonl").is_file()
         assert (state_dir / "packets").is_dir()
         assert (state_dir / "evidence").is_dir()
@@ -908,6 +1001,7 @@ class TestStateDirSelfHeals:
         loop.tick()
 
         assert (state_dir / "graph.json").is_file()
+        assert (state_dir / "scheduling.json").is_file()
         assert (state_dir / "packets").is_dir()
 
     def test_healing_does_not_overwrite_surviving_state(self, tmp_path: Path) -> None:
@@ -931,6 +1025,22 @@ class TestStateDirSelfHeals:
         assert survivor.read_text(encoding="utf-8") == '{"id": "wp-survivor01"}'
         assert (state_dir / "decisions.jsonl").read_text(encoding="utf-8") == '{"kept": true}\n'
         assert (state_dir / "graph.json").is_file()
+
+    def test_ensure_state_dir_writes_scheduling_projection(self, tmp_path: Path) -> None:
+        """C 读 scheduling.json，不自行推算 WIP、容量和队列。"""
+
+        state_dir = tmp_path / ".codentum"
+        loop = ReconcileLoop(state_dir=str(state_dir))
+
+        loop.ensure_state_dir()
+
+        projection = json.loads((state_dir / "scheduling.json").read_text(encoding="utf-8"))
+        assert projection["schemaVersion"] == 1
+        assert projection["wipLimits"] == {"review": 2, "running": 4}
+        assert projection["current"]["running"] == 0
+        assert projection["capacity"] == {"review": 2, "running": 4}
+        assert projection["readyQueue"] == []
+        assert projection["policy"]["ordering"] == "critical_path_desc_then_packet_id"
 
     def test_healing_is_reported_not_silent(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

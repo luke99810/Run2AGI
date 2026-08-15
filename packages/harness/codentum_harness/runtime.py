@@ -152,6 +152,7 @@ class LocalWorkerRuntimeConfig:
     repo_root: Path | str
     runner: RunnerConfig | None = None
     context_char_budget: int | None = None
+    project_state_dir: Path | str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +161,7 @@ class TeamWorkerRuntimeConfig:
 
     repo_root: Path | str
     context_char_budget: int | None = None
+    project_state_dir: Path | str | None = None
     worker_runtime: str = "copaw"
     worker_name_prefix: str = "codentum"
     create_wait_timeout_seconds: float = 300.0
@@ -277,6 +279,7 @@ def build_local_worker_runtime(
         role_specs=role_specs,
         context_loader=context_loader,
         context_char_budget=config.context_char_budget,
+        project_state_dir=config.project_state_dir,
     )
 
 
@@ -320,6 +323,7 @@ def build_team_worker_runtime(
         worker_runtime=config.worker_runtime,
         worker_name_prefix=config.worker_name_prefix,
         create_wait_timeout_seconds=config.create_wait_timeout_seconds,
+        project_state_dir=config.project_state_dir,
     )
 
 

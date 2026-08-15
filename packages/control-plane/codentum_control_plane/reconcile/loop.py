@@ -54,6 +54,17 @@ from codentum_control_plane.evidence import (
     is_acceptance_evidence,
 )
 from codentum_control_plane.guardian import Guardian
+from codentum_control_plane.scheduling import (
+    ReadyQueueEntry,
+    SchedulingConfig,
+    build_ready_queue,
+    build_scheduling_projection,
+    count_packet_states,
+    default_scheduling_config,
+    load_scheduling_config,
+    remaining_capacity,
+    under_wip_limit,
+)
 from codentum_control_plane.state_machine import TransitionTable
 
 from .actions import PacketTransition, ReconcileContext, TickReport
@@ -184,6 +195,12 @@ class ReconcileLoop:
     _active_workers: dict[PacketId, WorkerHandle] = field(default_factory=dict, init=False)
     _tick_count: int = field(default=0, init=False)
     _dirty: bool = field(default=False, init=False)
+    _scheduling_config: SchedulingConfig = field(
+        default_factory=default_scheduling_config,
+        init=False,
+    )
+    _ready_queue_entries: tuple[ReadyQueueEntry, ...] = field(default=(), init=False)
+    _ready_to_start: frozenset[PacketId] = field(default_factory=frozenset, init=False)
 
     _state_dir_ensured: bool = field(default=False, init=False)
     """是否已经铺过一次状态目录。
@@ -294,6 +311,9 @@ class ReconcileLoop:
 
         self._active_workers.clear()
         self._tick_count = 0
+        self._scheduling_config = load_scheduling_config(root)
+        self._ready_queue_entries = ()
+        self._ready_to_start = frozenset()
         self._dirty = False
 
     def save_state(self) -> None:
@@ -360,6 +380,7 @@ class ReconcileLoop:
         )
 
         self._write_budget(root)
+        self._write_scheduling(root)
         self.ensure_state_dir()
 
         self._dirty = False
@@ -396,6 +417,27 @@ class ReconcileLoop:
             "utf-8",
         )
 
+    def _write_scheduling(self, root: Path) -> None:
+        """把 WIP 上限、当前计数和 ready 队列投影到 scheduling.json。"""
+        root.mkdir(parents=True, exist_ok=True)
+        payload = (
+            json.dumps(
+                build_scheduling_projection(
+                    packets=tuple(self._packets.values()),
+                    config=self._scheduling_config,
+                    ready_queue=self._ready_queue_entries,
+                    selected_to_start=self._ready_to_start,
+                ),
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        target = root / "scheduling.json"
+        if target.exists() and target.read_text(encoding="utf-8") == payload:
+            return
+        target.write_text(payload, encoding="utf-8")
+
     def _heal_state_dir_if_missing(self) -> None:
         """常态下只做几次 stat；确实缺东西了才走完整的补齐流程。
 
@@ -407,6 +449,7 @@ class ReconcileLoop:
         root = Path(self.state_dir)
         required = (
             root / "graph.json",
+            root / "scheduling.json",
             root / "decisions.jsonl",
             root / "packets",
             root / "evidence",
@@ -489,6 +532,13 @@ class ReconcileLoop:
         #   这次出现在了修它的代码里。判据是「补完之后它在不在」。
         if budget_was_missing and (root / "budget.json").exists():
             healed.append("budget.json")
+
+        scheduling_was_missing = not (root / "scheduling.json").exists()
+        if not scheduling_was_missing:
+            self._scheduling_config = load_scheduling_config(root)
+        self._write_scheduling(root)
+        if scheduling_was_missing and (root / "scheduling.json").exists():
+            healed.append("scheduling.json")
 
         # ★ 补过东西就**出声**。
         #
@@ -589,7 +639,27 @@ class ReconcileLoop:
 
         # 构建依赖状态缓存（一次遍历，后续所有 packet 复用）
         dep_states = {pid: p.state for pid, p in self._packets.items()}
-        ctx = ReconcileContext(dep_states=dep_states)
+        self._scheduling_config = load_scheduling_config(self.state_dir)
+        self._ready_queue_entries = build_ready_queue(
+            self._packets,
+            lock_table=self._lock_table,
+            dep_states=dep_states,
+        )
+        counts = count_packet_states(tuple(self._packets.values()))
+        running_capacity = remaining_capacity("running", counts, self._scheduling_config)
+        allowed_entries = (
+            self._ready_queue_entries
+            if running_capacity is None
+            else self._ready_queue_entries[:running_capacity]
+        )
+        self._ready_to_start = frozenset(entry.packet_id for entry in allowed_entries)
+        self._write_scheduling(Path(self.state_dir))
+        ctx = ReconcileContext(
+            dep_states=dep_states,
+            scheduling=self._scheduling_config,
+            ready_queue=tuple(entry.packet_id for entry in self._ready_queue_entries),
+            ready_to_start=self._ready_to_start,
+        )
 
         for pid in sorted(self._packets):
             packet = self._packets[pid]
@@ -655,9 +725,9 @@ class ReconcileLoop:
         if state == "pending":
             return self._try_pending_to_ready(packet, ctx)
         elif state == "ready":
-            return self._try_ready_to_running(packet)
+            return self._try_ready_to_running(packet, ctx)
         elif state == "running":
-            return self._try_running_to_review(packet)
+            return self._try_running_to_review(packet, ctx)
         elif state == "blocked":
             return self._try_blocked_to_ready(packet, ctx)
         elif state == "review":
@@ -692,7 +762,9 @@ class ReconcileLoop:
 
     # ── ready → running ──────────────────────────────────────
 
-    def _try_ready_to_running(self, packet: WorkPacket) -> PacketTransition | None:
+    def _try_ready_to_running(
+        self, packet: WorkPacket, ctx: ReconcileContext
+    ) -> PacketTransition | None:
         """ready → running：获取路径锁，生成 worker 实例。
 
         两条路：
@@ -707,12 +779,13 @@ class ReconcileLoop:
                 evidence_refs=(),
             )
 
-        # ★ WIP 限制：撞上限时**保持 ready**，不是失败。
-        #   下一轮 tick 会再试 —— 这与锁冲突走的是同一条语义。
-        if self.max_running is not None:
-            running_now = sum(1 for p in self._packets.values() if p.state == "running")
-            if running_now >= self.max_running:
-                return None
+        config = ctx.scheduling or self._scheduling_config
+        if packet.id not in ctx.ready_to_start:
+            return None
+
+        counts = count_packet_states(tuple(self._packets.values()))
+        if not under_wip_limit("running", counts, config):
+            return None
 
         # 获取路径锁
         now = _now_iso()
@@ -800,12 +873,19 @@ class ReconcileLoop:
 
     # ── running → review / blocked ───────────────────────────
 
-    def _try_running_to_review(self, packet: WorkPacket) -> PacketTransition | None:
+    def _try_running_to_review(
+        self, packet: WorkPacket, ctx: ReconcileContext
+    ) -> PacketTransition | None:
         """检查 running packet 的 worker 是否已经结束。
 
         没有 WorkerRuntime 时 → 跳过（无法判定是否完成，留给外部驱动）。
         """
         if self.worker_runtime is None:
+            return None
+
+        config = ctx.scheduling or self._scheduling_config
+        counts = count_packet_states(tuple(self._packets.values()))
+        if not under_wip_limit("review", counts, config):
             return None
 
         handle = self._active_workers.get(packet.id)
