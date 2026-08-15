@@ -87,6 +87,7 @@ from codentum_harness.runtime import (
 )
 from codentum_harness.worker import (
     LocalWorkerRuntime,
+    integrate_worker_result,
     ProjectInit,
     ensure_project_initialized,
 )
@@ -98,7 +99,7 @@ from codentum_roles.loader import (
     project_role_skills,
 )
 
-from .acceptance import build_executing_acceptance_gate
+from .acceptance import _latest_workspace, build_executing_acceptance_gate
 from .mcp_client import describe_skipped
 from .mcp_toolbox import McpToolbox, build_mcp_toolbox
 from .planner import PlannedTask, build_packets_from_plan, parse_plan, plan_prompt
@@ -636,6 +637,7 @@ class EngineService:
             budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
             guardian=Guardian(),
             transition_table=self._transition_table(),
+            result_integrator=self._integrate_result,
         )
         loop.worker_runtime = self._build_worker_runtime()
         return loop
@@ -978,6 +980,42 @@ class EngineService:
             logger.warning("MemoryIndex 投影写入失败：%s", exc)
 
     # ══════════════════════════════════════════════════════════
+
+    def _integrate_result(self, packet: WorkPacket) -> tuple[bool, str]:
+        """把 worker 在隔离 worktree 里的产出合回主项目。
+
+        ★ 装配点负责「怎么合」（git 操作 + 定位工作区），
+          控制平面只负责「什么时候合」（验收通过时）。
+          把 subprocess 放进控制平面会稀释它「零 LLM、不派生子进程」的承诺。
+        """
+
+        if packet.attempts == 0:
+            # ★ **没有 worker 跑过 ≠ 合入失败。** 没跑过就没有产出，无从合起。
+            #   不做这个区分的话，任何「直接进 review」的 packet（比如
+            #   评审类、或外部驱动的）都会被判成合入失败并转 blocked ——
+            #   实测被 test_role_transition_gap 当场抓住。
+            return True, f"{packet.id} 没有 worker 执行记录（attempts=0），无需合入"
+
+        workspace = _latest_workspace(self._workers_root(), packet)
+        if workspace is None:
+            # ★ 找不到工作区**不拦**，但必须出声。
+            #
+            #   这与「工作区不干净 / 改了别人的路径 / 合并冲突」是两类事：
+            #   那三条是对**这份工作**的判断，该拦；
+            #   而工作区找不到是**信息缺失**（被清理、换了机器、重启过），
+            #   拦掉会误伤合法的工作。
+            #
+            #   但它绝不能静默通过 —— 结论会写进 accepted 的 detail，
+            #   否则「合入了」和「压根没合」在状态上长得一模一样。
+            return True, f"**未合入**：有 {packet.attempts} 次执行记录却找不到工作区"
+
+        result = integrate_worker_result(
+            self.config.project_root,
+            workspace,
+            packet_id=str(packet.id),
+            owns_paths=tuple(packet.ownsPaths),
+        )
+        return result.merged, result.detail
 
     def _write_projections(self, loop: ReconcileLoop) -> None:
         """重算 `.codentum/flow.json`。

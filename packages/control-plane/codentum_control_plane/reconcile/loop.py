@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -170,6 +170,18 @@ class ReconcileLoop:
 
     guardian: Guardian | None = None
     "★ 确定性拦截器。若为 None，不执行运行时不变量检查。"
+
+    result_integrator: Callable[[WorkPacket], tuple[bool, str]] | None = None
+    """把 worker 产出合回主项目的回调。为 None 时**不合入**。
+
+    ★ 由装配点注入而不是控制平面自己做：合入是 git 操作，
+      而控制平面的承诺是「确定性代码，零 LLM，不派生子进程」。
+      注入之后控制平面只做一件事 —— **决定什么时候合**（验收通过时）。
+
+    ★ 为 None 时不合入，这件事必须让人看得见：
+      packet 会是 accepted 而项目里没有东西，那正是这条缺口原本的样子。
+      装配点（EngineService）默认注入真实实现。
+    """
 
     max_running: int | None = None
     """同时处于 running 的 packet 上限（WIP 限制）。None = 不限。
@@ -1041,6 +1053,40 @@ class ReconcileLoop:
 
     # ── review → accepted / rejected ─────────────────────────
 
+    def _integrate_before_accepting(
+        self, packet: WorkPacket
+    ) -> tuple[PacketTransition | None, str]:
+        """验收通过后、真正标 accepted 之前，把产出合回主项目。
+
+        ★ 「accepted」必须意味着**东西真的进了项目**，否则它只是一句状态字符串：
+          packet 显示验收通过，而使用者打开项目什么都没有。
+
+        ★ 合入失败转 **blocked** 而不是留在 review：
+          留在 review 会每轮重试合并，而失败原因（工作区不干净、改了别人的路径、
+          合并冲突）通常不会自己消失 —— 那样只是把一次失败变成无限次失败。
+
+        返回 `(转移 | None, 结论)`：转移非 None 表示**已经转到 blocked**，
+        调用方应直接返回它；结论无论成败都要写进 accepted 的 detail。
+        """
+
+        if self.result_integrator is None:
+            return None, ""
+        try:
+            ok, detail = self.result_integrator(packet)
+        except Exception as exc:  # noqa: BLE001
+            ok, detail = False, f"合入过程异常：{type(exc).__name__}: {exc}"
+        if ok:
+            logger.info("packet %s 合入：%s", packet.id, detail)
+            # ★ 即使成功也把结论带回 accepted 的 detail —— 「没有改动」
+            #   「没有执行记录」「找不到工作区」都属于「**没有合入任何东西**」，
+            #   它们与「合入了 N 处」在状态上都是 accepted，
+            #   不写出来就分辨不出。
+            return None, detail
+        logger.warning("packet %s 合入失败，转 blocked：%s", packet.id, detail)
+        return self._apply_transition(
+            packet, target="blocked", detail=f"验收通过但合入失败：{detail}", evidence_refs=()
+        ), detail
+
     def _try_review_to_accepted(self, packet: WorkPacket) -> PacketTransition | None:
         """review → accepted：运行门禁判定。
 
@@ -1069,10 +1115,15 @@ class ReconcileLoop:
             if not gate_result.passed:
                 return None
 
+            blocked, note = self._integrate_before_accepting(packet)
+            if blocked is not None:
+                return blocked
+
             return self._apply_transition(
                 packet,
                 target="accepted",
-                detail=f"门禁 {gate_id!r} 通过：{gate_result.detail}",
+                detail=f"门禁 {gate_id!r} 通过：{gate_result.detail}"
+                + (f"｜合入：{note}" if note else ""),
                 evidence_refs=gate_result.evidence_refs,
             )
 
@@ -1104,10 +1155,14 @@ class ReconcileLoop:
             )
             return None
 
+        blocked, note = self._integrate_before_accepting(packet)
+        if blocked is not None:
+            return blocked
+
         return self._apply_transition(
             packet,
             target="accepted",
-            detail=f"验收门禁通过（{len(real)} 条证据）",
+            detail=f"验收门禁通过（{len(real)} 条证据）" + (f"｜合入：{note}" if note else ""),
             evidence_refs=real,
         )
 

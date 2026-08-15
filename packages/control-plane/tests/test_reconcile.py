@@ -1219,3 +1219,56 @@ class TestDecisionLog:
         report = empty_loop.tick()
 
         assert report.transitions, "日志写不进去，状态推进也停了"
+
+
+# ════════════════════════════════════════════════════════════════
+#  产出合入：「accepted」必须意味着东西真的进了项目
+# ════════════════════════════════════════════════════════════════
+
+
+class TestResultIntegration:
+    def _reviewable(self, loop: ReconcileLoop, pid: str) -> None:
+        packet = _make_packet(pid, state="review").model_copy(
+            update={"evidence": (EvidenceRef("file:model/result.json"),), "attempts": 1}
+        )
+        _inject(loop, packet)
+
+    def test_integration_failure_blocks_instead_of_looping(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 合入失败转 blocked，不是留在 review。
+
+        留在 review 会每轮重试合并，而失败原因（工作区不干净、改了别人的
+        路径、合并冲突）通常不会自己消失 —— 那只是把一次失败变成无限次失败。
+        """
+
+        empty_loop.result_integrator = lambda _p: (False, "工作区有未提交的改动")
+        self._reviewable(empty_loop, "wp-integ0001")
+        empty_loop.tick()
+
+        packet = empty_loop.packets[PacketId("wp-integ0001")]
+        assert packet.state == "blocked"
+
+    def test_accepted_detail_says_whether_anything_was_merged(
+        self, empty_loop: ReconcileLoop
+    ) -> None:
+        """★ 「合入了 3 处」与「压根没合」在状态上**都是 accepted**。
+
+        不把结论写进 detail 的话，这两件事从外面完全分辨不出来 ——
+        而那正是这条缺口原本的样子：验收通过只是一句状态字符串。
+        """
+
+        empty_loop.result_integrator = lambda _p: (True, "**未合入**：找不到工作区")
+        self._reviewable(empty_loop, "wp-integ0002")
+        report = empty_loop.tick()
+
+        (transition,) = [t for t in report.transitions if t.to_state == "accepted"]
+        assert "未合入" in transition.detail, "accepted 了，却看不出到底合没合"
+
+    def test_no_integrator_keeps_the_old_behaviour(self, empty_loop: ReconcileLoop) -> None:
+        """没注入合入器时保持原样 —— 控制平面不自己做 git。"""
+
+        assert empty_loop.result_integrator is None
+        self._reviewable(empty_loop, "wp-integ0003")
+        empty_loop.tick()
+        assert empty_loop.packets[PacketId("wp-integ0003")].state == "accepted"

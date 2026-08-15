@@ -956,3 +956,17 @@ def test_scheduling_and_flow_projections_land_during_a_real_run(
     # 决策日志必须有内容，否则 flow 里的时长全部来自空气
     decisions = (state_dir / "decisions.jsonl").read_text("utf-8").strip()
     assert decisions, "转移发生过，decisions.jsonl 却是空的 —— flow 无据可算"
+
+
+def test_engine_wires_the_result_integrator(project: Path, fake_key: None) -> None:
+    """★ 缺口 ⑥ 的接线判据：合入器必须真的被注入。
+
+    没注入的话，packet 会是 accepted 而项目里什么都没有 ——
+    而那正是这条缺口原本的样子：**「验收通过」只是一句状态字符串**。
+
+    这条守的是「接上了」；合入本身的行为判据在
+    packages/harness/tests/test_integrate.py（7 条）。
+    """
+
+    loop = _service(project)._build_loop()
+    assert loop.result_integrator is not None, "合入器没被注入 —— accepted 不代表东西进了项目"
