@@ -82,7 +82,11 @@ from codentum_harness.runtime import (
     build_local_worker_runtime,
     build_model_gateway,
 )
-from codentum_harness.worker import LocalWorkerRuntime, ensure_project_initialized
+from codentum_harness.worker import (
+    LocalWorkerRuntime,
+    ProjectInit,
+    ensure_project_initialized,
+)
 from codentum_roles.loader import (
     RoleMcpLoadError,
     RoleSkillLoadError,
@@ -242,7 +246,7 @@ class EngineService:
     _workers: list[threading.Thread] = field(default_factory=list, init=False)
     _key_env: str | None = field(init=False)
     _mcp: McpToolbox | None = field(default=None, init=False)
-    _project_init: object = field(default=None, init=False)
+    _project_init: ProjectInit | None = field(default=None, init=False)
     _stopped: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:

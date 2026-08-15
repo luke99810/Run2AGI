@@ -896,4 +896,5 @@ def test_plain_folder_without_git_is_initialized(tmp_path: Path, fake_key: None)
     service = _service(plain)
 
     assert (plain / ".git").exists()
-    assert service._project_init.changed is True  # type: ignore[union-attr]
+    assert service._project_init is not None
+    assert service._project_init.changed is True
