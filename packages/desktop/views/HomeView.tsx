@@ -61,6 +61,13 @@ export function HomeView({
   const completedPackets = counts.accepted + counts.abandoned
   const currentStep = packets.length === 0 ? 0 : Math.min(completedPackets + 1, packets.length)
   const currentWorkers = snapshot?.workers.filter((worker) => worker.state === 'running' || worker.state === 'starting' || worker.state === 'waiting') ?? []
+  const runningLimit = snapshot?.scheduling?.wipLimits.running
+  const bottleneckState = snapshot?.flow?.bottleneck?.state
+  const progressSummary = [
+    completedPackets === packets.length ? '任务已完成' : currentWorkers.length > 0 ? `${currentWorkers.length} 个 Agent 正在工作` : '等待下一步',
+    runningLimit === undefined ? null : `WIP ${counts.running}/${runningLimit}`,
+    bottleneckState === undefined ? null : `瓶颈：${PACKET_STATE_LABELS[bottleneckState]}`
+  ].filter((item): item is string => item !== null).join(' · ')
   const budget = snapshot?.budget
   const stateDirectoryMissing = snapshot?.warnings.some((warning) => warning.startsWith('[missing] State directory is unavailable:')) ?? false
   const isProject = snapshot?.source.kind === 'project'
@@ -112,11 +119,11 @@ export function HomeView({
               <button type="button" role="menuitem" onClick={() => {
                 chatMenuRef.current?.removeAttribute('open')
                 onSearchChat()
-              }}><Icon name="search" size={17} /><span><strong>搜索任务记录</strong><small>关键词、需求内容和文件名</small></span></button>
+              }}><Icon name="search" size={17} /><span><strong>搜索对话记录</strong><small>消息、命令、回执、文件和证据</small></span></button>
               <button type="button" role="menuitem" onClick={() => {
                 chatMenuRef.current?.removeAttribute('open')
                 void onExportChat().then((exported) => setChatActionStatus(exported ? '任务记录已导出' : null)).catch((error: unknown) => setChatActionStatus(error instanceof Error ? error.message : String(error)))
-              }}><Icon name="file" size={17} /><span><strong>导出任务记录</strong><small>保存需求、附件和任务元数据</small></span></button>
+              }}><Icon name="file" size={17} /><span><strong>导出对话记录</strong><small>保存需求、附件、命令、回执和运行引用</small></span></button>
             </div>
           </details>
         </div>
@@ -133,7 +140,7 @@ export function HomeView({
             <summary>
               <span className={`conversation-progress-wheel${currentWorkers.length > 0 ? ' active' : ''}`} aria-hidden="true" />
               <strong>第 {currentStep} / {packets.length} 步</strong>
-              <span>{completedPackets === packets.length ? '任务已完成' : currentWorkers.length > 0 ? `${currentWorkers.length} 个 Agent 正在工作` : '等待下一步'}</span>
+              <span>{progressSummary}</span>
               <span className="conversation-progress-more" aria-hidden="true">•••</span>
             </summary>
             <div className="conversation-progress-list">

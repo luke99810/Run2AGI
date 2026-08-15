@@ -24,6 +24,7 @@ import { ProjectStateSource } from './index'
 
 const REPO = resolve(__dirname, '..', '..', '..')
 const SPECS = resolve(REPO, 'packages', 'roles', 'specs')
+const SKILLS = resolve(REPO, 'packages', 'roles', 'skills')
 const MCP = resolve(REPO, 'packages', 'roles', 'mcp')
 const EMPTY_FIXTURE = resolve(REPO, 'fixtures', 'golden-state', 'empty', '.codentum')
 
@@ -130,12 +131,92 @@ describe('RoleSpec 项目投影', () => {
       for (const required of ['agentteams', 'browser', 'filesystem', 'git']) {
         expect(ids).toContain(required)
       }
-      expect(snapshot.mcpServices.find((service) => service.id === 'filesystem')?.tools).toEqual([
-        'read_file',
-        'write_file',
-        'list_directory'
-      ])
+      expect(snapshot.mcpServices.find((service) => service.id === 'filesystem')).toMatchObject({
+        category: 'third-party-app',
+        enabled: false,
+        status: 'disconnected',
+        authentication: 'not_required',
+        tools: []
+      })
       expect(snapshot.mcpServices.find((service) => service.id === 'agentteams')?.authentication).toBe('missing')
+      expect(snapshot.mcpServices.find((service) => service.id === 'github')).toMatchObject({
+        category: 'third-party-app',
+        purpose: expect.stringContaining('代码托管'),
+        enabled: false,
+        requiresEnv: ['GITHUB_PERSONAL_ACCESS_TOKEN']
+      })
+    } finally {
+      source.close()
+    }
+  })
+
+  it('B 的 Skill manifest 和 SKILL.md 原样投影后，C 必须读出完整可执行契约', async () => {
+    const project = await mkdtemp(join(tmpdir(), 'codentum-skills-'))
+    created.push(project)
+    const state = join(project, '.codentum')
+    const shared = join(state, 'skills', 'shared')
+    await mkdir(shared, { recursive: true })
+
+    for (const member of ['graph.json', 'budget.json', 'decisions.jsonl']) {
+      await copyFile(join(EMPTY_FIXTURE, member), join(state, member))
+    }
+    for (const directory of ['packets', 'evidence', 'knowledge', 'roles', 'mcp']) {
+      await mkdir(join(state, directory), { recursive: true })
+    }
+
+    const skillNames = (await readdir(SKILLS, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+    expect(skillNames.length, 'B 的 Skill 源目录是空的？').toBeGreaterThan(0)
+    for (const name of skillNames) {
+      const target = join(shared, name)
+      await mkdir(target, { recursive: true })
+      await copyFile(join(SKILLS, name, 'manifest.json'), join(target, 'manifest.json'))
+      await copyFile(join(SKILLS, name, 'SKILL.md'), join(target, 'SKILL.md'))
+    }
+
+    const source = await ProjectStateSource.create(project, {})
+    try {
+      const snapshot = await source.read()
+      expect(snapshot.warnings).toEqual([])
+      expect(snapshot.skills.map((skill) => skill.id).sort()).toEqual(skillNames)
+      const frontend = snapshot.skills.find((skill) => skill.id === 'frontend')
+      expect(frontend?.permissions.tools).toEqual(expect.arrayContaining(['read_file', 'write_file', 'run_tests', 'create_diff']))
+      expect(frontend?.appliesTo).toEqual(['coder', 'helper'])
+      expect(frontend?.inputs).toEqual(expect.any(Object))
+      expect(frontend?.outputs).toEqual(expect.any(Object))
+      expect(frontend?.preconditions).toEqual(expect.any(Array))
+      expect(frontend?.failure.timeoutSeconds).toBeGreaterThan(0)
+      expect(frontend?.permissions.networkAccess).toEqual(expect.any(Array))
+      expect(frontend?.requiresSkills).toEqual(expect.any(Array))
+      expect(frontend?.conflicts).toEqual(expect.any(Array))
+      expect(frontend?.reuse).toEqual(expect.objectContaining({ crossRole: expect.any(Boolean), crossProject: expect.any(Boolean) }))
+      expect(frontend?.instructionMarkdown).toContain('# Frontend Skill')
+    } finally {
+      source.close()
+    }
+  })
+
+  it('把引擎需求记录中的 taskId 投影为本地任务与 Packet 的关联', async () => {
+    const project = await mkdtemp(join(tmpdir(), 'codentum-requirements-'))
+    created.push(project)
+    const state = join(project, '.codentum')
+    await mkdir(join(state, 'requirements'), { recursive: true })
+    for (const member of ['graph.json', 'budget.json', 'decisions.jsonl']) {
+      await copyFile(join(EMPTY_FIXTURE, member), join(state, member))
+    }
+    for (const directory of ['packets', 'evidence', 'knowledge', 'roles', 'mcp']) {
+      await mkdir(join(state, directory), { recursive: true })
+    }
+    await writeFile(join(state, 'requirements', 'wp-demo.json'), JSON.stringify({
+      packetId: 'wp-demo', text: '实现搜索', submittedAt: '2026-08-14T00:00:00.000Z', commandId: 'cmd-demo', payload: { taskId: '00000000-0000-4000-8000-000000000001' }
+    }), 'utf8')
+
+    const source = await ProjectStateSource.create(project, {})
+    try {
+      const snapshot = await source.read()
+      expect(snapshot.requirements).toEqual([expect.objectContaining({ packetId: 'wp-demo', taskId: '00000000-0000-4000-8000-000000000001' })])
     } finally {
       source.close()
     }

@@ -18,15 +18,17 @@ import { McpView } from '../../views/McpView'
 import { ConnectorsView } from '../../views/ConnectorsView'
 import { ConversationsView, HelpView, ResourceLibraryView, SettingsView } from '../../views/WorkbenchViews'
 import {
+  appendTaskConversation,
   createTaskSession,
   historyForAgent,
   loadTaskSessions,
   loadWorkbenchPreferences,
-  PLUGIN_OPTIONS,
+  pluginOptionsFromMcp,
   saveTaskSessions,
   saveWorkbenchPreferences,
   skillOptionsFromRoles,
   taskDraftScope,
+  taskConversationEntries,
   taskRequestsValidation,
   updateTaskFromDraft,
   type TaskContextSelection,
@@ -53,11 +55,24 @@ function loadSidebarWidth(): number {
   }
 }
 
-function warningCopy(warning: string): string {
+function warningCopy(warning: string, engineReason?: string): string {
   if (warning.startsWith('[missing] State directory is unavailable:')) {
-    return '工作区已正确打开；尚未生成 .codentum 运行状态。当前可编辑需求和添加附件，正式执行需引擎完成首次项目初始化。'
+    return engineReason === undefined
+      ? '工作区已正确打开，A/B 引擎正在完成首次项目初始化；初始化后会自动显示 Agent、Skills、MCP 和 Worker 状态。'
+      : `工作区已正确打开，但 A/B 引擎尚未完成首次项目初始化：${engineReason}`
   }
   return warning
+}
+
+function conversationKindLabel(kind: 'user' | 'command' | 'receipt' | 'agent' | 'evidence' | 'error'): string {
+  return {
+    user: '用户消息',
+    command: 'C 命令',
+    receipt: '引擎回执',
+    agent: 'Agent / Worker 事件',
+    evidence: '证据引用',
+    error: '错误'
+  }[kind]
 }
 
 function nextCommandId(): string {
@@ -83,8 +98,8 @@ export function App(): ReactNode {
   const activeTask = sourceTasks.find((task) => task.id === activeTaskId)
   const validationEnabled = activeTask !== undefined && taskRequestsValidation(activeTask)
   const visibleWarnings = warningsForDisplay(desktop.snapshot?.warnings ?? [])
-  const pluginOptions = PLUGIN_OPTIONS
-  const skillOptions = skillOptionsFromRoles(desktop.snapshot?.roles)
+  const pluginOptions = pluginOptionsFromMcp(desktop.snapshot?.mcpServices)
+  const skillOptions = skillOptionsFromRoles(desktop.snapshot?.roles, desktop.snapshot?.skills)
 
   useEffect(() => {
     saveTaskSessions(tasks)
@@ -171,22 +186,28 @@ export function App(): ReactNode {
     updateTask(activeTaskId, (task) => ({ ...task, context, updatedAt: new Date().toISOString() }))
   }, [activeTaskId, updateTask])
 
-  const exportActiveChat = useCallback(async (): Promise<boolean> => {
-    if (activeTask === undefined) return false
-    const draft = await desktop.loadRequirementDraft(taskDraftScope(activeTask))
+  const exportTaskChat = useCallback(async (task: TaskSession): Promise<boolean> => {
+    const draft = await desktop.loadRequirementDraft(taskDraftScope(task))
     const attachmentLines = draft.attachments.length === 0
       ? ['- 无']
       : draft.attachments.map((attachment) => `- ${attachment.name} (${attachment.kind === 'folder' ? `${attachment.fileCount} 个文件` : `${attachment.sizeBytes} bytes`}, SHA-256 ${attachment.sha256})`)
-    const context = activeTask.context
+    const context = task.context
+    const timeline = taskConversationEntries(task, desktop.snapshot)
+    const timelineLines = timeline.length === 0
+      ? ['- 当前没有已记录的消息、命令回执、Agent 事件或证据引用。']
+      : timeline.flatMap((entry) => {
+        const metadata = [entry.action, entry.commandId, entry.packetId, ...(entry.evidenceRefs ?? [])].filter(Boolean).join(' · ')
+        return [`### ${new Date(entry.at).toLocaleString('zh-CN')} · ${conversationKindLabel(entry.kind)}`, '', entry.text, ...(metadata === '' ? [] : ['', `> ${metadata}`]), '']
+      })
     const markdown = [
-      `# ${activeTask.title}`,
+      `# ${task.title}`,
       '',
-      `- Task ID: ${activeTask.id}`,
-      `- 项目来源: ${activeTask.sourceId}`,
-      `- 状态: ${activeTask.status === 'submitted' ? '已提交' : '草稿'}`,
+      `- Task ID: ${task.id}`,
+      `- 项目来源: ${task.sourceId}`,
+      `- 状态: ${task.status === 'submitted' ? '已提交' : '草稿'}`,
       `- 访问权限: ${context.accessMode}`,
-      `- 创建时间: ${activeTask.createdAt}`,
-      `- 更新时间: ${activeTask.updatedAt}`,
+      `- 创建时间: ${task.createdAt}`,
+      `- 更新时间: ${task.updatedAt}`,
       '',
       '## 需求记录',
       '',
@@ -195,10 +216,19 @@ export function App(): ReactNode {
       '## 引用文件',
       '',
       ...attachmentLines,
+      '',
+      '## 对话、命令与运行记录',
+      '',
+      ...timelineLines,
       ''
     ].join('\n')
-    return desktop.exportTaskRecord(activeTask.title, markdown)
-  }, [activeTask, desktop])
+    return desktop.exportTaskRecord(task.title, markdown)
+  }, [desktop])
+
+  const exportActiveChat = useCallback(async (): Promise<boolean> => {
+    if (activeTask === undefined) return false
+    return exportTaskChat(activeTask)
+  }, [activeTask, exportTaskChat])
 
   const openWorker = useCallback((workerId: string): void => {
     setFocusedWorkerId(workerId)
@@ -219,7 +249,7 @@ export function App(): ReactNode {
       throw new Error(`引擎未开放此操作能力：${request.action}`)
     }
     if (desktop.selectedSourceId !== snapshot.source.id) throw new Error('状态来源正在切换，请刷新后重试')
-    return desktop.sendCommand(createOperatorCommand({
+    const command = createOperatorCommand({
       commandId: nextCommandId(),
       runId: desktop.handshake.runId,
       expectedRevision: desktop.handshake.stateRevision,
@@ -232,8 +262,55 @@ export function App(): ReactNode {
         projectRoot
       },
       requestedAt: new Date().toISOString()
-    }))
-  }, [desktop])
+    })
+    const payloadTaskId = request.payload?.['taskId']
+    const taskId = typeof payloadTaskId === 'string' ? payloadTaskId : activeTaskId
+    if (taskId !== null) {
+      if (request.action === 'submit_requirement' && typeof request.payload?.['requirement'] === 'string') {
+        updateTask(taskId, (task) => appendTaskConversation(task, {
+          id: `${command.commandId}:user`,
+          kind: 'user',
+          at: command.requestedAt,
+          text: request.payload?.['requirement'] as string,
+          commandId: command.commandId,
+          action: request.action
+        }))
+      }
+      updateTask(taskId, (task) => appendTaskConversation(task, {
+        id: `${command.commandId}:command`,
+        kind: 'command',
+        at: command.requestedAt,
+        text: `向 ${request.agentId} 发送 ${request.action}`,
+        commandId: command.commandId,
+        action: request.action,
+        ...(request.packetId === undefined ? {} : { packetId: request.packetId })
+      }))
+    }
+    try {
+      const receipt = await desktop.sendCommand(command)
+      if (taskId !== null) updateTask(taskId, (task) => appendTaskConversation(task, {
+        id: `${command.commandId}:receipt`,
+        kind: 'receipt',
+        at: receipt.receivedAt,
+        text: receipt.reason === undefined ? `引擎回执：${receipt.status}` : `引擎回执：${receipt.status} · ${receipt.reason}`,
+        commandId: receipt.commandId,
+        action: request.action,
+        ...(request.packetId === undefined ? {} : { packetId: request.packetId })
+      }))
+      return receipt
+    } catch (error) {
+      if (taskId !== null) updateTask(taskId, (task) => appendTaskConversation(task, {
+        id: `${command.commandId}:error`,
+        kind: 'error',
+        at: new Date().toISOString(),
+        text: error instanceof Error ? error.message : String(error),
+        commandId: command.commandId,
+        action: request.action,
+        ...(request.packetId === undefined ? {} : { packetId: request.packetId })
+      }))
+      throw error
+    }
+  }, [activeTaskId, desktop, updateTask])
 
   let view: ReactNode
   switch (navigation) {
@@ -305,13 +382,13 @@ export function App(): ReactNode {
       )
       break
     case 'delivery':
-      view = <DeliveryView snapshot={desktop.snapshot} enabled={validationEnabled} />
+      view = <DeliveryView snapshot={desktop.snapshot} sourceId={desktop.selectedSourceId} packageArtifact={desktop.packageProjectArtifact} enabled={validationEnabled} />
       break
     case 'conversations':
-      view = <ConversationsView tasks={sourceTasks} activeTaskId={activeTask?.id ?? null} onSelectTask={selectTask} onNewTask={createNewTask} />
+      view = <ConversationsView tasks={sourceTasks} snapshot={desktop.snapshot} activeTaskId={activeTask?.id ?? null} onSelectTask={selectTask} onNewTask={createNewTask} onExportTask={exportTaskChat} />
       break
     case 'plugins':
-      view = <ConnectorsView list={desktop.listConnectors} save={desktop.saveConnector} remove={desktop.removeConnector} />
+      view = <ConnectorsView services={desktop.snapshot?.mcpServices ?? []} list={desktop.listConnectors} save={desktop.saveConnector} remove={desktop.removeConnector} />
       break
     case 'knowledge':
     case 'skills':
@@ -388,7 +465,7 @@ export function App(): ReactNode {
         />
         <div className="content-scroll">
           {desktop.error === null ? null : <div className="global-error"><ErrorNotice message={desktop.error} /></div>}
-          {visibleWarnings.map((warning, index) => <div className="global-warning" key={`${warning}-${index}`}><WarningNotice message={warningCopy(warning)} /></div>)}
+          {visibleWarnings.map((warning, index) => <div className="global-warning" key={`${warning}-${index}`}><WarningNotice message={warningCopy(warning, desktop.handshake.connected ? undefined : desktop.handshake.unavailableReason)} /></div>)}
           {desktop.loading ? <div className="loading-line" aria-label="正在读取状态"><span /></div> : null}
           {view}
           <footer className="content-footer">

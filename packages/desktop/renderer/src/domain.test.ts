@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { GraphFile, WorkPacket } from '@codentum/contracts'
 import type { CapabilityMap, WorkerProjection } from '../../shared/protocol'
-import { buildDependencyWaves, createOperatorCommand, hasCapability, NAVIGATION, projectWorkerModules, ROLE_ROSTER, sameProjectPath, warningsForDisplay } from './domain'
+import { buildDependencyWaves, buildFlowBoard, createOperatorCommand, hasCapability, NAVIGATION, projectWorkerModules, ROLE_ROSTER, sameProjectPath, warningsForDisplay } from './domain'
 
 function packet(id: string, deps: readonly string[] = []): WorkPacket {
   return {
@@ -56,6 +56,35 @@ describe('buildDependencyWaves', () => {
       ownership: { locks: [], version: 1 }
     }
     expect(buildDependencyWaves({ graph, packets })).toEqual({ waves: [], unresolved: ['a', 'b'] })
+  })
+})
+
+describe('buildFlowBoard', () => {
+  it('uses packet truth for counts and only displays projected WIP limits', () => {
+    const packets = [
+      { ...packet('ready-b'), state: 'ready' as const },
+      { ...packet('ready-a'), state: 'ready' as const },
+      { ...packet('running-a'), state: 'running' as const }
+    ]
+    const board = buildFlowBoard({
+      packets,
+      scheduling: {
+        schemaVersion: 1,
+        wipLimits: { running: 1 },
+        readyQueue: ['ready-a', 'ready-b'],
+        criticalPath: ['running-a']
+      }
+    })
+    expect(board.find((column) => column.state === 'ready')).toMatchObject({ current: 2 })
+    expect(board.find((column) => column.state === 'ready')).not.toHaveProperty('limit')
+    expect(board.find((column) => column.state === 'ready')?.packets.map((item) => item.id)).toEqual(['ready-a', 'ready-b'])
+    expect(board.find((column) => column.state === 'running')).toMatchObject({ current: 1, limit: 1, overLimit: false })
+  })
+
+  it('does not invent a WIP limit when scheduling data is absent', () => {
+    const board = buildFlowBoard({ packets: [{ ...packet('running-a'), state: 'running' }], scheduling: null })
+    expect(board.find((column) => column.state === 'running')).toMatchObject({ current: 1, overLimit: false })
+    expect(board.find((column) => column.state === 'running')).not.toHaveProperty('limit')
   })
 })
 

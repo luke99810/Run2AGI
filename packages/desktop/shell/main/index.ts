@@ -32,6 +32,7 @@ import { SidecarManager } from './python-engine/SidecarManager'
 import { ManagedResourceStore } from './managed-resource-store'
 import { RequirementDraftStore } from './requirement-draft-store'
 import { WorkspaceConfigurationStore } from './workspace-configuration-store'
+import { packageProjectArtifact as createProjectArtifact } from './artifact-packager'
 
 const ALLOWED_ACTIONS = new Set<OperatorAction>([
   'submit_requirement',
@@ -211,6 +212,24 @@ async function exportTaskRecord(suggestedName: unknown, markdown: unknown): Prom
   return true
 }
 
+async function packageProjectFromSource(sourceId: unknown, suggestedName: unknown, packetId: unknown): Promise<Awaited<ReturnType<typeof createProjectArtifact>> | null> {
+  if (mainWindow === undefined) return null
+  assertSourceId(sourceId)
+  if (typeof suggestedName !== 'string' || suggestedName.length < 1 || suggestedName.length > 160) throw new TypeError('Invalid artifact filename')
+  if (packetId !== undefined && (typeof packetId !== 'string' || packetId.length < 1 || packetId.length > 256)) throw new TypeError('Invalid packet id')
+  if (stateHub === undefined) throw new Error('State source is unavailable')
+  const root = stateHub.projectRoot(sourceId)
+  const safeName = suggestedName.replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_').replace(/[. ]+$/u, '').slice(0, 120) || 'Codentum-source'
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '生成项目源码交付包',
+    defaultPath: `${safeName}.tar.gz`,
+    buttonLabel: '生成并验证',
+    filters: [{ name: 'Gzip TAR', extensions: ['gz'] }]
+  })
+  if (result.canceled || result.filePath === '') return null
+  return createProjectArtifact(root, result.filePath, packetId)
+}
+
 function cleanupWatcher(contents: WebContents): void {
   watchers.get(contents.id)?.()
   watchers.delete(contents.id)
@@ -271,6 +290,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC_CHANNELS.exportTaskRecord, async (event, suggestedName: unknown, markdown: unknown) => {
     assertTrustedSender(event)
     return exportTaskRecord(suggestedName, markdown)
+  })
+  ipcMain.handle(IPC_CHANNELS.packageProjectArtifact, async (event, sourceId: unknown, suggestedName: unknown, packetId: unknown) => {
+    assertTrustedSender(event)
+    return packageProjectFromSource(sourceId, suggestedName, packetId)
   })
   ipcMain.handle(IPC_CHANNELS.listManagedResources, async (event, kind: unknown) => {
     assertTrustedSender(event)
@@ -423,8 +446,7 @@ function createApplicationMenu(): void {
 }
 
 function createTray(): void {
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#171918"/><path d="M19 8a9 9 0 1 0 0 16M17 12l6-4m-6 8h7m-7 4 6 4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="25" cy="8" r="1.8" fill="#fff"/><circle cx="26" cy="16" r="1.8" fill="#fff"/><circle cx="25" cy="24" r="1.8" fill="#fff"/></svg>'
-  const icon = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+  const icon = nativeImage.createFromPath(resolve(__dirname, '../../assets/logo.png'))
   if (icon.isEmpty()) return
   tray = new Tray(icon.resize({ width: 16, height: 16 }))
   tray.setToolTip('Codentum')
@@ -444,6 +466,7 @@ function createWindow(): BrowserWindow {
     show: false,
     backgroundColor: '#f7f8fa',
     title: 'Codentum',
+    icon: resolve(__dirname, '../../assets/logo.png'),
     webPreferences: {
       preload: resolve(__dirname, '../preload/index.cjs'),
       contextIsolation: true,

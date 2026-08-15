@@ -12,7 +12,11 @@ import type {
   WorkPacket
 } from '@codentum/contracts'
 import type {
+  FlowProjection,
   McpServiceProjection,
+  RequirementProjection,
+  SchedulingProjection,
+  SkillProjection,
   SnapshotSourceDescriptor,
   SkillRuntimeProjection,
   StateSnapshot,
@@ -57,6 +61,14 @@ interface ParseContext {
   readonly directories: ReadonlySet<string>
   readonly warnings: string[]
   coherent: boolean
+}
+
+interface RequirementRecordProjection {
+  readonly packetId: string
+  readonly text: string
+  readonly submittedAt: string
+  readonly commandId: string
+  readonly payload: Readonly<Record<string, unknown>>
 }
 
 export interface DirectoryStateSourceOptions {
@@ -266,9 +278,13 @@ async function readDirectorySnapshot(
   const evidence = parseJsonCollection(context, 'evidence/', isEvidence, true, true)
   const knowledge = parseKnowledge(context)
   const roles = parseJsonCollection(context, 'roles/', isRoleSpec, false)
+  const skills = parseSkills(context)
+  const requirements = parseRequirements(context)
   const skillProjection = parseJsonFile(context, 'skills/projection.json', isSkillRuntimeProjection, false)
   const mcpServices = parseJsonCollection(context, 'mcp/', isMcpServiceProjection, false)
   const workers = parseWorkers(context, staleAfterMs)
+  const scheduling = parseJsonFile(context, 'scheduling.json', isSchedulingProjection, false)
+  const flow = parseJsonFile(context, 'flow.json', isFlowProjection, false)
 
   checkGraphPacketCoherence(context, graph, packets)
 
@@ -286,9 +302,13 @@ async function readDirectorySnapshot(
       evidence,
       knowledge,
       roles,
+      skills,
+      requirements,
       skillProjection,
       mcpServices,
       workers,
+      scheduling,
+      flow,
       warnings: unique(context.warnings)
     }
   }
@@ -340,12 +360,16 @@ async function scanStateDirectory(stateDirectory: string): Promise<StateScan> {
   await addFile('budget.json')
   await addFile('decisions.jsonl')
   await addFile('knowledge.json')
+  await addFile('scheduling.json')
+  await addFile('flow.json')
 
   await scanFlatJsonDirectory(stateDirectory, 'packets', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'knowledge', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'roles', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'skills', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'mcp', directories, warnings, addFile)
+  await scanFlatJsonDirectory(stateDirectory, 'requirements', directories, warnings, addFile)
+  await scanSharedSkillsDirectory(stateDirectory, directories, warnings, addFile)
 
   const evidencePath = join(stateDirectory, 'evidence')
   const evidenceStat = await safeLstat(evidencePath)
@@ -372,6 +396,32 @@ async function scanStateDirectory(stateDirectory: string): Promise<StateScan> {
   }
 
   return { files, directories, warnings }
+}
+
+async function scanSharedSkillsDirectory(
+  stateDirectory: string,
+  directories: Set<string>,
+  warnings: string[],
+  addFile: (relativePath: string) => Promise<void>
+): Promise<void> {
+  const sharedDirectory = join(stateDirectory, 'skills', 'shared')
+  const sharedStat = await safeLstat(sharedDirectory)
+  if (!sharedStat?.isDirectory()) return
+  directories.add('skills')
+  directories.add('skills/shared')
+
+  const entries = await safeReadDirectory(sharedDirectory, warnings, 'skills/shared')
+  for (const entry of entries) {
+    const skillDirectory = `skills/shared/${entry.name}`
+    if (entry.isSymbolicLink()) {
+      warnings.push(`[path] Ignored symbolic link inside .codentum: ${skillDirectory}`)
+      continue
+    }
+    if (!entry.isDirectory()) continue
+    directories.add(skillDirectory)
+    await addFile(`${skillDirectory}/manifest.json`)
+    await addFile(`${skillDirectory}/SKILL.md`)
+  }
 }
 
 async function scanFlatJsonDirectory(
@@ -717,6 +767,53 @@ function parseKnowledge(context: ParseContext): KnowledgeFile | null {
   }
 }
 
+function parseSkills(context: ParseContext): SkillProjection[] {
+  const skillDirectories = [...context.directories]
+    .filter((path) => /^skills\/shared\/[^/]+$/u.test(path))
+    .sort((left, right) => left.localeCompare(right))
+  const skills: SkillProjection[] = []
+
+  for (const directory of skillDirectories) {
+    const manifestPath = `${directory}/manifest.json`
+    const instructionPath = `${directory}/SKILL.md`
+    const manifestText = context.contents.get(manifestPath)
+    const instructionMarkdown = context.contents.get(instructionPath)
+    if (manifestText === undefined || instructionMarkdown === undefined) {
+      context.warnings.push(`[partial-write] Skill projection is incomplete: ${directory}`)
+      context.coherent = false
+      continue
+    }
+    const manifest = parseJson(context, manifestPath, manifestText)
+    if (!isSkillManifest(manifest)) {
+      if (manifest !== undefined) {
+        context.warnings.push(`[schema] State file does not match its contract: ${manifestPath}`)
+        context.coherent = false
+      }
+      continue
+    }
+    if (instructionMarkdown.trim() === '') {
+      context.warnings.push(`[schema] Skill instructions are empty: ${instructionPath}`)
+      context.coherent = false
+      continue
+    }
+    skills.push({ ...manifest, instructionMarkdown })
+  }
+  return skills
+}
+
+function parseRequirements(context: ParseContext): RequirementProjection[] {
+  return parseJsonCollection(context, 'requirements/', isRequirementRecordProjection, false).map((record) => {
+    const taskId = record.payload['taskId']
+    return {
+      packetId: record.packetId,
+      text: record.text,
+      submittedAt: record.submittedAt,
+      commandId: record.commandId,
+      ...(typeof taskId === 'string' && taskId.length > 0 ? { taskId } : {})
+    }
+  })
+}
+
 function parseWorkers(context: ParseContext, staleAfterMs: number | undefined): WorkerProjection[] {
   const workerDirectories = [...context.directories]
     .filter((path) =>
@@ -921,6 +1018,10 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
 
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string')
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -1000,6 +1101,110 @@ const PACKET_STATES = new Set([
   'rejected',
   'abandoned'
 ])
+
+function isPacketState(value: unknown): boolean {
+  return typeof value === 'string' && PACKET_STATES.has(value)
+}
+
+function isOptionalTimestamp(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+function isOptionalRatio(value: unknown): boolean {
+  return value === undefined || (isFiniteNumber(value) && value >= 0 && value <= 1)
+}
+
+function isSchedulingProjection(value: unknown): value is SchedulingProjection {
+  if (!isRecord(value) || value['schemaVersion'] !== 1) return false
+  const wipLimits = value['wipLimits']
+  return (
+    isRecord(wipLimits) &&
+    Object.entries(wipLimits).every(([state, limit]) =>
+      PACKET_STATES.has(state) && Number.isInteger(limit) && (limit as number) >= 0
+    ) &&
+    (value['revision'] === undefined || (Number.isInteger(value['revision']) && (value['revision'] as number) >= 0)) &&
+    isOptionalTimestamp(value['updatedAt']) &&
+    (value['readyQueue'] === undefined || isStringArray(value['readyQueue'])) &&
+    (value['criticalPath'] === undefined || isStringArray(value['criticalPath']))
+  )
+}
+
+function isFlowSegment(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isPacketState(value['state']) &&
+    (value['kind'] === 'waiting' || value['kind'] === 'value') &&
+    isFiniteNumber(value['durationMs']) &&
+    value['durationMs'] >= 0 &&
+    isOptionalTimestamp(value['startedAt']) &&
+    isOptionalTimestamp(value['endedAt']) &&
+    (value['reason'] === undefined || typeof value['reason'] === 'string')
+  )
+}
+
+function isPacketFlow(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value['packetId'] === 'string' &&
+    isFiniteNumber(value['totalCycleMs']) &&
+    value['totalCycleMs'] >= 0 &&
+    isOptionalRatio(value['efficiency']) &&
+    Array.isArray(value['segments']) &&
+    value['segments'].every(isFlowSegment)
+  )
+}
+
+function isFlowStage(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isPacketState(value['state']) &&
+    Number.isInteger(value['packetCount']) &&
+    (value['packetCount'] as number) >= 0 &&
+    (value['waitP50Ms'] === undefined || (isFiniteNumber(value['waitP50Ms']) && value['waitP50Ms'] >= 0)) &&
+    (value['waitP80Ms'] === undefined || (isFiniteNumber(value['waitP80Ms']) && value['waitP80Ms'] >= 0))
+  )
+}
+
+function isBottleneck(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isPacketState(value['state']) &&
+    isFiniteNumber(value['waitP80Ms']) &&
+    value['waitP80Ms'] >= 0 &&
+    Number.isInteger(value['affectedPackets']) &&
+    (value['affectedPackets'] as number) >= 0 &&
+    (value['recommendation'] === undefined || typeof value['recommendation'] === 'string')
+  )
+}
+
+function isAndon(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['packetId'] === 'string' &&
+    (value['severity'] === 'warning' || value['severity'] === 'critical') &&
+    typeof value['reason'] === 'string' &&
+    (value['consecutiveFailures'] === undefined || (Number.isInteger(value['consecutiveFailures']) && (value['consecutiveFailures'] as number) >= 0)) &&
+    (value['evidenceRefs'] === undefined || isStringArray(value['evidenceRefs'])) &&
+    typeof value['at'] === 'string'
+  )
+}
+
+function isFlowProjection(value: unknown): value is FlowProjection {
+  return (
+    isRecord(value) &&
+    value['schemaVersion'] === 1 &&
+    isOptionalTimestamp(value['calculatedAt']) &&
+    isOptionalRatio(value['efficiency']) &&
+    Array.isArray(value['stages']) &&
+    value['stages'].every(isFlowStage) &&
+    Array.isArray(value['packets']) &&
+    value['packets'].every(isPacketFlow) &&
+    (value['bottleneck'] === undefined || isBottleneck(value['bottleneck'])) &&
+    Array.isArray(value['andons']) &&
+    value['andons'].every(isAndon)
+  )
+}
 
 const ROLE_IDS = new Set([
   'intake',
@@ -1124,8 +1329,60 @@ function isMcpServiceProjection(value: unknown): value is McpServiceProjection {
       value['authentication'] === 'unknown'
     ) &&
     isStringArray(value['tools']) &&
+    (value['category'] === undefined || typeof value['category'] === 'string') &&
+    (value['purpose'] === undefined || typeof value['purpose'] === 'string') &&
+    (value['command'] === undefined || typeof value['command'] === 'string') &&
+    (value['args'] === undefined || isStringArray(value['args'])) &&
+    (value['enabled'] === undefined || typeof value['enabled'] === 'boolean') &&
+    (value['requiresEnv'] === undefined || isStringArray(value['requiresEnv'])) &&
+    (value['credentialHowTo'] === undefined || typeof value['credentialHowTo'] === 'string') &&
+    (value['docs'] === undefined || typeof value['docs'] === 'string') &&
     (value['configSource'] === undefined || typeof value['configSource'] === 'string') &&
     (value['error'] === undefined || typeof value['error'] === 'string')
+  )
+}
+
+function isRequirementRecordProjection(value: unknown): value is RequirementRecordProjection {
+  return (
+    isRecord(value) &&
+    typeof value['packetId'] === 'string' &&
+    typeof value['text'] === 'string' &&
+    typeof value['submittedAt'] === 'string' &&
+    typeof value['commandId'] === 'string' &&
+    isRecord(value['payload'])
+  )
+}
+
+function isSkillManifest(value: unknown): value is Omit<SkillProjection, 'instructionMarkdown'> {
+  if (!isRecord(value)) return false
+  const failure = value['failure']
+  const permissions = value['permissions']
+  const reuse = value['reuse']
+  return (
+    typeof value['id'] === 'string' &&
+    typeof value['version'] === 'string' &&
+    (value['scope'] === 'global' || value['scope'] === 'role' || value['scope'] === 'once') &&
+    isStringArray(value['appliesTo']) &&
+    typeof value['description'] === 'string' &&
+    isStringRecord(value['inputs']) &&
+    isStringRecord(value['outputs']) &&
+    isStringArray(value['preconditions']) &&
+    isRecord(failure) &&
+    Number.isInteger(failure['timeoutSeconds']) &&
+    typeof failure['onError'] === 'string' &&
+    typeof failure['silentDegrade'] === 'boolean' &&
+    isRecord(permissions) &&
+    typeof permissions['riskLevel'] === 'string' &&
+    isStringArray(permissions['tools']) &&
+    isStringArray(permissions['readPaths']) &&
+    isStringArray(permissions['writePaths']) &&
+    isStringArray(permissions['networkAccess']) &&
+    isStringArray(value['requiresMcp']) &&
+    isStringArray(value['requiresSkills']) &&
+    isStringArray(value['conflicts']) &&
+    isRecord(reuse) &&
+    typeof reuse['crossRole'] === 'boolean' &&
+    typeof reuse['crossProject'] === 'boolean'
   )
 }
 

@@ -13,6 +13,7 @@ const bridge: DesktopBridge = {
   moveRequirementDraft: (sourceScopeId, targetScopeId) => ipcRenderer.invoke(IPC_CHANNELS.moveRequirementDraft, sourceScopeId, targetScopeId),
   discardDraftAttachment: (scopeId, attachmentId) => ipcRenderer.invoke(IPC_CHANNELS.discardDraftAttachment, scopeId, attachmentId),
   exportTaskRecord: (suggestedName, markdown) => ipcRenderer.invoke(IPC_CHANNELS.exportTaskRecord, suggestedName, markdown),
+  packageProjectArtifact: (sourceId, suggestedName, packetId) => ipcRenderer.invoke(IPC_CHANNELS.packageProjectArtifact, sourceId, suggestedName, packetId),
   listManagedResources: (kind) => ipcRenderer.invoke(IPC_CHANNELS.listManagedResources, kind),
   selectManagedResources: (kind, sourceKind) => ipcRenderer.invoke(IPC_CHANNELS.selectManagedResources, kind, sourceKind),
   addManagedResourceUrl: (kind, url) => ipcRenderer.invoke(IPC_CHANNELS.addManagedResourceUrl, kind, url),

@@ -154,6 +154,72 @@ describe('ProjectStateSource', () => {
     source.close()
   })
 
+  it('reads optional lean scheduling and flow projections without inferring missing values', async () => {
+    const project = await copyFixtureProject('empty')
+    await writeFile(join(project, '.codentum', 'scheduling.json'), JSON.stringify({
+      schemaVersion: 1,
+      revision: 12,
+      updatedAt: '2026-08-14T10:00:00.000Z',
+      wipLimits: { ready: 4, running: 2, review: 2 },
+      readyQueue: ['wp-ready-2', 'wp-ready-1'],
+      criticalPath: ['wp-running']
+    }), 'utf8')
+    await writeFile(join(project, '.codentum', 'flow.json'), JSON.stringify({
+      schemaVersion: 1,
+      calculatedAt: '2026-08-14T10:01:00.000Z',
+      efficiency: 0.42,
+      stages: [{ state: 'running', packetCount: 2, waitP80Ms: 31_000 }],
+      packets: [{
+        packetId: 'wp-running',
+        totalCycleMs: 90_000,
+        efficiency: 0.42,
+        segments: [{ state: 'running', kind: 'value', durationMs: 38_000 }]
+      }],
+      bottleneck: {
+        state: 'review',
+        waitP80Ms: 64_000,
+        affectedPackets: 3,
+        recommendation: '优先处理评审队列。'
+      },
+      andons: [{
+        id: 'andon-1',
+        packetId: 'wp-running',
+        severity: 'warning',
+        reason: '连续等待超过阈值。',
+        at: '2026-08-14T10:01:00.000Z'
+      }]
+    }), 'utf8')
+    const source = await ProjectStateSource.create(project)
+    const snapshot = await source.read()
+
+    expect(snapshot.scheduling).toEqual(expect.objectContaining({
+      revision: 12,
+      wipLimits: { ready: 4, running: 2, review: 2 }
+    }))
+    expect(snapshot.flow).toEqual(expect.objectContaining({
+      efficiency: 0.42,
+      bottleneck: expect.objectContaining({ state: 'review' })
+    }))
+    expect(snapshot.warnings).toEqual([])
+    source.close()
+  })
+
+  it('rejects malformed optional scheduling projections instead of fabricating a board', async () => {
+    const project = await copyFixtureProject('empty')
+    await writeFile(join(project, '.codentum', 'scheduling.json'), JSON.stringify({
+      schemaVersion: 1,
+      wipLimits: { running: -1 },
+      readyQueue: 'wp-ready'
+    }), 'utf8')
+
+    const source = await ProjectStateSource.create(project)
+    const snapshot = await source.read()
+
+    expect(snapshot.scheduling).toBeNull()
+    expect(snapshot.warnings.join('\n')).toContain('[schema] State file does not match its contract: scheduling.json')
+    source.close()
+  })
+
   it('reads B runtime Skill projection for the Skills panel', async () => {
     const project = await copyFixtureProject('empty')
     const skillsDirectory = join(project, '.codentum', 'skills')

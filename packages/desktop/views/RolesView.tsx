@@ -16,6 +16,24 @@ function configurationSummary(config: AgentConfiguration | undefined): string {
   return `${config.systemPrompt === '' ? '默认提示词' : '自定义提示词'} · ${config.systemDocumentName ?? '无系统文档'} · ${config.apiKeyConfigured ? 'API Key 已配置' : '使用网关凭据'}`
 }
 
+function modelSummary(role: RoleSpec): string {
+  if (!role.usesModel) return '确定性执行，不调用模型'
+  const model = role.modelPolicy?.defaultModel ?? '由 ModelGateway 选择'
+  return role.modelPolicy?.defaultEffort === undefined
+    ? model
+    : `${model} · ${role.modelPolicy.defaultEffort}`
+}
+
+function escalationSummary(role: RoleSpec): string {
+  const policy = role.escalation
+  if (policy === undefined) return '未配置'
+  return [
+    policy.maxSelfRepair === undefined ? undefined : `自修复 ${policy.maxSelfRepair} 次`,
+    policy.peerDebugEnabled ? '允许 Peer-Debug' : undefined,
+    policy.escalateTo === undefined ? undefined : `升级至 ${policy.escalateTo}`
+  ].filter((part): part is string => part !== undefined).join(' · ') || '未配置'
+}
+
 function SystemRoleCard({ entry, role, config, currentWorkers, taskCount, onConfigure }: {
   readonly entry: RoleRosterEntry
   readonly role: RoleSpec | undefined
@@ -36,8 +54,25 @@ function SystemRoleCard({ entry, role, config, currentWorkers, taskCount, onConf
       <dl>
         <div><dt>运行</dt><dd>{role === undefined ? '等待项目 RoleSpec 投影' : role.usesModel ? '模型 Agent' : '确定性执行'}</dd></div>
         <div><dt>配置</dt><dd>{configurationSummary(config)}</dd></div>
-        {role === undefined ? null : <><div><dt>工具</dt><dd>{role.tools.join('、') || '未配置'}</dd></div><div><dt>Skills</dt><dd>{role.skills?.map((skill) => skill.id).join('、') || '未配置'}</dd></div></>}
+        {role === undefined ? null : <>
+          <div><dt>Prompt</dt><dd>{role.promptRef ?? '未配置'}</dd></div>
+          <div><dt>模型</dt><dd>{modelSummary(role)}</dd></div>
+          <div><dt>工具</dt><dd>{role.tools.join('、') || '未配置'}</dd></div>
+          <div><dt>Skills</dt><dd>{role.skills?.map((skill) => `${skill.id}（${skill.state ?? 'active'} / ${skill.scope}）`).join('、') || '未配置'}</dd></div>
+        </>}
       </dl>
+      {role === undefined ? null : (
+        <details className="role-contract-details">
+          <summary>查看 B RoleSpec 完整边界</summary>
+          <dl>
+            <div><dt>可写</dt><dd>{role.writes.join('、') || '无'}</dd></div>
+            <div><dt>只读</dt><dd>{role.reads.join('、') || '无'}</dd></div>
+            <div><dt>不可见</dt><dd>{role.invisible?.join('、') || '无'}</dd></div>
+            <div><dt>升级</dt><dd>{escalationSummary(role)}</dd></div>
+            <div><dt>转换</dt><dd>{role.transitions.map((transition) => `${transition.from} → ${transition.to}${transition.requiresGate === undefined ? '' : ` [${transition.requiresGate}]`}`).join('；') || '无'}</dd></div>
+          </dl>
+        </details>
+      )}
     </article>
   )
 }
@@ -156,7 +191,7 @@ export function RolesView({ snapshot, listConfigurations, saveConfiguration, rem
       <PageHeader
         eyebrow={`RoleSpec 模板 ${ROLE_ROSTER.length} · 项目投影 ${roles.length} · 真实 Worker ${snapshot?.workers.length ?? 0}`}
         title="研发团队"
-        description="系统岗位来自 A/B 的 RoleSpec；只有 B 投影出的 Worker 才是真实运行 Agent。本地自定义配置可增删，但在 A/B 消费配置前不会被标成可运行。"
+        description="系统岗位、Prompt 引用、模型策略、Skill 绑定和权限边界来自 B 的项目 RoleSpec；只有 B 投影出的 Worker 才是真实运行 Agent。"
       />
       <section className="team-agent-add-row">
         <span className="connector-logo"><Icon name="people" size={21} /></span>

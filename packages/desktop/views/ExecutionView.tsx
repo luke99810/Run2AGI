@@ -4,6 +4,16 @@ import type { CommandDispatcher } from '../renderer/src/command-types'
 import { formatCny, projectWorkerModules, roleLabel, shortPacketId } from '../renderer/src/domain'
 import { CommandPanel } from '../panels/CommandPanel'
 import { EmptyState, Icon, PacketSummary, PageHeader } from '../panels/Common'
+import { LeanSchedulingView, type LeanSchedulingMode } from './LeanSchedulingView'
+
+type ExecutionMode = 'agents' | LeanSchedulingMode
+
+const EXECUTION_MODES: readonly { readonly id: ExecutionMode; readonly label: string }[] = [
+  { id: 'agents', label: 'Agent 执行' },
+  { id: 'board', label: '流动看板' },
+  { id: 'value', label: '价值流' },
+  { id: 'bottleneck', label: '瓶颈诊断' }
+]
 
 const WORKER_STATE_LABELS: Readonly<Record<WorkerProjection['state'], string>> = {
   starting: '正在启动',
@@ -110,6 +120,7 @@ export function ExecutionView({ snapshot, handshake, dispatch, focusedWorkerId, 
   const workers = snapshot?.workers ?? []
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null)
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null)
+  const [mode, setMode] = useState<ExecutionMode>('agents')
   const selectedWorker = useMemo(() => workers.find((worker) => worker.workerId === selectedWorkerId) ?? null, [workers, selectedWorkerId])
 
   useEffect(() => {
@@ -146,7 +157,25 @@ export function ExecutionView({ snapshot, handshake, dispatch, focusedWorkerId, 
         />
       )}
       {snapshot?.source.kind === 'fixture' ? <div className="fixture-notice"><Icon name="warning" size={18} /><span>当前是演示快照。这里的数据不会控制任何真实 Agent。</span></div> : null}
-      {snapshot === null ? (
+      {embedded ? null : (
+        <div className="execution-mode-tabs" role="tablist" aria-label="执行中心视图">
+          {EXECUTION_MODES.map((item) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === item.id}
+              className={mode === item.id ? 'active' : ''}
+              key={item.id}
+              onClick={() => setMode(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {!embedded && mode !== 'agents' ? (
+        <LeanSchedulingView snapshot={snapshot} mode={mode} />
+      ) : snapshot === null ? (
         <EmptyState title="还没有项目状态" detail="打开本地项目后，这里会展示状态文件中的 Worker。" icon="folder" />
       ) : workers.length === 0 ? (
         <section className="projection-fallback">

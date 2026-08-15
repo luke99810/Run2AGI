@@ -71,6 +71,62 @@ submitting/accepted → timed_out（最终仍以权威状态重新同步）
 5. Requirement、clarification、DevelopmentPlan、Provisioning 的只读形状。
 6. 将握手中的权威 `runId` 与已打开项目的 canonical identity 绑定；C 未能确认绑定一致时不得派单。
 
+## 精益调度只读投影
+
+C 已在“执行中心”提供 Agent 执行、流动看板、价值流和瓶颈诊断四个视图，不新增第二套任务看板，也不直接修改 Packet 状态。以下两个文件均为可选投影；文件不存在时 C 只显示已有 `PacketState`，并明确标注缺失能力。
+
+### `.codentum/scheduling.json`（A 提供）
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": 12,
+  "updatedAt": "2026-08-14T10:00:00.000Z",
+  "wipLimits": { "ready": 4, "running": 2, "review": 2 },
+  "readyQueue": ["wp-ready-2", "wp-ready-1"],
+  "criticalPath": ["wp-running"]
+}
+```
+
+- `wipLimits` 只接受非负整数；未提供的状态显示 `—`，C 不推算默认值。
+- `readyQueue` 是 A 的确定性拉式队列；C 只用它排序 `ready` 列。
+- `criticalPath` 是 A 的计划结果；C 不根据前端依赖图重复计算。
+
+### `.codentum/flow.json`（A 汇总，B 提供原始 Worker 事件）
+
+```json
+{
+  "schemaVersion": 1,
+  "calculatedAt": "2026-08-14T10:01:00.000Z",
+  "efficiency": 0.42,
+  "stages": [{ "state": "review", "packetCount": 3, "waitP80Ms": 64000 }],
+  "packets": [{
+    "packetId": "wp-running",
+    "totalCycleMs": 90000,
+    "efficiency": 0.42,
+    "segments": [{ "state": "running", "kind": "value", "durationMs": 38000 }]
+  }],
+  "bottleneck": {
+    "state": "review",
+    "waitP80Ms": 64000,
+    "affectedPackets": 3,
+    "recommendation": "优先处理评审队列。"
+  },
+  "andons": [{
+    "id": "andon-1",
+    "packetId": "wp-running",
+    "severity": "warning",
+    "reason": "连续等待超过阈值。",
+    "at": "2026-08-14T10:01:00.000Z"
+  }]
+}
+```
+
+- A 负责从权威 Packet 状态变更与 B 的 Worker 事件计算等待/增值区间、p80、流动效率、瓶颈和安灯结果；C 不使用文件修改时间推算。
+- B 需要在 Worker 事件中稳定提供 `packetId`、事件时间、模块/阶段与状态变化，使 A 能完成确定性汇总。
+- 文件必须原子替换并通过结构校验；坏 JSON 或非法字段会被拒绝，不会覆盖上一份一致快照。
+- 拖拽调度、修改 WIP、解除安灯等写操作仍需 A 提供正式 command/capability、revision 和回执状态机。在此之前 C 保持只读。
+
 ## 需求草稿与本地附件
 
 - 需求草稿和附件选择是 C 的本地能力，不依赖 A/B 引擎连接；支持从电脑任意位置选择任意文件类型或整个文件夹。

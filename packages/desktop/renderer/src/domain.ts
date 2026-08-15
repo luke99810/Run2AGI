@@ -327,6 +327,42 @@ export function packetCounts(packets: readonly WorkPacket[]): Readonly<Record<Pa
   return counts
 }
 
+export interface FlowBoardColumn {
+  readonly state: PacketState
+  readonly label: string
+  readonly current: number
+  readonly limit?: number
+  readonly overLimit: boolean
+  readonly packets: readonly WorkPacket[]
+}
+
+export function buildFlowBoard(snapshot: Pick<StateSnapshot, 'packets' | 'scheduling'>): readonly FlowBoardColumn[] {
+  const criticalPath = new Set(snapshot.scheduling?.criticalPath ?? [])
+  const readyOrder = new Map((snapshot.scheduling?.readyQueue ?? []).map((packetId, index) => [packetId, index]))
+  return PACKET_STATES.map((state) => {
+    const packets = snapshot.packets
+      .filter((packet) => packet.state === state)
+      .sort((left, right) => {
+        if (state === 'ready') {
+          const leftOrder = readyOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER
+          const rightOrder = readyOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER
+          if (leftOrder !== rightOrder) return leftOrder - rightOrder
+        }
+        const criticalDifference = Number(criticalPath.has(right.id)) - Number(criticalPath.has(left.id))
+        return criticalDifference !== 0 ? criticalDifference : left.id.localeCompare(right.id)
+      })
+    const limit = snapshot.scheduling?.wipLimits[state]
+    return {
+      state,
+      label: PACKET_STATE_LABELS[state],
+      current: packets.length,
+      ...(limit === undefined ? {} : { limit }),
+      overLimit: limit !== undefined && packets.length > limit,
+      packets
+    }
+  })
+}
+
 export function sourceModeLabel(snapshot: StateSnapshot | null): string {
   if (snapshot === null) return '尚未读取'
   return snapshot.source.kind === 'fixture' ? '演示快照' : '本地项目'
