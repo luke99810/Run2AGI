@@ -18,6 +18,7 @@ import logging
 import shutil
 import tempfile
 from collections.abc import Iterator
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -1014,3 +1015,97 @@ class TestIncrementalPersistence:
         assert len(seen_during_tick) >= 2, (
             f"整轮只落盘了 {len(seen_during_tick)} 次 —— 慢 worker 会让状态长时间不可见"
         )
+
+
+# ════════════════════════════════════════════════════════════════
+#  决策日志：flow.json 要算的那段历史
+#
+#  ★ `DecisionRecord` 的 schema 冻结于 2026-08-02、被 contracts 导出 ——
+#    但**全仓库没有任何一处构造过它**。`decisions.jsonl` 被
+#    ensure_state_dir() 建成空文件，然后一直是空的。
+#
+#    后果不是「少一个日志」：**每个 packet 在每个状态停了多久，
+#    这段历史根本不存在**。流动效率、等待 p80、瓶颈都算不出来 ——
+#    不是算法没写，是没有可算的东西。
+# ════════════════════════════════════════════════════════════════
+
+
+class TestDecisionLog:
+    def _lines(self, state_dir: Path) -> list[dict[str, object]]:
+        path = state_dir / "decisions.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+    def test_every_transition_is_recorded(self, empty_loop: ReconcileLoop, tmp_state_dir: Path) -> None:
+        """★ 挂在 `_apply_transition` 上，因为那是 reconcile **唯一**修改状态的地方。
+
+        挂在别处必然漏 —— 而漏掉的那几条转移会让 flow 的时长凭空少一段，
+        且没有任何东西会报错。
+        """
+
+        _inject(empty_loop, _make_packet("wp-dec00001", state="pending"))
+        empty_loop.tick()
+
+        rows = self._lines(tmp_state_dir)
+        assert rows, "转移发生了，decisions.jsonl 仍是空的"
+        assert all(row["action"] == "packet_transitioned" for row in rows)
+
+    def test_records_conform_to_the_frozen_contract(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path
+    ) -> None:
+        """★ 用**契约模型**回读，而不是自己断言几个字段。
+
+        自己写断言只能覆盖想到的字段；用冻结的模型解析，
+        任何不合规（缺字段、reasonCode 带空格或中文）都会被拒。
+        """
+
+        from codentum_contracts.state import DecisionRecord
+
+        _inject(empty_loop, _make_packet("wp-dec00002", state="pending"))
+        empty_loop.tick()
+
+        for row in self._lines(tmp_state_dir):
+            record = DecisionRecord.model_validate(row)
+            assert record.packetId == "wp-dec00002"
+            assert record.at, "没有时间戳 —— flow 的全部计算都靠它"
+            # reasonCode 必须机器可读：控制平面据此决策，桌面端据此分类
+            assert record.reasonCode.startswith("Reconcile.")
+
+    def test_log_is_append_only(self, empty_loop: ReconcileLoop, tmp_state_dir: Path) -> None:
+        """★ 只追加不改写 —— 覆盖会把历史抹掉，而历史正是要算的东西。"""
+
+        _inject(empty_loop, _make_packet("wp-dec00003", state="pending"))
+        empty_loop.tick()
+        first = len(self._lines(tmp_state_dir))
+
+        _inject(empty_loop, _make_packet("wp-dec00004", state="pending", owns=("src/other/",)))
+        empty_loop.tick()
+
+        assert len(self._lines(tmp_state_dir)) > first, "第二轮把第一轮覆盖了"
+
+    def test_transition_survives_a_broken_log(
+        self, empty_loop: ReconcileLoop, tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """★ 记账失败不能拖垮状态推进 —— 但也不能静默。
+
+        一个因为磁盘写不进去就卡住整条流水线的日志，比没有日志更糟。
+        """
+
+        real_open = Path.open
+
+        def boom(self: Path, *args: Any, **kwargs: Any) -> Any:
+            # ★ 只拦「决策日志的**追加**」。范围窄一格再窄一格是有原因的：
+            #   打掉整个 Path.open 会连 packet 落盘一起坏（那测的是磁盘坏了）；
+            #   只按文件名拦又会打到 ensure_state_dir() 建空文件那一步（'w' 模式），
+            #   而那发生在转移**之前** —— 测的就变成「目录自愈坏了」。
+            #   要测的是「日志追加失败时状态推进照常」，所以只拦 'a'。
+            if self.name == "decisions.jsonl" and "a" in str(kwargs.get("mode", args[0] if args else "")):
+                raise OSError("disk full")
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", boom)
+        _inject(empty_loop, _make_packet("wp-dec00005", state="pending"))
+        report = empty_loop.tick()
+
+        assert report.transitions, "日志写不进去，状态推进也停了"

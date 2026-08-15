@@ -42,6 +42,7 @@ import shlex
 import ast
 import subprocess
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from codentum_contracts.state import EvidenceRef, WorkPacket
@@ -52,6 +53,7 @@ __all__ = [
     "ACCEPTANCE_TIMEOUT_SECONDS",
     "build_executing_acceptance_gate",
     "split_command",
+    "CompositionResult",
     "composition_check",
     "discover_modules",
     "vacuity_check",
@@ -163,6 +165,8 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
                 detail=f"验收未通过：`{predicate}` 退出码 {proc.returncode}\n{tail}",
             )
 
+        notes: list[str] = []
+
         # ── 第五层：验收测试本身不能是空的 ────────────────
         vacuous = vacuity_check(workspace, command)
         if vacuous is not None:
@@ -175,16 +179,25 @@ def build_executing_acceptance_gate(workers_root: Path | str):  # type: ignore[n
         if packet.role == "integrator":
             modules = discover_modules(workspace)
             if len(modules) >= 2:
-                uncovered = composition_check(workspace, command, modules=modules)
-                if uncovered is not None:
+                composition = composition_check(workspace, command, modules=modules)
+                if composition.uncovered is not None:
                     return GateVerdict(
-                        passed=False, gate_id="acceptance", detail=uncovered
+                        passed=False, gate_id="acceptance", detail=composition.uncovered
                     )
+                if composition.inconclusive is not None:
+                    # ★ 没检成不拦人（检不了就别拦），但**必须写进 detail**。
+                    #   否则负载高的环境里这一层会静默失效，而报告上只有
+                    #   一句「验收通过」—— 那就是谎称检过了。
+                    notes.append(composition.inconclusive)
 
         return GateVerdict(
             passed=True,
             gate_id="acceptance",
-            detail=f"验收通过：`{predicate}` 退出码 0（且实现被移走后确实变红）\n{tail[-400:]}",
+            detail=(
+                f"验收通过：`{predicate}` 退出码 0（且实现被移走后确实变红）"
+                + "".join(f"\n⚠️ {note}" for note in notes)
+                + f"\n{tail[-400:]}"
+            ),
             evidence_refs=_as_refs(acceptance_evidence(packet.evidence)),
         )
 
@@ -370,9 +383,28 @@ def _module_test_files(workspace: Path, module: str) -> list[Path]:
     ]
 
 
+@dataclass(frozen=True, slots=True)
+class CompositionResult:
+    """三种结局必须可区分。
+
+    ★ 最初这个函数只返回 `str | None`，于是「全部覆盖」与「超时没检成」
+      **返回同一个值**。门禁随后写的是「验收通过」——
+      而那正是本项目一路在拆的那句话：**谎称检过了**。
+
+    ★ 「没检成」不拦人是对的（检不了就别拦），但它必须**说出来**：
+      否则一个负载高的环境里，这一层会静默失效，而报告上看不出区别。
+    """
+
+    uncovered: str | None = None
+    """非 None = 应当拦下，内容是给模型看的说明。"""
+
+    inconclusive: str | None = None
+    """非 None = 这一层没能执行，内容是原因。**不拦人，但必须写进 detail。**"""
+
+
 def composition_check(
     workspace: Path, command: list[str], *, modules: Sequence[str]
-) -> str | None:
+) -> CompositionResult:
     """★ 把**某一个模块**的实现桩化，集成谓词必须变红 —— 对每个模块都如此。
 
     ════════════════════════════════════════════════════════════
@@ -484,9 +516,14 @@ def composition_check(
                     shell=False,
                 )
                 still_green = proc.returncode == 0
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                # ★ 检不了就别拦 —— 但也别谎称检过了。
-                return None
+            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+                # ★ 检不了就别拦 —— 但也别谎称检过了。**把原因带出去。**
+                return CompositionResult(
+                    inconclusive=(
+                        f"组合检验未能执行（{type(exc).__name__}）：模块 {module} 的"
+                        f"谓词没跑完，因此**这一层没有检过**。"
+                    )
+                )
 
             if still_green:
                 uncovered.append(module)
@@ -501,13 +538,13 @@ def composition_check(
                     away.rename(original_path)
 
     if not uncovered:
-        return None
+        return CompositionResult()
 
     names = "、".join(uncovered)
     note = ""
     if skipped:
         note = "\n（跳过了 " + "、".join(skipped) + " —— 没有找到可桩化的实现文件）"
-    return (
+    return CompositionResult(uncovered=(
         f"集成验收未通过：**集成测试没有覆盖 {names}**。\n"
         f"把 {names} 的实现全部掏空（保留签名，只让函数返回 None）之后，"
         "集成谓词**仍然退出码 0**。\n\n"
@@ -516,7 +553,7 @@ def composition_check(
         "「各段都对、合起来不通」正是这样漏过去的。\n\n"
         f"**请补充真正跨模块的用例**：调用 {names} 的公开接口，"
         "并断言它的返回值参与了最终结果。" + note
-    )
+    ))
 
 
 def _as_refs(refs: tuple[str, ...]) -> tuple[EvidenceRef, ...]:

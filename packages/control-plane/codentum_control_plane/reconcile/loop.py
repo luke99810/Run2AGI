@@ -32,6 +32,7 @@ from codentum_contracts.interfaces import (
 from codentum_contracts.state import (
     Acceptance,
     BudgetGrant,
+    DecisionRecord,
     DependencyEdge,
     DependencyGraph,
     EvidenceRef,
@@ -158,6 +159,22 @@ class ReconcileLoop:
 
     guardian: Guardian | None = None
     "★ 确定性拦截器。若为 None，不执行运行时不变量检查。"
+
+    max_running: int | None = None
+    """同时处于 running 的 packet 上限（WIP 限制）。None = 不限。
+
+    ★ 这不是性能调优，是**止损**。2026-08-13 实测：8 个 packet 同时
+      调模型时出现 `Connection error` —— 并发本身把请求打挂了。
+      而失败的那几个会重试，重试又加剧并发，成本和失败率一起上去。
+
+    ★ 精益调度里这就是 WIP 限制：**在制品越多，单件周期越长**。
+      控制平面是唯一知道全局有多少 packet 在跑的地方，
+      所以这条限制只能在这里执行 —— 放到 worker 侧各自为政拦不住总量。
+
+    ★ 它同时是 `.codentum/scheduling.json` 里 `wipLimits.running` 的**唯一真实来源**。
+      没有真正执行的限制，就不该往那个文件里写数字 ——
+      写了就是「声明了但没人执行」，而桌面端会照着它渲染。
+    """
 
     # ── 内部状态（由 load_state() 填充）─────────────────────
 
@@ -690,6 +707,13 @@ class ReconcileLoop:
                 evidence_refs=(),
             )
 
+        # ★ WIP 限制：撞上限时**保持 ready**，不是失败。
+        #   下一轮 tick 会再试 —— 这与锁冲突走的是同一条语义。
+        if self.max_running is not None:
+            running_now = sum(1 for p in self._packets.values() if p.state == "running")
+            if running_now >= self.max_running:
+                return None
+
         # 获取路径锁
         now = _now_iso()
         # 所有权图版本使用锁表当前版本（乐观锁基础）
@@ -1011,6 +1035,63 @@ class ReconcileLoop:
     #  内部辅助
     # ════════════════════════════════════════════════════════════
 
+    def _append_decision(
+        self,
+        packet: WorkPacket,
+        from_state: PacketState,
+        to_state: PacketState,
+        detail: str,
+    ) -> None:
+        """把一次状态转移追加到 `decisions.jsonl`。
+
+        ════════════════════════════════════════════════════════
+         ★ 这条日志的契约冻结于 2026-08-02，而从来没有一处写过它
+        ════════════════════════════════════════════════════════
+
+        `DecisionRecord` 定义完整、schema 冻结、被 `__init__` 导出 ——
+        但**全仓库没有任何一处构造过它**。`decisions.jsonl` 被
+        `ensure_state_dir()` 建成空文件，然后一直是空的。
+
+        后果具体而且致命：**每个 packet 在每个状态停了多久，这段历史根本不存在。**
+        于是流动效率、等待 p80、瓶颈这些都算不出来 ——
+        不是算法没写，是**没有可算的东西**。
+
+        ★ 挂在 `_apply_transition` 上，因为那是 reconcile **唯一**修改状态的地方。
+          挂在别处必然漏。
+
+        ════════════════════════════════════════════════════════
+         ★ actor 字段的一处取舍（契约缺口，记在案）
+        ════════════════════════════════════════════════════════
+
+        `DecisionRecord.actor` 只允许 `RoleId | "operator"` ——
+        **没有「控制平面自己」这个取值**，而状态转移恰恰是控制平面决定的。
+
+        这里填 packet 的角色（读作「这个角色的活动了」），
+        真正的决策者放进机器可读的 `reasonCode`（`Reconcile.*`）。
+
+        不改契约是因为它冻结了（I3），改它要三人同意 + 新 ADR + 变更窗口；
+        而这个缺口不影响任何判定 —— 但它是**真实的建模缺口**，不该假装没有。
+        """
+
+        try:
+            record = DecisionRecord(
+                at=_now_iso(),
+                actor=packet.role,
+                action="packet_transitioned",
+                packetId=packet.id,
+                reasonCode=f"Reconcile.{from_state}_to_{to_state}",
+                detail=detail or None,
+            )
+            path = Path(self.state_dir) / "decisions.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(record.model_dump_json(exclude_none=True) + "\n")
+        except OSError as exc:
+            # ★ 记账失败不能拖垮状态推进 —— 但也不能静默：
+            #   日志悄悄停止增长，会让 flow.json 上的数字变成假数，
+            #   而那比没有 flow.json 更糟。
+            logger.warning("决策日志写入失败（状态推进不受影响）：%s", exc)
+
     def _apply_transition(
         self,
         packet: WorkPacket,
@@ -1034,6 +1115,8 @@ class ReconcileLoop:
 
         new_packet = packet.model_copy(update=updates)
         self._packets[packet.id] = new_packet
+
+        self._append_decision(packet, old_state, target, detail)
 
         return PacketTransition(
             packet_id=packet.id,

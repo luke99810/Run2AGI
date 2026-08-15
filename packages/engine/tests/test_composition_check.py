@@ -110,7 +110,7 @@ def test_module_absent_from_integration_is_reported(tmp_path: Path) -> None:
     """
 
     ws = _workspace(tmp_path, _INTEGRATION_ONLY_BETA)
-    report = composition_check(ws, _COMMAND, modules=_MODULES)
+    report = composition_check(ws, _COMMAND, modules=_MODULES).uncovered
 
     assert report is not None, "集成测试没碰过 alpha，却判为通过"
     assert "alpha" in report
@@ -124,7 +124,7 @@ def test_real_integration_passes(tmp_path: Path) -> None:
     """
 
     ws = _workspace(tmp_path, _INTEGRATION_BOTH)
-    assert composition_check(ws, _COMMAND, modules=_MODULES) is None
+    assert composition_check(ws, _COMMAND, modules=_MODULES).uncovered is None
 
 
 def test_module_own_tests_do_not_count_as_integration_coverage(tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_module_own_tests_do_not_count_as_integration_coverage(tmp_path: Path) -
     # ★ 谓词跑**整个工作区**，包含 alpha 自己的测试
     whole_workspace = [sys.executable, "-m", "pytest", ".", "-q"]
 
-    report = composition_check(ws, whole_workspace, modules=_MODULES)
+    report = composition_check(ws, whole_workspace, modules=_MODULES).uncovered
     assert report is not None and "alpha" in report, (
         "自测没被藏起来 —— alpha 靠自己的单元测试变红冒充了集成覆盖"
     )
@@ -305,3 +305,24 @@ def test_gate_skips_composition_for_non_integration_packets(tmp_path: Path) -> N
         _integration_packet(pid, f"{sys.executable} -m pytest integration -q", "coder")
     )
     assert "集成测试没有覆盖" not in verdict.detail, "非集成 packet 不该跑组合检验"
+
+
+def test_inconclusive_is_distinguishable_from_covered(tmp_path: Path) -> None:
+    """★ 「全部覆盖」与「根本没检成」不能返回同一个值。
+
+    最初这个函数只返回 `str | None`，两者都是 None ——
+    门禁随后写的是「验收通过」，**而那正是谎称检过了**。
+
+    没检成不拦人是对的（检不了就别拦），但它必须**说出来**：
+    否则负载高的环境里这一层会静默失效，而报告上看不出区别。
+
+    ★ 这个缺陷是真机撞出来的：一次并发跑测试时子进程超时，
+      composition_check 返回 None，门禁照常写「验收通过」。
+    """
+
+    ws = _workspace(tmp_path, _INTEGRATION_ONLY_BETA)
+    result = composition_check(ws, ["definitely-not-a-real-command-xyz"], modules=_MODULES)
+
+    assert result.uncovered is None, "没检成不该拦人"
+    assert result.inconclusive is not None, "没检成却和「全部覆盖」返回了同一个值"
+    assert "没有检过" in result.inconclusive

@@ -898,3 +898,31 @@ def test_plain_folder_without_git_is_initialized(tmp_path: Path, fake_key: None)
     assert (plain / ".git").exists()
     assert service._project_init is not None
     assert service._project_init.changed is True
+
+
+def test_scheduling_and_flow_projections_land_during_a_real_run(
+    project: Path, fake_key: None
+) -> None:
+    """★ 缺口 ③ 的接线判据：C 的读取与显示早就写好了，卡在没有权威数据源。
+
+    这条守的不是「投影算得对」（那在 test_projections.py），
+    而是**它到底有没有在真实运行里被写出来**。
+    """
+
+    service = _service(project)
+    service.command(_command("submit_requirement", service.run_id, project, requirement="做一个待办清单"))
+    for thread in service._workers:
+        thread.join(timeout=60)
+
+    state_dir = project / ".codentum"
+    scheduling = json.loads((state_dir / "scheduling.json").read_text("utf-8"))
+    flow = json.loads((state_dir / "flow.json").read_text("utf-8"))
+
+    assert scheduling["schemaVersion"] == 1
+    # ★ WIP 上限必须是**真正被执行的**那个 —— 引擎默认 3，且 reconcile 真的按它拦
+    assert scheduling["wipLimits"] == {"running": 3}
+    assert flow["schemaVersion"] == 1
+
+    # 决策日志必须有内容，否则 flow 里的时长全部来自空气
+    decisions = (state_dir / "decisions.jsonl").read_text("utf-8").strip()
+    assert decisions, "转移发生过，decisions.jsonl 却是空的 —— flow 无据可算"

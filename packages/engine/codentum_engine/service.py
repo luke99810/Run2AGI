@@ -99,6 +99,7 @@ from .acceptance import build_executing_acceptance_gate
 from .mcp_client import describe_skipped
 from .mcp_toolbox import McpToolbox, build_mcp_toolbox
 from .planner import PlannedTask, build_packets_from_plan, parse_plan, plan_prompt
+from .projections import write_flow, write_scheduling
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
@@ -208,6 +209,19 @@ class EngineConfig:
 
     max_tool_turns: int = DEFAULT_MAX_TURNS
     """工具循环的轮数上限。撞上限时如实报 max_turns_exhausted，不伪装成完成。"""
+
+    max_running: int | None = 3
+    """同时 running 的 packet 上限（WIP 限制）。
+
+    ★ 默认 3 而不是 None，这个默认值需要解释 —— 因为它看起来像在限制吞吐。
+      2026-08-13 实测：8 个 packet 同时调模型时出现 `Connection error`，
+      **并发本身把请求打挂了**；失败的会重试，重试又加剧并发。
+      在制品越多、单件周期越长，这是精益调度的基本结论，不是这里的发明。
+
+    ★ 它同时是 `.codentum/scheduling.json` 里 `wipLimits.running` 的
+      **唯一真实来源**。设成 None 时那个字段不写 ——
+      桌面端显示「—」，而不是显示一个没人执行的数字。
+    """
 
     enforce_role_transitions: bool = False
     """是否把 RoleSpec 派生的 TransitionTable 装进 ReconcileLoop。
@@ -573,6 +587,7 @@ class EngineService:
                     # ★ 先落盘再记日志：日志丢了只是少条线索，
                     #   状态没落盘则是桌面端看到假象。
                     loop.save_state()
+                    self._write_projections(loop)
                     if report.transitions:
                         self._session.bump()
                     for transition in report.transitions:
@@ -621,6 +636,7 @@ class EngineService:
             budget_tracker=BudgetTracker(limit_cny=self.config.global_budget_cny),
             guardian=Guardian(),
             transition_table=self._transition_table(),
+            max_running=self.config.max_running,
         )
         loop.worker_runtime = self._build_worker_runtime()
         return loop
@@ -885,6 +901,29 @@ class EngineService:
         return tuple(candidates)
 
     # ══════════════════════════════════════════════════════════
+
+    def _write_projections(self, loop: ReconcileLoop) -> None:
+        """重算 `.codentum/scheduling.json` 与 `flow.json`。
+
+        ★ 每轮都重算，而不是只在结束时算一次：桌面端是**跟着看**的，
+          一个只在收尾时更新的瓶颈视图，在最需要它的时候（正卡着）是空的。
+
+        ★ 失败不拖垮 tick，但必须出声 —— 投影悄悄停止更新，
+          界面会一直显示上一份快照，而那看起来和「系统很稳定」一模一样。
+        """
+
+        try:
+            state_dir = self.config.resolved_state_dir()
+            packets = loop.packets
+            write_scheduling(
+                state_dir,
+                packets,
+                max_running=loop.max_running,
+                revision=self.revision,
+            )
+            write_flow(state_dir, packets)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("调度/流动投影写入失败（不影响状态推进）：%s", exc)
 
     def _record_judgement(
         self, packet_id: str, rule: str, mode: str, fired: bool, code: str | None
