@@ -93,8 +93,13 @@ async def memory_context_candidates(
     limit: int,
     char_budget: int,
     priority: int = 10,
+    mode: RetrievalMode = RetrievalMode.LEXICAL,
 ) -> tuple[ContextCandidate, ...]:
-    """Retrieve indexed knowledge and expose it as ContextBroker candidates."""
+    """Retrieve indexed knowledge and expose it as ContextBroker candidates.
+
+    ★ mode 默认 LEXICAL —— 冻结契约要求「上下文配方优先用高确定性档位，
+      语义检索是兜底不是首选」。需要向量化检索时显式传 SEMANTIC。
+    """
 
     return memory_context_candidates_now(
         index,
@@ -104,6 +109,7 @@ async def memory_context_candidates(
         limit=limit,
         char_budget=char_budget,
         priority=priority,
+        mode=mode,
     )
 
 
@@ -116,12 +122,13 @@ def memory_context_candidates_now(
     limit: int,
     char_budget: int,
     priority: int = 10,
+    mode: RetrievalMode = RetrievalMode.LEXICAL,
 ) -> tuple[ContextCandidate, ...]:
     """Synchronous MemoryIndex retrieval for sync worker preparation paths."""
 
     result = index.retrieve_now(
         RetrievalQuery(
-            mode=RetrievalMode.LEXICAL,
+            mode=mode,
             q=query_text,
             scope=MemoryScope(kind="packet", role=role_spec.id, packet_id=packet_id),
             limit=limit,
