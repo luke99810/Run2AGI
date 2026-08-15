@@ -125,6 +125,22 @@ ENGINE_VERSION = "codentum-engine/0.1.0"
 
 _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS_LLM_API_KEY")
 
+GEN_AI_SYSTEM_BY_GATEWAY: dict[str, str] = {
+    "bailian": "dashscope",
+    "openai-compatible": "openai",
+    "anthropic": "anthropic",
+}
+"""`ModelGatewayConfig.kind` → OTel GenAI 语义约定里的 `gen_ai.system`。
+
+★ 两套命名不重合，所以要有这张表：`bailian` 是我们的网关名，
+  而百炼走的是 DashScope 协议，语义约定那边的取值是 `dashscope`。
+
+★ 用**字典下标**而不是 `.get(kind, "unknown")`：新增一种网关却忘了
+  在这里登记时，要在装配时当场 KeyError，而不是导出一堆
+  `gen_ai.system="unknown"` 的 span —— 后者要等到有人去看 trace
+  才会发现，而那时候数据已经攒了一批了。
+"""
+
 # ★ 目前真正实现了的动作只有一个。其余八个不是「以后再说」，是「现在按下去
 #   不会发生任何事」—— 报 false 之后网关会直接以 capability_unavailable 拒绝，
 #   桌面端也就不会把它们显示成可用。
@@ -709,7 +725,7 @@ class EngineService:
     def _build_loop(self) -> ReconcileLoop:
         """★ 四个安全组件在这里显式打开 —— 见模块头「三」。"""
 
-        gate_runner = GateRunner()
+        gate_runner = GateRunner(recorder=self._record_judgement)
         register_builtin_gates(gate_runner)
         # ★ 覆盖内置的 acceptance 门禁：内置那个只检查「有没有证据」，
         #   注释里写的「完整版：实际运行验收测试」一直没写。
@@ -920,6 +936,11 @@ class EngineService:
                         memory_dir=self.config.resolved_state_dir() / "memory",
                         # ★ 主 Agent 连一次，所有 packet 共享同一个工具箱。
                         mcp_toolbox=self._ensure_mcp(),
+                        # ★ 从**真的要用的那个网关**派生 gen_ai.system，
+                        #   不在 runner 里写死。写死的代价是换网关后 trace
+                        #   会言之凿凿地报错误的 provider —— 内容是假的 trace
+                        #   比没有 trace 更坏，因为它看起来完全正常。
+                        otel_system=GEN_AI_SYSTEM_BY_GATEWAY[gateway_config.kind],
                     )
                 ),
                 role_specs=self._role_specs,

@@ -43,8 +43,18 @@ class GateRunner:
             ...
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        recorder: Callable[[str, str, str, bool, str | None], None] | None = None,
+    ) -> None:
         self._gates: dict[str, GateFn] = {}
+        self.recorder = recorder
+        """命中记录回调 `(packet_id, gate_id, mode, fired, code)`，为 None 时不记录。
+
+        ★ 与 AdmissionChecker 的 recorder 同一个签名、同一种语义 ——
+           「没命中」也要记（跑过 N 次一次没拦 = 可能多余；从没记录 = 观测坏了）。
+           gate 没有 shadow 档位，一律 `enforcing`。
+        """
 
     def register(self, gate_id: str, fn: GateFn) -> None:
         """注册一个门禁。同名覆盖（后注册的覆盖先注册的）。"""
@@ -67,13 +77,25 @@ class GateRunner:
             )
 
         try:
-            return fn(packet, **ctx)
+            verdict = fn(packet, **ctx)
         except Exception as exc:
-            return GateVerdict(
+            verdict = GateVerdict(
                 passed=False,
                 gate_id=gate_id,
                 detail=f"门禁 {gate_id!r} 执行异常: {exc}",
             )
+
+        # ★ 命中落账（与 AdmissionChecker 同签名）。未注册的门禁不记录 ——
+        #   那是「不需要」，不是「跑过一次判据」。
+        if self.recorder is not None:
+            self.recorder(
+                str(packet.id),
+                gate_id,
+                "enforcing",
+                not verdict.passed,
+                gate_id if not verdict.passed else None,
+            )
+        return verdict
 
     def has(self, gate_id: str) -> bool:
         """检查门禁是否已注册。"""

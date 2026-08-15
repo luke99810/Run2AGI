@@ -115,6 +115,33 @@ class TestGateRunner:
         v = runner.check("g", _pkt())
         assert v.passed
 
+    def test_recorder_captures_both_pass_and_fire(self) -> None:
+        """★ 门禁命中落账：放行与拦截都记，fired/code 语义正确。
+
+        资产负债表要靠「跑过但没拦」与「从没记录」区分两条完全不同的线索，
+        所以放行也要记一条 fired=False —— 少了它，门禁那几行永远是「未观测」。
+        """
+        seen: list[tuple[str, str, bool, str | None]] = []
+
+        def rec(packet_id: str, rule: str, mode: str, fired: bool, code: str | None) -> None:
+            seen.append((rule, mode, fired, code))
+
+        runner = GateRunner(recorder=rec)
+        register_builtin_gates(runner)
+
+        # 拦截：worker 失败过的 packet
+        bad = _pkt(evidence=("file:runner/result.json", "sys:worker-failed:wp-gate001:runtime_error"))
+        assert not runner.check("acceptance", bad).passed
+
+        # 放行：真实证据
+        good = _pkt(evidence=("sys:lock:wp-gate001:3", "file:runner/result.json"))
+        assert runner.check("acceptance", good).passed
+
+        acc = [e for e in seen if e[0] == "acceptance"]
+        assert len(acc) == 2, f"应记两条 acceptance 命中：{seen}"
+        assert any(e[2] is True and e[3] == "acceptance" for e in acc), "拦截没落账或 code 不对"
+        assert any(e[2] is False and e[3] is None for e in acc), "放行没落账或 code 应为 None"
+
 
 class TestEvidenceExistsGate:
     def test_with_evidence_passes(self) -> None:
