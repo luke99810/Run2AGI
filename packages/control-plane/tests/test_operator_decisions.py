@@ -161,3 +161,27 @@ def test_approve_unknown_packet_raises(tmp_state_dir: Path) -> None:
     loop = ReconcileLoop(state_dir=str(tmp_state_dir))
     with pytest.raises(ValueError, match="unknown packet"):
         loop.approve(PacketId("wp-missing"))
+
+
+def test_the_latest_operator_decision_wins(tmp_state_dir: Path) -> None:
+    """★ 人工审批的语义是「最后一次表态算数」，不是「一票否决且永久有效」。
+
+    原实现先查 reject、再查 approve —— 两条时间线各自独立。
+    后果很具体：**一个被驳回过的 packet 再也批不通了**。
+    rejected → ready → 重做 → review，而那条旧 reject 还在日志里，
+    于是又被同一条决定打回，operator 后来的批准被静默忽略。
+
+    ★ 实测（修复前）：先 reject 再 approve，`_try_manual_acceptance` 推到 rejected。
+    """
+
+    def outcome(order: tuple[str, ...]) -> str | None:
+        loop = ReconcileLoop(state_dir=str(tmp_state_dir))
+        loop._dep_graph = None
+        _inject(loop, _manual_packet("wp-manual0009").model_copy(update={"state": "review"}))
+        for action in order:
+            getattr(loop, action)(PacketId("wp-manual0009"), note=action)
+        transition = loop._try_manual_acceptance(loop.packets[PacketId("wp-manual0009")])
+        return transition.to_state if transition is not None else None
+
+    assert outcome(("reject", "approve")) == "accepted", "后来的批准被旧的驳回压住了"
+    assert outcome(("approve", "reject")) == "rejected", "后来的驳回没有生效"

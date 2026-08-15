@@ -1242,17 +1242,25 @@ class ReconcileLoop:
           「产生一条真实证据」就等于「验收通过」。这里要求操作者显式
           approve，否则永远停在 review —— 有证据 ≠ 有人签字。
         """
-        rejection = self._operator_decision(packet.id, "reject")
-        if rejection is not None:
+        # ★ 取 approve / reject 里**时间最新的那一条**，而不是先查 reject。
+        #
+        #   先查 reject 的后果是：一个被驳回过的 packet **再也批不通**。
+        #   rejected → ready → 重做 → review，而那条旧 reject 还在日志里，
+        #   于是又被同一条决定打回 —— operator 后来的批准被静默忽略。
+        #
+        #   实测：先 reject 再 approve，`_try_manual_acceptance` 推到 rejected。
+        #   人工审批的语义是「最后一次表态算数」，不是「一票否决且永久有效」。
+        decision = self._latest_operator_decision(packet.id, ("approve", "reject"))
+        if decision is None:
+            return None  # 等待人工审批，留在 review
+
+        if decision.action == "reject":
             detail = "人工驳回（operator）"
-            if rejection.detail:
-                detail += f"：{rejection.detail}"
+            if decision.detail:
+                detail += f"：{decision.detail}"
             return self._apply_transition(
                 packet, target="rejected", detail=detail, evidence_refs=(),
             )
-        approval = self._operator_decision(packet.id, "approve")
-        if approval is None:
-            return None  # 等待人工审批，留在 review
 
         blocked, note = self._integrate_before_accepting(packet)
         if blocked is not None:
@@ -1328,6 +1336,26 @@ class ReconcileLoop:
         _append_decision_record(Path(self.state_dir), record)
         self._decisions.append(record)
         return record
+
+    def _latest_operator_decision(
+        self, packet_id: PacketId, actions: tuple[str, ...]
+    ) -> DecisionRecord | None:
+        """取这几个动作里**时间最新**的一条 operator 决定（无则 None）。
+
+        ★ 与 `_operator_decision` 的区别是要害所在：那个是「某个动作的最新一条」，
+          这个是「**这些动作之间**谁最后表的态」。
+          用前者去判 approve/reject 的先后，等于两条时间线各自独立 ——
+          而人工审批的语义是「最后一次表态算数」。
+        """
+
+        for record in reversed(self._decisions):
+            if (
+                record.actor == "operator"
+                and record.action in actions
+                and record.packetId == packet_id
+            ):
+                return record
+        return None
 
     def _operator_decision(self, packet_id: PacketId, action: str) -> DecisionRecord | None:
         """取最新一条指定动作的 operator 决定（无则 None）。"""
