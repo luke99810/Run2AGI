@@ -21,15 +21,35 @@ dev = [
   "pytest>=8.3",
 ]
 
-[tool.setuptools]
-packages = [
-  "codentum_control_plane",
-  "codentum_harness",
-  "codentum_roles",
-  "codentum_delivery",
-  "codentum_engine",
-  "codentum_contracts",
+# ══════════════════════════════════════════════════════════════
+#  ★ 包的发现路径 —— 这份声明此前是**假的**
+#
+#  原先写的是一份裸的 `packages = [...]` 名单，没有 package-dir。
+#  setuptools 会去仓库根找 `./codentum_control_plane/`，而各包实际在
+#  `packages/<名>/<import 根>/` 下（契约层还多一层 `python/`，因为同一份
+#  schema 要往 Python 与 TypeScript 两侧发类型）。
+#
+#  于是 `pip install -e .` 一直是报错的：
+#      error: package directory 'codentum_control_plane' does not exist
+#
+#  ★ 它一直没被发现，是因为**没有人装过这个包**：本地靠 conftest.py 把
+#    六个根挂到 sys.path，测试就跑起来了。装不上这件事在仓库内部
+#    完全观测不到 —— 直到要把它装进容器。
+#
+#  ★ 这里的 `where` 必须与 `conftest.py::_IMPORT_ROOTS` 一致。
+#    两处各写一份是已知的重复；合并需要先决定「装着跑」还是「挂路径跑」，
+#    那是个更大的决定，不在这次范围内。改一处要想到另一处。
+# ══════════════════════════════════════════════════════════════
+[tool.setuptools.packages.find]
+where = [
+  "packages/contracts/python",
+  "packages/control-plane",
+  "packages/harness",
+  "packages/roles",
+  "packages/delivery",
+  "packages/engine",
 ]
+include = ["codentum_*"]
 
 # ══════════════════════════════════════════════════════════════
 #  ★ mypy —— 失去 tsc 之后，这里就是那道确定性门禁

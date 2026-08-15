@@ -20,11 +20,26 @@ RUN apt-get update \
 
 WORKDIR /codentum
 
-# ★ 先只 COPY 依赖声明再装，最后才 COPY 源码 ——
+# ★ 先只 COPY 依赖声明再装第三方依赖，最后才 COPY 源码 ——
 #   源码一改就重装依赖会让每次迭代多等几分钟。
+#
+# ★ 这里刻意分成两步，而不是 COPY 完源码直接 `pip install -e .`：
+#   `-e` 需要源码在场，一并做的话每改一行源码都要重解一次依赖树。
 COPY pyproject.toml /codentum/
+RUN pip install --no-cache-dir \
+      "pydantic>=2.9" "langgraph>=0.2" "openai>=1.0" "anthropic>=0.40"
+
 COPY packages /codentum/packages
-RUN pip install --no-cache-dir -e .
+
+# ★ `pip install -e .` 在 2026-08-16 之前是**建不过**的：
+#   pyproject 里那份 `packages = [...]` 名单没有 package-dir，
+#   setuptools 会去仓库根找 ./codentum_control_plane/ 而那里没有，
+#   报 `package directory 'codentum_control_plane' does not exist`。
+#
+#   它一直没被发现，是因为**从来没有人装过这个包** —— 本地靠 conftest.py
+#   把六个根挂到 sys.path 就能跑测试。「装不上」这件事在仓库内部
+#   完全观测不到，直到要把它装进容器。已随本次改动修掉（packages.find）。
+RUN pip install --no-cache-dir --no-deps -e .
 
 # ★ 凭证一律不进镜像层 —— 镜像层删不掉，push 出去就是永久泄漏。
 #   模型 Key 在运行时注入：
