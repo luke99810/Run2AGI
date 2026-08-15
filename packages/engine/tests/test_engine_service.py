@@ -13,6 +13,8 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
+from typing import Any
+
 import pytest
 from codentum_delivery.protocol import CAPABILITY_NAMES, validate_handshake, validate_receipt
 from codentum_engine.intake import (
@@ -130,6 +132,64 @@ def test_worker_runtime_mode_team_selects_team_runtime(project: Path, fake_key: 
     runtime = service._build_worker_runtime()
 
     assert isinstance(runtime, TeamWorkerRuntime)
+
+
+def test_production_runner_gets_the_real_provider_for_otel(
+    project: Path, fake_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 守的是「trace 里的 provider 是真的」这一条。
+
+    `gen_ai.system` 若在 runner 里写死，换网关之后导出的 trace 会
+    **言之凿凿地报错误的 provider** —— 一条内容是假的 trace，
+    比没有 trace 更坏，因为它看起来完全正常。
+    所以它必须从装配层真的用的那个 `ModelGatewayConfig.kind` 派生。
+
+    ★ 这条同时守住另一半：生产装配是不是**真的**把它传下去了。
+      不传的话 runner 会退回默认值 —— 而默认值恰好也是 dashscope，
+      于是「传了」和「忘了传」在结果上不可区分。这里直接查装配出的
+      config 对象，绕开那个巧合。
+    """
+
+    from codentum_engine.agent_runner import AgentRunnerConfig
+    from codentum_engine.service import GEN_AI_SYSTEM_BY_GATEWAY
+
+    from codentum_engine.agent_runner import build_agent_runner as real
+
+    captured: list[AgentRunnerConfig] = []
+    service = _service(project, enable_tool_loop=True)
+
+    def _spy(config: AgentRunnerConfig) -> Any:
+        captured.append(config)
+        return real(config)
+
+    monkeypatch.setattr("codentum_engine.service.build_agent_runner", _spy)
+    service._build_worker_runtime()
+
+    assert captured, "生产装配没有走 build_agent_runner"
+    assert captured[0].otel_system == GEN_AI_SYSTEM_BY_GATEWAY["bailian"] == "dashscope"
+
+
+def test_every_gateway_kind_has_a_gen_ai_system(project: Path) -> None:
+    """★ 新增一种网关却忘了登记，要在**装配时**炸，不要导出一堆
+    `gen_ai.system="unknown"` 的 span —— 后者要等到有人去看 trace
+    才发现，而那时候数据已经攒了一批了。
+
+    这条盯的是那张表跟得上 `ModelGatewayConfig.kind` 的取值集合。
+    """
+
+    import typing
+
+    from codentum_harness.runtime import ModelGatewayConfig
+    from codentum_engine.service import GEN_AI_SYSTEM_BY_GATEWAY
+
+    # ★ 必须走 get_type_hints：`from __future__ import annotations` 之后
+    #   `__annotations__["kind"]` 是**字符串** `'Literal["bailian", …]'`，
+    #   get_args 对它返回空元组 —— 于是 missing 恒为空，这条测试恒绿。
+    #   下面那句 `assert kinds` 就是为拦这个而写的，它当场拦住了一次。
+    kinds = set(typing.get_args(typing.get_type_hints(ModelGatewayConfig)["kind"]))
+    assert kinds, "取不到 kind 的取值集合，这条测试会变成空转"
+    missing = kinds - set(GEN_AI_SYSTEM_BY_GATEWAY)
+    assert not missing, f"这些网关没有登记 gen_ai.system：{sorted(missing)}"
 
 
 def test_state_revision_survives_a_restart(project: Path, fake_key: None) -> None:

@@ -33,6 +33,7 @@ import asyncio
 import json
 import logging
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,7 @@ from codentum_harness.prompt_bundle import load_worker_prompt_bundle
 from .acceptance import split_command, vacuity_check
 from .agent_graph import AgentGraphState, build_agent_graph
 from .mcp_toolbox import McpToolbox
+from .otel import GenAiSpan, genai_spans_from_model_response, new_trace_id, to_otlp_json
 from .tools import ToolExecutor, tool_schemas_for
 
 __all__ = ["AgentRunnerConfig", "build_agent_runner"]
@@ -114,6 +116,15 @@ class AgentRunnerConfig:
       那正是这个项目一路在拆的那类问题。
     """
 
+    otel_system: str = "dashscope"
+    """写进 span 的 `gen_ai.system`，即**这次调用真的走了哪家**。
+
+    ★ 由装配层（EngineService）从 `ModelGatewayConfig.kind` 派生后传进来，
+      不在这里猜。猜的代价是：换了网关而这里没跟着改，导出的 trace 会
+      **言之凿凿地报错误的 provider** —— 一条内容是假的 trace，
+      比没有 trace 更坏，因为它看起来完全正常。
+    """
+
 
 def build_agent_runner(config: AgentRunnerConfig):  # type: ignore[no-untyped-def]
     """造一个 `WorkerRunner`（`Callable[[SpawnRequest], WorkerOutcome]`）。"""
@@ -140,6 +151,11 @@ class _AgentRun:
         self._mcp = config.mcp_toolbox
         self._tools = ToolExecutor(self._workspace, mcp=self._mcp)
         self._transcript: list[dict[str, Any]] = []
+        # ★ 一次 packet 执行 = 一条 trace，多轮模型调用是它下面的多条 span。
+        #   trace_id 在这里定一次，之后每轮复用 —— 每轮各派生一个就成了
+        #   N 条互不相干的 trace，那不是一条能看的调用链。
+        self._trace_id = new_trace_id(f"{req.packet_id}:attempt-{req.attempt}")
+        self._spans: list[GenAiSpan] = []
         self._spent = 0.0
         self._acceptance_predicate = acceptance_predicate
         self._helped_once = False
@@ -255,6 +271,9 @@ class _AgentRun:
                 # ★ 撞上限不算完成 —— 模型没说「我做完了」，我们不能替它说。
                 return {"turn": turn, "outcome": "max_turns_exhausted", "response": None}
 
+            # ★ 用 time_ns（挂钟）而不是 monotonic：span 的时间戳要能和
+            #   别的系统的日志对得上，单调时钟的原点没有意义。
+            started_ns = time.time_ns()
             try:
                 response = await self._invoke_with_retry(
                     session,
@@ -286,7 +305,7 @@ class _AgentRun:
                 }
 
             self._spent = max(self._spent, _session_spent(session))
-            self._record_turn(turn, response)
+            self._record_turn(turn, response, started_ns=started_ns, ended_ns=time.time_ns())
             return {"turn": turn, "response": response}
 
         return model_node
@@ -567,7 +586,14 @@ class _AgentRun:
             touched_paths=written,
         )
 
-    def _record_turn(self, turn: int, response: ModelResponse) -> None:
+    def _record_turn(
+        self,
+        turn: int,
+        response: ModelResponse,
+        *,
+        started_ns: int = 0,
+        ended_ns: int = 0,
+    ) -> None:
         self._append_transcript(
             {
                 "turn": turn,
@@ -578,6 +604,49 @@ class _AgentRun:
                 ],
             }
         )
+        self._record_spans(turn, response, started_ns=started_ns, ended_ns=ended_ns)
+
+    def _record_spans(
+        self, turn: int, response: ModelResponse, *, started_ns: int, ended_ns: int
+    ) -> None:
+        """把这一轮模型调用导出成 OTel GenAI span 并落盘。
+
+        ★ 挂在 `_record_turn` 上，因为它是**每一次模型响应的唯一漏斗** ——
+          与 `_harvest` 挂 `_write_result`、决策日志挂 `_apply_transition`
+          同一个做法：接在漏斗上，就没有「某条分支忘了记」这种情况。
+
+        ★ 为什么这段值得单独写清楚：`otel.py` 从落地起就是**只有它自己的
+          测试在 import 它**，生产路径零调用 —— 也就是真跑一次产不出任何
+          span，而材料里写的是「OTel 可观测已落地」。模块是好的，缺的一直
+          是这十几行接线。这是本项目反复出现的那一类：**结构完整、从未被
+          调用、而且没有任何测试会红**。
+
+        ★ 导出失败绝不能拖垮执行（同 `_harvest`）：可观测是旁路，
+          它把主链路搞崩是笔糟糕的交易。但也不静默 —— 记日志。
+        """
+
+        try:
+            self._spans.extend(
+                genai_spans_from_model_response(
+                    # ★ trace_id 全程复用，seed 逐轮变 —— 否则要么 N 条 trace，
+                    #   要么 N 个 chat span 撞同一个 span_id。
+                    trace_id=self._trace_id,
+                    trace_seed=f"{self._req.packet_id}:attempt-{self._req.attempt}:turn-{turn}",
+                    model=self._req.routing.model,
+                    system=self._config.otel_system,
+                    role=self._req.role,
+                    response=response,
+                    start_time_unix_nano=started_ns,
+                    end_time_unix_nano=ended_ns,
+                )
+            )
+            self._model_dir.mkdir(parents=True, exist_ok=True)
+            (self._model_dir / "trace.otlp.json").write_text(
+                json.dumps(to_otlp_json(tuple(self._spans)), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("OTel span 导出失败（不影响本次执行）")
 
     def _append_transcript(self, entry: dict[str, Any]) -> None:
         """追加一条轨迹并**立刻落盘**。

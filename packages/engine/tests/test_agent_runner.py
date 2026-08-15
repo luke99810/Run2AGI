@@ -597,3 +597,156 @@ def test_mcp_tools_reach_the_model_tool_surface(prepared: Path, tmp_path: Path) 
         assert "github__create_issue" in offered, f"MCP 工具没进工具面：{sorted(offered)}"
     finally:
         toolbox.close()
+
+
+# ══════════════════════════════════════════════════════════════
+#  OTel 导出 —— 守的是**接线**，不是编码器
+# ══════════════════════════════════════════════════════════════
+#
+# ★ 这一组是本项目那类缺陷的又一个样本：`otel.py` 从落地起就
+#   **只有它自己的测试在 import 它**，生产路径零调用 —— 真跑一次
+#   产不出任何 span，而材料里写的是「OTel 可观测已落地」，
+#   验证命令给的是 `pytest test_otel.py`。那条命令是绿的，
+#   它证明的是「编码器会编码」，不是「系统会产 trace」。
+#
+#   所以这组测试**不测编码器**（那是 test_otel.py 的事），
+#   只测一件事：**跑完一次，evidence 里有没有 trace。**
+#   把接线拆掉，这组必须红。
+
+
+def _trace(workspace: Path) -> dict[str, Any]:
+    path = workspace / ".codentum" / "evidence" / "wp-toolloop01-attempt-1" / "model" / "trace.otlp.json"
+    assert path.exists(), "跑完一次却没有产出 trace —— 导出没接上生产路径"
+    payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return payload
+
+
+def _spans(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        span
+        for resource in payload["resourceSpans"]
+        for scope in resource["scopeSpans"]
+        for span in scope["spans"]
+    ]
+
+
+def test_a_real_run_emits_an_otlp_trace(prepared: Path) -> None:
+    """★ 「已落地」必须意味着**真跑一次就有 trace**。
+
+    在这条接上之前，otel.py 的全部测试都是绿的，而系统产出零条 span。
+    """
+
+    _run(
+        prepared,
+        [
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="1", name="write_file", input={"path": "a.py", "content": "x"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="ok", tool_calls=(), stop_reason="end", usage=_usage()),
+        ],
+    )
+
+    spans = _spans(_trace(prepared))
+    names = [s["name"] for s in spans]
+    assert any(n.startswith("chat ") for n in names), f"没有 chat span：{names}"
+    assert any(n.startswith("execute_tool ") for n in names), f"工具调用没进 trace：{names}"
+
+
+def test_every_turn_shares_one_trace_id(prepared: Path) -> None:
+    """★ 一次 packet 执行是**一条** trace，多轮是它下面的多条 span。
+
+    trace_id 若逐轮派生，导出的就是 N 条互不相干的 trace ——
+    文件照样存在、测试照样绿，但那不是一条能看的调用链。
+    而每轮同 seed 又会让多个 chat span 撞同一个 span_id。
+    这条同时守住这两侧。
+    """
+
+    _run(
+        prepared,
+        [
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="1", name="write_file", input={"path": "a.py", "content": "x"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="2", name="write_file", input={"path": "b.py", "content": "y"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="ok", tool_calls=(), stop_reason="end", usage=_usage()),
+        ],
+    )
+
+    spans = _spans(_trace(prepared))
+    assert len({s["traceId"] for s in spans}) == 1, "多轮被拆成了多条 trace"
+    chat_ids = [s["spanId"] for s in spans if s["name"].startswith("chat ")]
+    assert len(chat_ids) == len(set(chat_ids)) >= 3, f"每轮的 chat span 要各有各的 id：{chat_ids}"
+
+
+def test_span_carries_the_real_model_role_and_cost(prepared: Path) -> None:
+    """★ trace 的价值在于**内容是真的**。
+
+    模型名、角色、成本若是占位值，这条 trace 看起来完全正常
+    而说的全不对 —— 那比没有 trace 更坏。
+    """
+
+    _run(prepared, [ModelResponse(text="ok", tool_calls=(), stop_reason="end", usage=_usage())])
+
+    chat = next(s for s in _spans(_trace(prepared)) if s["name"].startswith("chat "))
+    attrs = {a["key"]: next(iter(a["value"].values())) for a in chat["attributes"]}
+    assert attrs["gen_ai.request.model"] == "fake-model", "模型名不是这次真的用的那个"
+    assert attrs["codentum.role"] == "coder"
+    assert attrs["gen_ai.usage.input_tokens"] == 10
+    assert attrs["gen_ai.system"] == "dashscope"
+
+
+def test_span_timestamps_are_real_wall_clock(prepared: Path) -> None:
+    """★ 时间戳是 0 的 span 在任何 Collector 里都排不出先后。
+
+    这是最容易「接上了但没接全」的一处：span 产出来了、结构也对，
+    只是时间字段全是默认值 —— 而那样的 trace 画不出时序图。
+    """
+
+    _run(prepared, [ModelResponse(text="ok", tool_calls=(), stop_reason="end", usage=_usage())])
+
+    chat = next(s for s in _spans(_trace(prepared)) if s["name"].startswith("chat "))
+    start = int(chat["startTimeUnixNano"])
+    end = int(chat["endTimeUnixNano"])
+    assert start > 1_700_000_000_000_000_000, "开始时间不是真实挂钟"
+    assert end >= start, "结束早于开始"
+
+
+def test_export_failure_does_not_kill_the_run(prepared: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """★ 可观测是旁路 —— 它把主链路搞崩是笔糟糕的交易。
+
+    但也不能静默：失败会记日志（同 `_harvest` 的取舍）。
+    """
+
+    import codentum_engine.agent_runner as runner_mod
+
+    def _boom(**_kw: Any) -> Any:
+        raise RuntimeError("导出炸了")
+
+    monkeypatch.setattr(runner_mod, "genai_spans_from_model_response", _boom)
+
+    outcome, _ = _run(
+        prepared,
+        [
+            ModelResponse(
+                text="",
+                tool_calls=(ToolCall(id="1", name="write_file", input={"path": "a.py", "content": "x"}),),
+                stop_reason="tool_use",
+                usage=_usage(),
+            ),
+            ModelResponse(text="ok", tool_calls=(), stop_reason="end", usage=_usage()),
+        ],
+    )
+
+    assert outcome.status == "completed", "导出失败拖垮了主链路"
+    assert (prepared / "a.py").exists()

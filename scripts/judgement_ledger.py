@@ -33,6 +33,11 @@
 
 把后者显示成 0，等于用一个看起来正常的数字掩盖一个坏掉的管道。
 所以没有账本时显示 `未观测`，而不是 `0`。
+
+★ 反过来同样成立，而这张表自己犯过：门禁那几行原先把「未观测」**写死**成
+  常量（写的时候确实还没接 recorder）。后来 `GateRunner(recorder=...)` 接上了，
+  这几行却不会变 —— **一个写死的「未观测」和真的没观测，在表上不可区分**。
+  现在门禁与规则走同一条路：都去账本里查，查不到才叫未观测。
 """
 
 from __future__ import annotations
@@ -156,9 +161,25 @@ def main() -> int:
 
     for gate_id in gate_ids:
         verdict = "未检验" if gate_id not in mutation else ("被杀死" if mutation[gate_id] else "存活")
-        # ★ 门禁目前没有命中记录 —— recorder 只挂在 AdmissionChecker 上。
-        #   如实显示「未观测」，不填 0。
-        rows.append(Row(gate_id, "门禁", "enforcing", None, None, "—", verdict, "—（门禁未接命中记录）"))
+        # ★ 这一行原先把 runs/fired 写死成 None，配一句「门禁未接命中记录」。
+        #   写的时候那句是对的（recorder 只挂在 AdmissionChecker 上），
+        #   但 `GateRunner(recorder=...)` 后来接上了（service.py），
+        #   而这里是**常量**，不读账本 —— 于是门禁哪天真记了账，
+        #   这张表还是会一律显示「未观测」。
+        #
+        # ★ 这正是这张表自己要解决的那个问题的镜像：它立的规矩是
+        #   「命中 0 次」与「没人在记录」必须分开显示，
+        #   而它自己这一行把后者写成了常量 —— **一个写死的「未观测」
+        #   和真的没观测，在表上不可区分。**
+        #   现在按门禁 id 去查账本，查不到才是未观测。
+        runs = hits[0][gate_id] if hits else None
+        fired = hits[1][gate_id] if hits else None
+        last = hits[2].get(gate_id, "—") if hits else "—"
+        advice = _advise("enforcing", fired, verdict)
+        if hits is not None and runs == 0:
+            # 账本在，但这个门禁一条记录都没有 —— 与「跑过 N 次没拦」不同。
+            advice = "—（账本里没有它的记录：要么没跑到，要么没接上）"
+        rows.append(Row(gate_id, "门禁", "enforcing", runs, fired, last, verdict, advice))
 
     print("═" * 100)
     print(" 判据资产负债表")

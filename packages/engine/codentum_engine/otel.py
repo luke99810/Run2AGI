@@ -26,7 +26,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from codentum_contracts.interfaces import ModelResponse, Usage
+from codentum_contracts.interfaces import ModelResponse
 
 __all__ = [
     "GenAiSpan",
@@ -95,13 +95,22 @@ def genai_spans_from_model_response(
     start_time_unix_nano: int = 0,
     end_time_unix_nano: int = 0,
     error_type: str | None = None,
+    trace_id: str | None = None,
 ) -> tuple[GenAiSpan, ...]:
     """把一次模型调用（ModelResponse）转成 OTel GenAI spans。
 
     返回一条 `chat` span（父），外加每条 tool_call 一条 `execute_tool` span。
     顺序稳定：先 chat，再按 tool_call 顺序展开。
+
+    ★ `trace_id` 可以显式传入，否则由 `trace_seed` 派生。
+
+      这个参数是接线时才发现要加的：一次 packet 执行是**多轮**模型调用，
+      而 trace_id 和 chat 的 span_id 原本都从同一个 seed 派生 —— 于是
+      「每轮换 seed」会把一次执行拆成 N 条互不相干的 trace，
+      「每轮同 seed」又会让 N 个 chat span 撞同一个 span_id。
+      两种都不是一条能看的 trace。调用方要能分开指定这两者。
     """
-    trace_id = new_trace_id(trace_seed)
+    trace_id = trace_id or new_trace_id(trace_seed)
     chat_span_id = new_span_id(f"{trace_seed}:chat")
 
     chat_attrs: dict[str, Any] = {
@@ -211,13 +220,3 @@ def _any_value(value: Any) -> dict[str, Any]:
     if isinstance(value, float):
         return {"doubleValue": value}
     return {"stringValue": str(value)}
-
-
-def usage_from_tokens(*, input_tokens: int, output_tokens: int, cached: int = 0, cost_cny: float = 0.0) -> Usage:
-    """便捷构造 Usage（测试与调用方用），避免手写冻结类型。"""
-    return Usage(
-        cost_cny=cost_cny,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cached_input_tokens=cached,
-    )
