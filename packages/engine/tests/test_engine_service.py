@@ -342,12 +342,18 @@ def test_submit_without_key_is_rejected_not_silently_queued(project: Path, no_ke
 
 def test_unimplemented_action_is_rejected_not_silently_applied(project: Path, fake_key: None) -> None:
     """★ 走到这里说明网关的能力检查放行了一个没实现的动作。
-    静默回 applied 会让「暂停」看起来生效了。"""
+    静默回 applied 会让那个动作看起来生效了。
+
+    ★ 这条原先用 `pause_at_safe_point` 举例。2026-08-15 暂停被真的实现之后，
+      它变红了 —— 举例用的动作必须是**当下确实没实现**的那个，
+      否则这条测试测的是「一个已实现的动作被拒」，语义正好反了。
+      改用 `fork_from_checkpoint`（`IMPLEMENTED_CAPABILITIES` 里明确列了理由）。
+    """
 
     service = _service(project)
-    receipt = service.command(_command("pause_at_safe_point", service.run_id, project))
+    receipt = service.command(_command("fork_from_checkpoint", service.run_id, project))
     assert receipt["status"] == "rejected"
-    assert receipt["reason"] == "action_not_implemented:pause_at_safe_point"
+    assert receipt["reason"] == "action_not_implemented:fork_from_checkpoint"
 
 
 def test_admission_runs_before_anything_is_written(project: Path, fake_key: None) -> None:
@@ -1096,3 +1102,84 @@ def test_engine_wires_the_result_integrator(project: Path, fake_key: None) -> No
 
     loop = _service(project)._build_loop()
     assert loop.result_integrator is not None, "合入器没被注入 —— accepted 不代表东西进了项目"
+
+
+# ══════════════════════════════════════════════════════════════
+#  暂停 / 恢复 / 停止（缺口 ①）
+# ══════════════════════════════════════════════════════════════
+
+
+def test_pause_without_running_workers_is_applied(project: Path, fake_key: None) -> None:
+    """★ 没有 worker 在跑时，此刻就是安全点 —— 回 applied。"""
+
+    service = _service(project)
+    receipt = service.command(_command("pause_at_safe_point", service.run_id, project))
+    validate_receipt(receipt, "cmd-pause_at_safe_point-1")
+    assert receipt["status"] == "applied"
+    assert service._paused is True
+
+
+def test_resume_is_idempotent(project: Path, fake_key: None) -> None:
+    """★ 没暂停时 resume 也回 applied，而不是报错。
+
+    桌面端可能在不确定状态下重发；把它判成错误只会制造噪音，
+    而噪音会淹掉真正该看的那条。
+    """
+
+    service = _service(project)
+    for _ in range(2):
+        receipt = service.command(_command("resume", service.run_id, project))
+        assert receipt["status"] == "applied"
+    assert service._paused is False
+
+
+def test_stop_then_further_commands_are_rejected(project: Path, fake_key: None) -> None:
+    """★ 停了就是停了 —— 之后的命令必须被拒，不能静默接受。"""
+
+    service = _service(project)
+    assert service.command(_command("stop", service.run_id, project))["status"] == "applied"
+
+    after = service.command(_command("submit_requirement", service.run_id, project, requirement="再来一个"))
+    assert after["status"] == "rejected"
+    assert after["reason"] == "engine_stopping"
+
+
+def test_the_three_new_capabilities_are_advertised(project: Path, fake_key: None) -> None:
+    """★ 能力表与实现必须一致。
+
+    报 false 的那五项是**正确行为**不是欠账：网关会以 capability_unavailable
+    直接拒绝，桌面端也就不会显示成可用。报一个什么都不做的 true 才是病。
+    """
+
+    capabilities = _service(project).handshake()["capabilities"]
+    assert isinstance(capabilities, dict)
+    for name in ("pauseAtSafePoint", "resume", "stop"):
+        assert capabilities[name] is True, f"{name} 实现了却没报出来"
+    for name in ("keepMemory", "appendPrompt", "insertModule", "planConfirmation", "forkFromCheckpoint"):
+        assert capabilities[name] is False, f"{name} 没实现却报了 true"
+
+
+def test_pause_with_running_workers_says_waiting_not_applied(
+    project: Path, fake_key: None
+) -> None:
+    """★ 「暂停请求已收到」与「已经停住了」是两件事。
+
+    都回 applied 的话，使用者会以为已经停住了，
+    **而实际上 worker 还在写文件**。协议里本来就有 waiting_safe_point 这个状态。
+    """
+
+    import threading
+
+    service = _service(project)
+    still_running = threading.Event()
+    worker = threading.Thread(target=still_running.wait, daemon=True)
+    worker.start()
+    service._workers.append(worker)
+    try:
+        receipt = service.command(_command("pause_at_safe_point", service.run_id, project))
+        validate_receipt(receipt, "cmd-pause_at_safe_point-1")
+        assert receipt["status"] == "waiting_safe_point"
+        assert "仍在执行" in str(receipt["reason"])
+    finally:
+        still_running.set()
+        worker.join(timeout=5)
