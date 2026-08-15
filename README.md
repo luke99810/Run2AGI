@@ -1,46 +1,46 @@
 # Codentum
 
-> **Code + Momentum** — 自进化多 Agent 软件开发系统
->
-> Codentum 是一个本地优先的桌面软件：输入一份软件需求，系统自动编排一支专业化 Agent 团队完成完整的开发流程——从架构设计到编码、评审、测试，最终打包交付。全过程在可视化界面中实时呈现，所有状态变更附证据溯源。
+> **Code + Momentum** — 自进化多 Agent 软件开发系统。
+
+Codentum 是一个本地优先的桌面软件：输入一份软件需求，系统自动编排一支专业化的 Agent 团队，完成从架构设计、编码、评审、测试到打包交付的完整流程。全过程在可视化界面中实时呈现，每一次状态变更都附有证据溯源。
 
 ---
 
-## 问题：多 Agent 协作的可靠性从何而来
+## 为什么需要 Codentum
 
-单个大模型已经能写出可用的函数。但让**多个**大模型协作完成一个软件的完整交付——架构、编码、评审、测试、打包——可靠性从何而来？
+单个大模型已经能够生成可用的函数。但当**多个**模型协作交付一个完整软件时，可靠性问题会成倍放大：
 
-单一模型场景的失败，多半是「答得不好」；多 Agent 场景的失败，则会成倍放大：
-
-- 两个 Agent 同时修改同一个文件，后写静默覆盖先写；
-- 一个 Agent 把契约改成只对自己有利的形状，下游全线崩坏；
+- 两个 Agent 同时修改同一文件，后写静默覆盖先写；
+- 一个 Agent 将契约修改为对自身有利的形状，下游全线失效；
 - 「验收通过」来自模型的自述，而非任何可执行的判据；
-- 一轮失败重试一轮，成本在无人察觉中失控。
+- 失败后逐轮重试，成本在无人察觉中失控。
 
-提示词能缓解这些问题，却**无法根除**：你可以要求模型「别改这个文件」「先读契约」，模型「可能」照做，但**无法保证**照做。凡是靠「劝」守住的位置，迟早会翻车。
+提示词可以缓解这些问题，但**无法根除**：要求模型「不要修改这个文件」「先读契约」，模型**可能**遵守，但**无法保证**遵守。凡是依赖提示词约束的行为，迟早会失效。
 
 ---
 
-## 核心命题
+## 核心思想：可靠性来自不变量，不来自提示词
 
 > **多 Agent 系统的可靠性来自不变量，不来自提示词。**
 
-不是让模型更听话，而是让模型**想犯错也犯不了**——凡是依赖提示词约束行为的位置，都用结构性约束使其成为不可能。由此导出系统的确定性边界：
+Codentum 的目标不是让模型更听话，而是让模型**在结构上无法犯错**——凡是依赖提示词约束行为的位置，都用结构性约束使其不可能发生。由此划分系统的确定性边界：
 
-- **不可恢复的错误** → 确定性代码（零 LLM 调用）：状态机、路径锁、准入校验、门禁、预算、守卫。
-- **可恢复的错误** → 模型重试：代码生成、评审、测试，打回重来即可。
+| 错误类型 | 处理方式 | 具体机制 |
+|---|---|---|
+| **不可恢复的错误** | 确定性代码（零 LLM 调用） | 状态机、路径锁、准入校验、门禁、预算、守卫 |
+| **可恢复的错误** | 模型重试 | 代码生成、评审、测试，失败后重试即可 |
 
-这条边界是 AI Infra 的架构第一原则：**大模型是概率性的不可靠组件，基础设施的任务，是让由不可靠组件组成的系统变得可靠。** 做法不是给模型加更多提示词，而是把「必须确定」的部分从模型手里拿走，交给软件工程。
+这条边界是 AI Infra 的架构第一原则：**大模型是概率性的不可靠组件，基础设施的任务是让由不可靠组件组成的系统变得可靠**。方法不是增加提示词，而是将「必须确定」的部分从模型手中收回，交给软件工程。
 
 完整设计依据见 [`docs/00-总体设计方案.md`](docs/00-总体设计方案.md)。
 
 ---
 
-## 核心架构
+## 架构
 
 ### 五平面分离
 
-Codentum 采用控制/执行/数据/上下文/进化五平面架构，借鉴 Kubernetes 控制循环与声明式状态管理模式。
+Codentum 采用控制 / 执行 / 数据 / 上下文 / 进化五平面架构，借鉴 Kubernetes 的控制循环与声明式状态管理模式。
 
 ```text
 控制平面  (Control Plane)     确定性代码，零 LLM
@@ -51,37 +51,34 @@ Codentum 采用控制/执行/数据/上下文/进化五平面架构，借鉴 Kub
 
 数据平面  (Data Plane)         依赖图 · 所有权图 · 溯源图 · 知识图 · Git 仓库 · 三层记忆
 上下文平面 (Context Plane)     可见性矩阵 · 配方 · 预算降级
-进化平面  (Evolution Plane)    经验沉淀 L0→L1 ✅ · 判据影子档位 ✅ · 证伪门(L2→L3) ⏳ · Skill CI ⏳
+进化平面  (Evolution Plane)    经验沉淀 L0→L1 · 判据影子档位 · 证伪门（L2→L3，暂缓）
 ```
 
-> ★ 进化平面标了实现状态。`L2→L3 证伪门`**暂缓**不是没做完，是**证据现在拿不到**：
-> 一条经验的证伪门只能是「判据冻结下，带它跑与不带它跑出现显著差异」，
-> 而当前单 packet 完成率约 20–40%，噪声远大于信号。
-> 理由与边界见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)。
+> 进化平面已标注实现状态。`L2→L3 证伪门`暂缓的原因不是技术难度，而是**证据当前不可得**：一条经验的证伪门只能是「判据冻结下，带它运行与不带它运行出现显著差异」，而当前单 packet 完成率约 20–40%，噪声远大于信号。理由与边界见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)。
 
-**同构关系**：控制平面 `reconcile` → K8s controller manager；`.codentum/` → etcd；`WorkPacket` → Pod spec。控制平面不 import 执行平面任何模块，WorkerRuntime 通过构造函数注入，确保执行平面可整体替换而控制平面零改动。
+**同构关系**：控制平面 `reconcile` → Kubernetes controller manager；`.codentum/` → etcd；`WorkPacket` → Pod spec。控制平面不 import 执行平面的任何模块，WorkerRuntime 通过构造函数注入——执行平面可整体替换而控制平面零改动。
 
 ### 控制平面：确定性编排内核
 
-控制平面是系统可靠性的根基，七个模块全部为纯 Python 确定性代码：
+控制平面是可靠性的根基，七个模块全部为纯 Python 确定性代码：
 
 | 模块 | 职责 |
 |---|---|
 | `state_machine` | 状态转移表（从 RoleSpec 派生，不硬编码） |
 | `locks` | 前缀树路径锁（线程安全 + 乐观版本锁，保证 I1 单写者） |
-| `reconcile` | 调和循环，对标 K8s controller manager，幂等推进 |
-| `admission` | 准入校验，拦截不合规 WorkPacket |
+| `reconcile` | 调和循环，对标 Kubernetes controller manager，幂等推进 |
+| `admission` | 准入校验，拦截不合规的 WorkPacket |
 | `gates` | 门禁，验收时判定 packet 是否通过 |
-| `budget` | 预算追踪，按角色/模型分摊成本 |
+| `budget` | 预算追踪，按角色 / 模型分摊成本 |
 | `guardian` | 系统守卫，加载期强制 `usesModel=false` |
 
-状态转换图（六条转换，全部由状态机规则驱动）：
+状态转换（全部由状态机规则驱动）：
 
 ```text
 pending ──► ready ──► running ──► review ──► accepted
    │                     │           │
    │                     │           └──► rejected
-   └──► blocked ◄────────┘                (可打回重试)
+   └──► blocked ◄────────┘                （可打回重试）
 ```
 
 | 转换 | 判据 |
@@ -89,66 +86,32 @@ pending ──► ready ──► running ──► review ──► accepted
 | `pending → ready` | 依赖的 packet 全部 accepted |
 | `ready → running` | 获取 `ownsPaths` 的全部路径锁（I1 强制执行点） |
 | `running → review` | Worker 执行结束（成功或失败均进入 review） |
-| `review → accepted` | 门禁通过；无门禁时兜底要求至少一条非 sys: 证据且 worker 未失败 |
+| `review → accepted` | 门禁通过；无门禁时兜底要求至少一条非 `sys:` 证据且 worker 未失败 |
 
 调和循环是**幂等**的：同一状态执行 N 次 tick，结果一致，副作用仅发生一次。进程崩溃后从 `.codentum/` 重新 `load_state()` 即可恢复。
 
 ### 执行平面：Agent 团队协作
 
-执行平面采用 LangGraph 编排，通过三段式外壳（准备 → 模型推理 → 证据收敛）驱动 11 个专业化 Agent 角色协作。每个角色具有独立的：
+执行平面采用 LangGraph 编排，通过三段式外壳（准备 → 模型推理 → 证据收敛）驱动 11 个专业 Agent 角色协作。每个角色具有独立的：
 
-- **RoleSpec**：角色规约，定义输入/输出契约
-- **可见性矩阵**：控制该角色可访问的文件路径和上下文
+- **RoleSpec**：角色规约，定义输入 / 输出契约
+- **可见性矩阵**：控制该角色可访问的文件路径与上下文
 - **Skill 清单**：角色专属能力模块
 - **Prompt 模板**：任务提示词
 
-Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻结：Architect 写 contracts/，Coder 只读挂载）。WorkerRuntime 是控制平面与执行平面的唯一接口——控制平面通过 SpawnRequest 发起任务，通过 SettleRequest 收集证据，不接触任何模型调用细节。
+Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻结：Architect 写 `contracts/`，Coder 只读挂载）。WorkerRuntime 是控制平面与执行平面的唯一接口——控制平面通过 `SpawnRequest` 发起任务、通过 `SettleRequest` 收集证据，不接触任何模型调用细节。
 
-#### 执行段的控制流图（ADR-0004）
-
-三段式中的**执行段**由 LangGraph 图驱动，前后两段无模型参与：
-
-```text
-准备【无模型】  →  ★ LangGraph 图【有模型】  →  收敛【无模型】
-
-              ┌──────────┐
-    ┌────────►│  model   │◄──────────────┐
-    │     ┌────┼────┐                    │
-    │ tool_calls help  no calls          │
-    │     ▼     ▼      ▼                 │
-    │  ┌─────┐┌────┐┌────────┐          │
-    └──┤tools││help││ verify │──────────┘  谓词不过 → 回推
-       └─────┘└─┬──┘└───┬────┘
-                └───────┴──►[END]
-```
-
-**为什么执行平面用 LangGraph 而控制平面不用**——这两个 Graph 不是同一个东西：
-
-| | 是什么 | 例子 |
-|---|---|---|
-| 四张图 | **数据结构**——系统状态的拓扑 | 依赖图（谁等谁）、所有权图（哪条路径被谁锁） |
-| LangGraph | **控制流图**——一次执行的步骤走向 | 节点是函数，边是转移 |
-
-依赖图不是可执行的图，它是一张「谁要等谁」的表——**拿 LangGraph 表达它是范畴错误**。
-而一次 worker 执行内部的「推理 → 用工具 → 自验 → 收敛」循环，正是控制流图。
-
-控制平面不用它的三条理由：控制平面零 LLM；状态存 Git 文件而 checkpointer
-需自有持久化，二者冲突；幂等与崩溃恢复由确定性代码保证更易论证。
-
-**节点与路由分离**：四个节点由调用方注入，路由是纯函数（只读 state、无副作用）——
-「下一步走哪」因此可脱离模型、文件系统、网络单独验证。
-图的测试 1.25 秒跑完（`test_agent_graph.py`），端到端语义测试需 4 分钟
-（`test_agent_runner.py`），两层都有。
+执行段由 LangGraph 控制流图驱动（推理 → 工具调用 → 自验 → 收敛），前后两段无模型参与，详见 [ADR-0004](docs/adr/0004-执行平面改用-LangGraph.md)。控制平面不使用 LangGraph，原因有三：控制平面零 LLM；状态存于 Git 文件，与 checkpointer 的自有持久化冲突；幂等与崩溃恢复由确定性代码保证更易论证。
 
 ### `.codentum/` 状态目录
 
-控制平面与桌面端之间通过文件系统通信，无需 RPC 层。`.codentum/` 是唯一的共享接口——控制平面写入，桌面端只读。
+控制平面与桌面端通过文件系统通信，无需 RPC 层。`.codentum/` 是唯一的共享接口——控制平面写入，桌面端只读。
 
 ```text
 .codentum/
 ├── graph.json          必需  依赖图 + 所有权图（锁表投影）
 ├── packets/            必需  WorkPacket JSON，磁盘为唯一真源
-├── budget.json         必需  预算账本，按角色/模型维度分摊
+├── budget.json         必需  预算账本，按角色 / 模型分摊
 ├── decisions.jsonl     必需  决策流水（空文件合法）
 ├── evidence/           必需  证据产出物目录（空目录合法）
 ├── knowledge/          可选  知识条目
@@ -161,11 +124,11 @@ Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻�
 
 ## 六条不变量
 
-以下六条构成系统可靠性骨架，角色、流程、工具均可替换，不变式不可破。
+六条不变量构成系统的可靠性骨架。角色、流程、工具均可替换，不变量不可破坏。
 
 | ID | 名称 | 内容 | 强制执行机制 |
 |---|---|---|---|
-| **I1** | 单写者 | 任一路径同一时刻仅被一个 in_progress packet 拥有 | 所有权图 + 前缀树锁 + Git hook |
+| **I1** | 单写者 | 任一路径同一时刻仅被一个 in-progress packet 拥有 | 所有权图 + 前缀树锁 + Git hook |
 | **I2** | 验收可判定 | 每个 packet ≥1 条机器可判定的验收谓词 | 准入校验器（确定性） |
 | **I3** | 契约冻结 | 仅 Architect 可写 `contracts/`，Coder 只读 | 只读挂载 + hook + Guardian |
 | **I4** | 绿线 | main 分支任何时刻可构建、可部署、E2E 通过 | 合入前在最新 main 重跑验收 |
@@ -180,65 +143,41 @@ Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻�
 
 ## 判据的因果检验
 
-不变量与门禁只解决一半问题。剩下的一半是：
+不变量与门禁解决了一半问题。另一半是：**谁来检验判据本身？** 编码缺陷会让某条测试变红；判据缺陷不会——因为缺的正是那条测试。
 
-> **谁来判据判据？**
->
-> 编码缺陷会让某条测试变红。**判据缺陷不会**——因为缺的正是那条测试。
-
-Codentum 用一组**因果算子**给判据缺陷造信号。它们共享同一个提问方式：
-不去检查判据「写得对不对」（那是模式匹配，模型总能绕过），
-而是**把被判的东西移走，看判据会不会变红**。
+Codentum 用一组**因果算子**为判据缺陷制造信号。它们共享同一个方法：不检查判据「写得对不对」（那是模式匹配，模型总能绕过），而是**将被判定的对象移走，观察判据是否变红**。
 
 ### 验收侧：六层判据
 
 | 层 | 修的是 | 手法 |
 |---|---|---|
-| 1–3 | 拿控制面簿记当证据 · 门禁同洞 · 说完成了但没改文件 | 看有没有 X |
-| 4 | 改了文件，但没达到验收标准 | **真的把谓词跑一遍** |
-| 5 | 达到了验收标准，**但验收标准是空的** | `vacuity_check`：移走实现，测试必须变红 |
-| 6 | 各模块测试全绿、集成谓词全绿，**但集成没覆盖某个模块** | `composition_check`：逐模块桩化 |
+| 1–3 | 拿控制面簿记当证据 · 门禁同洞 · 声称完成但未改文件 | 检查是否存在 X |
+| 4 | 改了文件，但未达到验收标准 | 实际执行谓词 |
+| 5 | 达到验收标准，但**验收标准是空的** | `vacuity_check`：移走实现，测试必须变红 |
+| 6 | 各模块测试全绿、集成谓词全绿，但**集成未覆盖某模块** | `composition_check`：逐模块桩化 |
 
-第六层是把因果检验从**单点**推广到**组合**——它防的是多 Agent 并行开发最经典的
-失败：「各段都对、合起来不通」。桩必须**签名保真**（AST 掏空函数体，
-保留导入与模块级常量），删文件得到的 `ImportError` 是「红对了、理由错了」。
+第六层将因果检验从单点推广到组合，防的是多 Agent 并行开发最典型的失败——「各段都对、合起来不通」。桩必须**签名保真**（AST 掏空函数体，保留导入与模块级常量）：删除文件得到的 `ImportError` 虽能令测试失败，却失败在了错误的理由上。
 
 ### 判据侧：变异检验与生命周期
 
 | 工具 | 回答的问题 |
 |---|---|
-| `scripts/mutate_judgements.py --mode=strong` | 这条判据**有没有人碰过**？（整条摘掉，测试必须红） |
-| `scripts/mutate_judgements.py --mode=weak` | 这条判据的**边界有没有被测准**？（AST 改一格：`<=`→`<`、`and`→`or`、去掉 `not`、常量差一） |
-| `scripts/judgement_ledger.py` | 判据资产负债表：档位 × 命中 × 变异，合起来才有结论 |
-| `scripts/judgement_gaps.py` | 反复发生、却从没有任何判据拦过的失败 |
+| `scripts/mutate_judgements.py --mode=strong` | 这条判据**有没有人碰过**（整条摘除，测试必须变红） |
+| `scripts/mutate_judgements.py --mode=weak` | 这条判据的**边界有没有被测准**（AST 改一格：`<=`→`<`、`and`→`or`、去掉 `not`、常量差一） |
+| `scripts/judgement_ledger.py` | 判据资产负债表：档位 × 命中 × 变异 |
+| `scripts/judgement_gaps.py` | 反复发生、却从未被任何判据拦截的失败 |
 
-判据有**生命周期**：`shadow`（评估、记录、不拦截）→ `enforcing`。
-晋级两个条件缺一不可：**在真实案例上命中过 ≥1 次**（否则它和不存在不可区分）+
-**变异检验能杀死它**（否则改坏了没信号）。
+判据具有**生命周期**：`shadow`（评估、记录、不拦截）→ `enforcing`。晋级需同时满足两个条件：**在真实案例上命中过 ≥1 次**（否则与不存在不可区分）+ **变异检验能杀死它**（否则修改后无信号）。
 
-> ★ 默认档位是 `enforcing` 而不是 `shadow`，方向是有意选的：
-> 默认 shadow 会让新规则**静默地**不生效；默认 enforcing 可能误拦，但那是**响亮的**。
+> 默认档位是有意选为 `enforcing` 而非 `shadow`：默认 shadow 会让新规则静默失效；默认 enforcing 可能误拦，但那是显式的、可发现的。
 
-### 这些数字自己也要有判据
+变异脚本自身有三个控制点：**基线绿**、**至少一条被杀死**、**正对照（塞入一条空规则）必须存活**。缺少第三点，「全部被杀死」的结论与「杀死判定永远为真」在证据上不可区分。等价变异体连同判定理由记录于 `scripts/lib/equivalent_mutants.py`，每次运行都打印完整清单——隐藏的排除项等于没有排除项。
 
-变异脚本有三个控制点，缺一不可：**基线绿** · **至少一条被杀死** ·
-**正对照（塞一条空规则）必须存活**。
-
-> 少了第三点，「全部被杀死」这个结论和「杀死判定永远为真」在证据上不可区分。
-
-等价变异体（如只影响提示文案截断长度的改动）**连同判定理由**记在
-`scripts/lib/equivalent_mutants.py`，并且**每次运行整张表都打印出来**——
-隐藏的排除项等于没有排除项。
-
-详见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)、
-[ADR-0010](docs/adr/0010-验收第六层-集成谓词的桩化检验.md)、
-[ADR-0011](docs/adr/0011-判据的生命周期-影子档位-资产负债表-缺口报告.md)。
+详见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)、[ADR-0010](docs/adr/0010-验收第六层-集成谓词的桩化检验.md)、[ADR-0011](docs/adr/0011-判据的生命周期-影子档位-资产负债表-缺口报告.md)。
 
 ---
 
 ## 能力分层：Agent / Skill / Tool / MCP
-
-### 分层
 
 ```text
 Agent   身份 · 职责边界 · 权限集 · 模型路由        谁来做
@@ -247,7 +186,7 @@ Agent   身份 · 职责边界 · 权限集 · 模型路由        谁来做
  └─ MCP    外部系统连接协议                       连到哪   ← 主 Agent 接一次
 ```
 
-**Skill 是共享的**（跨角色、跨项目）；**MCP 与第三方应用由主 Agent 接入一次**，其工具自动进入工具面。新增一个第三方应用 = 加一个 JSON，**不改任何代码**。
+**Skill 共享**（跨角色、跨项目）；**MCP 与第三方应用由主 Agent 接入一次**，其工具自动进入工具面。新增一个第三方应用 = 增加一个 JSON 配置，不改任何代码。
 
 ### 13 个内置 Skill
 
@@ -259,11 +198,11 @@ Agent   身份 · 职责边界 · 权限集 · 模型路由        谁来做
 {
   "id": "frontend", "scope": "role", "appliesTo": ["coder", "helper"],
   "inputs": {…}, "outputs": {…}, "preconditions": […],
-  "failure": { "timeoutSeconds": 180, "silentDegrade": false },   // ★ 禁止静默降级
+  "failure": { "timeoutSeconds": 180, "silentDegrade": false },   // 禁止静默降级
   "permissions": {
     "riskLevel": "R1",
     "tools": ["read_file", "write_file", "run_tests", "create_diff"],
-    "writePaths": ["packages/desktop/**"]                          // ★ 最小权限
+    "writePaths": ["packages/desktop/**"]                          // 最小权限
   },
   "reuse": { "crossRole": true, "crossProject": true }
 }
@@ -273,23 +212,19 @@ Agent   身份 · 职责边界 · 权限集 · 模型路由        谁来做
 
 ### 第三方应用
 
-MCP **由引擎连一次**，工具进入主 Agent 的工具面，所有 packet 共享：
+MCP 由引擎连接一次，工具进入主 Agent 的工具面，所有 packet 共享：
 
 ```bash
 python -m codentum_engine --project-root <项目> --mcp-config-dir packages/roles/mcp
 ```
 
-不给 `--mcp-config-dir` 就完全不接 MCP，内置工具照常可用。
-
-★ runner 收的是**已连好的工具箱**而不是配置目录 —— 这样「每个 packet 连一次」
-（8 路并行 = 48 个 npx 进程）在**结构上不可表达**。见
-[ADR-0009](docs/adr/0009-MCP-连接点归属与共享工具箱.md)。
+不指定 `--mcp-config-dir` 则完全不接 MCP，内置工具照常可用。runner 接收的是**已连接的工具箱**而非配置目录——「每个 packet 连接一次」（8 路并行 = 48 个 npx 进程）因此在结构上不可表达，见 [ADR-0009](docs/adr/0009-MCP-连接点归属与共享工具箱.md)。
 
 **默认开启**
 
 | id | 用途 | 凭据 | 实测 |
 |---|---|---|---|
-| `playwright` | 端到端测试、浏览器自动化 | **无需** | ✅ 连接成功，24 个工具 |
+| `playwright` | 端到端测试、浏览器自动化 | 无需 | ✅ 连接成功，24 个工具 |
 
 **默认关闭 · 需凭据**
 
@@ -301,41 +236,17 @@ python -m codentum_engine --project-root <项目> --mcp-config-dir packages/role
 | `notion` | 需求文档、技术方案 | `NOTION_TOKEN` |
 | `feishu` | 文档、消息、日程、审批 | `APP_ID` / `APP_SECRET` |
 
-**默认关闭 · 会绕过本项目的不变量**
+**默认关闭 · 会绕过本项目不变量**
 
-| id | 风险 | 绕过什么 |
+| id | 风险 | 绕过的不变量 |
 |---|---|---|
 | `git` | **R3** | 控制平面的状态机与 worktree 隔离 |
 | `filesystem` | R2 | 工作区边界（内置 `write_file` 的路径穿越检查） |
 | `browser` | R1 | 无，但与 `playwright` 完全重叠 |
 
-> ★ `git` 能 commit / merge / 切分支，而并行 packet 的 worktree 隔离与状态转移
-> 都建立在「**只有 ReconcileLoop 动 git**」这个前提上。开它等于让 Agent
-> 和控制平面抢方向盘。配置里写明了每个的 `riskLevel` 与 `bypasses`。
+> `git` 能够 commit / merge / 切换分支，而并行 packet 的 worktree 隔离与状态转移都建立在「只有 ReconcileLoop 操作 git」这一前提上。启用它等于让 Agent 与控制平面同时操作版本库。每个配置均标注了 `riskLevel` 与 `bypasses`。
 
-启用三步：申请凭据 → 设环境变量（或填配置 `env`）→ `enabled` 改 `true`。
-
-**缺凭据时不会启动进程**，而是如实报出缺哪个变量：
-
-```
-✗ GitHub（github）：未配置凭据：GITHUB_PERSONAL_ACCESS_TOKEN
-  （设为环境变量或写入配置的 env 字段）
-```
-
-三条约定：`tools` 字段**刻意留空**（由 server 在 `tools/list` 时提供，预列会在版本变化后变成谎报）；`status` 如实写 `disconnected`；工具名带 `id` 前缀（GitHub 与 GitLab 都有 `create_issue`，不加前缀会静默覆盖）。
-
-**未被加载的条目连原因一起报**（`<state-dir>/mcp/connections.json`）：
-
-```
-playwright.json   已连接，24 个工具
-github.json       enabled=false（未启用）。GitHub → Settings → Developer settings → …
-agentteams.json   声明式清单（transport='http'），只作能力投影不启动
-```
-
-> ★ 没有这份报告，「目录写错了」「配置全是关的」「连上了但模型没调用」
-> 三种情况看起来完全一样 —— 而它们的解法完全不同。
-
-详见 [`packages/roles/mcp/README.md`](packages/roles/mcp/README.md)。
+启用三步：申请凭据 → 设置环境变量（或填写配置 `env`）→ `enabled` 改为 `true`。缺凭据时不启动进程，而是如实报告缺少哪个变量。连接结果（含未加载条目及其原因）落盘于 `<state-dir>/mcp/connections.json`。详见 [`packages/roles/mcp/README.md`](packages/roles/mcp/README.md)。
 
 ---
 
@@ -345,10 +256,10 @@ agentteams.json   声明式清单（transport='http'），只作能力投影不�
 |---|---|---|
 | 核心引擎 | Python 3.11+ | ADR-0003 |
 | 桌面端 | TypeScript + Electron + React | ADR-0003 |
-| 契约定义 | JSON Schema → Pydantic (Python) + TypeScript 类型 (生成) | ADR-0003 |
+| 契约定义 | JSON Schema → Pydantic（Python）+ TypeScript 类型（生成） | ADR-0003 |
 | Agent 编排 | LangGraph（仅执行平面） | ADR-0004 |
 | 类型门禁 | mypy strict + ruff + Pydantic v2 | ADR-0003 |
-| 模型适配 | 阿里云百炼 (Qwen) 默认 · Anthropic 可切换 | ADR-0005 |
+| 模型适配 | 阿里云百炼（Qwen）默认，Anthropic 可切换 | ADR-0005 |
 | 状态存储 | Git 仓库（文件真源）· SQLite（派生索引） | — |
 | 任务隔离 | Git Worktree + 路径锁 | ADR-0001 |
 
@@ -391,10 +302,10 @@ loop.save_state()
 |---|---|
 | `runner` 必须显式配置 | 默认 `None` 下 worker 会构建 worktree 并写出 prompt bundle，但以 `runtime_error: no worker runner configured` 结束——任何 packet 无法被真实执行 |
 | `repo_root` 必须是 git 仓库 | worktree 隔离依赖 `git rev-parse`；worker 工作区为 `<repo_root>/../codentum-workers/<pid>/attempt-N` |
-| 建议配置 `budget_tracker` | 未配则不写 `budget.json`，状态目录不完整，桌面端判定不连贯 |
+| 建议配置 `budget_tracker` | 未配置则不写 `budget.json`，状态目录不完整，桌面端判定不连贯 |
 | 门禁组件默认关闭 | `gate_runner` / `guardian` / `transition_table` 默认 `None`，走兜底验收；生产环境须显式配置 |
 
-完整示例见 [`tests/e2e/test_abc_integration.py`](tests/e2e/test_abc_integration.py) 中的 `TestRealExecution` 类，演示 pending → accepted 完整执行链路。
+完整示例见 [`tests/e2e/test_abc_integration.py`](tests/e2e/test_abc_integration.py) 的 `TestRealExecution` 类，演示 pending → accepted 完整执行链路。
 
 ---
 
@@ -415,7 +326,7 @@ make verify-offline   # 零运行时依赖子集
 | `make typecheck` | mypy strict 五个 Python 包 | 需 `pip install -e ".[dev]"` |
 | `make desktop-typecheck` | 桌面端 `tsc --noEmit` | 需 `npm i` |
 
-前五项设计为零运行时依赖——在完整安装前即可验证契约自洽性。
+前五项设计为零运行时依赖，在完整安装前即可验证契约自洽性。
 
 ### 判据自身的质量（按需运行，不进 CI 主链路）
 
@@ -426,14 +337,11 @@ make verify-offline   # 零运行时依赖子集
 | `python scripts/judgement_ledger.py` | 判据资产负债表（档位 × 命中 × 变异） | 秒级 |
 | `python scripts/judgement_gaps.py` | 判据缺口报告（反复失败但事前无人拦） | 秒级 |
 
-变异结果写入 `.codentum/judgements/mutation.json`，资产负债表读它。
-
-> ★ 这几项**不放进 `make verify`**：变异检验要跑几十遍测试套件，
-> 放进主链路会让每次提交都付这个代价。它们是**定期体检**，不是回归门禁。
+变异结果写入 `.codentum/judgements/mutation.json`，资产负债表读取它。这几项不放进 `make verify`：变异检验需运行数十遍测试套件，纳入主链路会让每次提交都付出该代价。它们是定期体检，不是回归门禁。
 
 ### 固件八项交叉检查
 
-JSON Schema 无法表达跨文件关系约束，以下检查确保核心不变式在固件层面成立：
+JSON Schema 无法表达跨文件关系约束，以下检查确保核心不变量在固件层面成立：
 
 ```text
 I1 路径不相交         running packet 的 ownsPaths 两两不重叠
@@ -450,7 +358,7 @@ I6 审计链连续          断链视为篡改
 
 ## 生成物规约
 
-以下文件由代码生成，任何人不得手写修改：
+以下文件由代码生成，不应手写修改：
 
 ```text
 packages/contracts/python/codentum_contracts/state.py   ← gen_types (Python)
@@ -458,7 +366,7 @@ packages/contracts/typescript/state.ts                 ← gen_types (TypeScript
 tests/contract/test_*.py                               ← gen_contract_tests
 ```
 
-修改数据形状的标准流程：**修改 schema → `make gen` → 提交生成结果**。`make gen-check` 会拦截反向操作。手写两份相同逻辑将导致静默漂移——Python 端的解析与 TypeScript 端的渲染将对同一字段产生歧义。
+修改数据形状的标准流程：**修改 schema → `make gen` → 提交生成结果**。`make gen-check` 会拦截反向操作。手写两份相同逻辑会导致静默漂移——Python 端的解析与 TypeScript 端的渲染将对同一字段产生歧义。
 
 ---
 
@@ -467,7 +375,7 @@ tests/contract/test_*.py                               ← gen_contract_tests
 | 文档 | 内容 |
 |---|---|
 | [`docs/00-总体设计方案.md`](docs/00-总体设计方案.md) | 权威设计依据，26 章完整方案 |
-| [`docs/01-角色详细设计与Skill清单.md`](docs/01-角色详细设计与Skill清单.md) | 各角色 Harness/Loop/Graph 精密设计 |
+| [`docs/01-角色详细设计与Skill清单.md`](docs/01-角色详细设计与Skill清单.md) | 各角色 Harness / Loop / Graph 设计 |
 | [`docs/02-实施路线与交付计划.md`](docs/02-实施路线与交付计划.md) | 分期路线、MVP 边界、Demo 剧本 |
 | [`docs/03-团队分工与协作规范.md`](docs/03-团队分工与协作规范.md) | 协作规范 |
 | [`docs/04-模型路由表.md`](docs/04-模型路由表.md) | 按错误成本分档的模型路由策略 |
@@ -481,4 +389,4 @@ Apache-2.0（见 [`LICENSE`](LICENSE)）。依赖披露见 `docs/` 对应文档�
 
 ---
 
-*Codentum = Code + Momentum。动量 = 质量 × 速度，守恒于无外力条件——能力沉淀为质量，交付速度为速度，评测锚点确保已获得的能力不流失。*
+*Codentum = Code + Momentum。能力沉淀为质量，交付速度为速度，评测锚点确保已获得的能力不流失。*
