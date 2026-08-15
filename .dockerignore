@@ -1,0 +1,53 @@
+# 构建上下文排除表。
+#
+# ★ 这里排除的东西与桌面端打包器的 EXCLUDED_DIRECTORIES 是**同一类判断**
+#   （见 packages/desktop/shell/main/artifact-packager.ts）：
+#   构建缓存、虚拟环境、宿主机绝对路径。两处用途不同但依据相同 ——
+#   改一处要想到另一处。
+#
+# ★ 排 .git 不只是为了体积：`docker build` 会把整个历史送进上下文，
+#   而历史里可能有已经被删掉、但对象仍在的凭证。
+
+.git
+.gitignore
+.codentum
+
+# 构建缓存 —— 进了镜像只会是过期产物
+__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.tox
+
+# 虚拟环境与构建产物 —— 里面全是宿主机绝对路径
+.venv
+venv
+dist
+out
+build
+*.egg-info
+
+# Node
+node_modules
+.next
+.turbo
+
+# ★ 凭证：即使 secret_scan 会拦，构建上下文这一层也要挡。
+#   纵深防御的理由很具体 —— 上下文一旦送进 daemon，
+#   即使 Dockerfile 没 COPY 它，它也已经离开了这台机器。
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# 桌面端的截图与发行产物，体积大且与构建无关
+packages/desktop/artifacts
+packages/desktop/release
+
+# 容器定义自身不需要进上下文（cold-start 的 entrypoint 除外，
+# 它由 Dockerfile 显式 COPY，不受这里影响）
+docker/README.md

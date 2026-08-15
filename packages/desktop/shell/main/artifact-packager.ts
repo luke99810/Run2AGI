@@ -10,7 +10,39 @@ import type { ArtifactPackageResult } from '../../shared/protocol'
 const MAX_FILES = 20_000
 const MAX_SOURCE_BYTES = 256 * 1024 * 1024
 const MAX_FILE_BYTES = 64 * 1024 * 1024
-const EXCLUDED_DIRECTORIES = new Set(['.git', '.codentum', 'node_modules'])
+// ★ 构建缓存与虚拟环境必须排除，理由有三条，每条都是实测出来的：
+//
+//   一、**打不出包。** tar 头的 name 字段上限 100 字节（见 tarHeader），
+//      超了就抛「交付包路径过长」。实测：拿本仓库自己去打包会直接失败 ——
+//      96 个超限路径全部来自 .mypy_cache(86) 与 __pycache__(10)，
+//      而真实源码/文档超限的是 **0 个**。也就是说挡住交付的不是源码，
+//      是本来就不该进包的东西。
+//
+//   二、**.venv / dist 里有宿主机绝对路径。** 那正是 docker/README.md 给
+//      cold-start 列的头号死因「写死的本机路径」。把它们打进交付包，
+//      冷启动验证反而验不出问题 —— 因为路径「已经在包里了」。
+//
+//   三、**__pycache__ 是过期字节码。** 交付方拿到的 .pyc 可能与 .py 不一致，
+//      而 Python 在时间戳匹配时会直接用 .pyc —— 这种不一致极难查。
+//
+// ★ 排除项一律记进清单的 `excluded` 字段，不静默丢弃 ——
+//   「包里为什么没有这个目录」必须答得出来。
+const EXCLUDED_DIRECTORIES = new Set([
+  '.git',
+  '.codentum',
+  'node_modules',
+  '__pycache__',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.venv',
+  'venv',
+  '.tox',
+  'dist',
+  'out',
+  '.next',
+  '.turbo'
+])
 
 interface SourceEntry {
   readonly path: string

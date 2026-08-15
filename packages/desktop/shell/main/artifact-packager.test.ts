@@ -31,6 +31,39 @@ describe('project artifact packager', () => {
     await expect(verifyArtifactArchive(archive)).resolves.toBeUndefined()
   })
 
+  it('excludes build caches — otherwise this very repository cannot be packaged', async () => {
+    // ★ 这条测的是一次**实测出来的**失败，不是假想的：
+    //   拿本仓库自己去打包会抛「交付包路径过长」——
+    //   96 个超限路径全部来自 .mypy_cache 与 __pycache__，
+    //   而真实源码/文档超限的是 0 个。挡住交付的不是源码，
+    //   是本来就不该进包的东西。
+    const root = await mkdtemp(join(tmpdir(), 'codentum-artifact-cache-'))
+    const output = await mkdtemp(join(tmpdir(), 'codentum-artifact-output-'))
+    created.push(root, output)
+
+    // 一条真实存在于本仓库的 .mypy_cache 路径（119 字节 > tar 的 100 上限）
+    const deep = join('.mypy_cache', '3.11', 'langsmith', '_openapi_client', 'types')
+    await mkdir(join(root, deep), { recursive: true })
+    await writeFile(
+      join(root, deep, 'annotation_queue_retrieve_annotation_queues_response.meta.json'),
+      '{}',
+      'utf8'
+    )
+    await mkdir(join(root, '__pycache__'), { recursive: true })
+    await writeFile(join(root, '__pycache__', 'stale.cpython-311.pyc'), 'bytecode', 'utf8')
+    await mkdir(join(root, '.venv', 'Lib'), { recursive: true })
+    await writeFile(join(root, '.venv', 'Lib', 'pyvenv.cfg'), 'home = C:/Anaconda\n', 'utf8')
+    await writeFile(join(root, 'main.py'), 'print(1)\n', 'utf8')
+
+    const archive = join(output, 'demo.tar.gz')
+    // ★ 断言「不抛」本身就是判据 —— 排除表少一项，这里就是那句「路径过长」。
+    const result = await packageProjectArtifact(root, archive, 'packet-cache')
+
+    expect(result.fileCount).toBe(1)
+    expect(result.verified).toBe(true)
+    await expect(verifyArtifactArchive(archive)).resolves.toBeUndefined()
+  })
+
   it('rejects a modified archive during isolated verification', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codentum-artifact-source-'))
     const output = await mkdtemp(join(tmpdir(), 'codentum-artifact-output-'))
