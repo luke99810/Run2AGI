@@ -83,7 +83,11 @@ export async function packageProjectArtifact(
   ], now)
   const archive = gzipSync(tar, { level: 9 })
   await mkdir(dirname(destination), { recursive: true })
-  await writeFile(destination, archive, { flag: 'w', mode: 0o600 })
+  // The archive is a transfer artifact.  It must remain readable when the
+  // delivery container (root) hands it to the cold-start container (UID 1000).
+  // Source files inside the archive keep their integrity protection through
+  // the manifest SHA-256 checks; credentials are excluded before this point.
+  await writeFile(destination, archive, { flag: 'w', mode: 0o644 })
   log.push(`已打包 ${entries.length} 个文件，共 ${entries.reduce((sum, entry) => sum + entry.content.byteLength, 0)} bytes。`)
   log.push(`已写入清单 CODENTUM-DELIVERY.json；排除 ${excluded.length} 项。`)
   await verifyArtifactArchive(destination)
@@ -187,7 +191,12 @@ function isSensitiveName(name: string): boolean {
 function createTar(entries: readonly SourceEntry[], now: Date): Buffer {
   const blocks: Buffer[] = []
   for (const entry of entries) {
-    const header = tarHeader(entry.path, entry.content.byteLength, Math.floor(now.getTime() / 1000))
+    // Windows cannot reliably expose Git's executable bit through stat().  The
+    // cold-start contract has one explicit executable entrypoint, so encode it
+    // deterministically on every host instead of producing a package that can
+    // be verified but never started.
+    const mode = entry.path === 'project/codentum-start.sh' ? 0o755 : 0o644
+    const header = tarHeader(entry.path, entry.content.byteLength, Math.floor(now.getTime() / 1000), mode)
     blocks.push(header, entry.content)
     const padding = (512 - (entry.content.byteLength % 512)) % 512
     if (padding > 0) blocks.push(Buffer.alloc(padding))
@@ -196,13 +205,13 @@ function createTar(entries: readonly SourceEntry[], now: Date): Buffer {
   return Buffer.concat(blocks)
 }
 
-function tarHeader(path: string, size: number, mtime: number): Buffer {
+function tarHeader(path: string, size: number, mtime: number, mode: number): Buffer {
   assertArchivePath(path)
   const encoded = Buffer.from(path, 'utf8')
   if (encoded.byteLength > 100) throw new Error(`交付包路径过长：${path}`)
   const header = Buffer.alloc(512)
   encoded.copy(header, 0)
-  writeOctal(header, 100, 8, 0o644)
+  writeOctal(header, 100, 8, mode)
   writeOctal(header, 108, 8, 0)
   writeOctal(header, 116, 8, 0)
   writeOctal(header, 124, 12, size)

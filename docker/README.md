@@ -4,9 +4,9 @@
 
 owner：**C**（`team-mode/` 由 A 或 B 写一次即可）
 
-> **状态（08-16）**：三个 Dockerfile 与冷启动验证器已落地；
-> **但没有任何一个镜像被构建过** —— 写它们的环境里 Docker daemon 起不来。
-> 下面「已落地 / 未验证」两栏严格分开，别把前者读成后者。
+> **状态（08-16）**：三个镜像均已真实构建。delivery 容器造包后，
+> cold-start 容器以非 root 用户完成校验、解包并执行 `codentum-start.sh`；
+> team-mode 容器已连通宿主 Docker daemon，并完成真引擎握手。
 
 ---
 
@@ -71,33 +71,26 @@ owner：**C**（`team-mode/` 由 A 或 B 写一次即可）
 
 ---
 
-## 已落地 / 未验证（08-16）
+## 构建与运行验证（08-16）
 
-★ 这两栏**必须分开读**。本项目一路在拆的缺陷形态就是
+★ 「定义已写」和「运行已验证」必须分开。本项目一路在拆的缺陷形态就是
 「结构完整、从未被调用、而且没有任何测试会红」——
 把「文件写好了」说成「能跑」，正是那种形态。
 
-### 已落地且**真的跑过**
-
-| 东西 | 怎么验的 |
+| 东西 | 真实结果 |
 |---|---|
-| 冷启动验证器 `packages/delivery/codentum_delivery/cold_start/verify.py` | 11 条 pytest，其中真包由桌面端打包器经 vitest 现产 |
-| 命令行打包入口 `packages/desktop/scripts/package-artifact.mts` | 本机 Node 真跑过，产出真实交付包 |
-| **端到端**：TS 造包 → Python 验包 | 手工跑通，退出码 0 |
-| 门禁 `scripts/check_docker.py` | 四条规则逐条构造违例验证会红（其中一条据此抓出是死规则） |
-| 打包器排除构建缓存 | 因果检验：撤回排除表，测试报出真实的「交付包路径过长」 |
+| `cold-start/Dockerfile` | build 通过；读取 delivery 容器生成的 `0644` 包，以 UID 1000 校验 2 个文件及 SHA-256，解包后执行 `codentum-start.sh`，输出 `CODENTUM_COLD_START_OK` |
+| `delivery/Dockerfile` | build 通过；容器内打包器生成、隔离解包并复核清单，退出码 0 |
+| `team-mode/Dockerfile` | build 通过；镜像内 Docker CLI 连接宿主 daemon `29.6.2`；以 `--worker-runtime team` 启动并完成真引擎握手 |
+| 基础镜像 | Python、Node、Docker CLI 均固定 tag + RepoDigest，不再依赖可漂移的 tag |
+| 构建上下文 | 递归排除宿主 `node_modules`、release、缓存和虚拟环境；delivery 从约 565 MB 降到约 24 KB，team-mode 降到约 1.5 MB |
+| 自动门禁 | `tests/test_check_docker.py` 同时守四条硬约束、递归上下文隔离和 Team-mode 装配 |
 
-### 已写但**没验证过**
-
-| 东西 | 为什么没验 | 谁来验 |
-|---|---|---|
-| `cold-start/Dockerfile` | Docker daemon 起不来，没 build 过 | 有 Docker 的人跑一次 |
-| `delivery/Dockerfile` | 同上；且 `npm ci` 的行为只有真建才知道 | 同上 |
-| `team-mode/Dockerfile` | 同上；NodeSource 源在离线环境会失败 | 同上 |
-| 基础镜像 digest | 取 digest 要连 registry 真拉一次 | 见各 Dockerfile 顶部的补法 |
-
-★ **digest 那一栏刻意留空而不是填一个** —— 编造的 digest 会让构建以一个
-完全不指向真实原因的错误失败，而且它看起来像是验证过的。
+这次真实构建抓出并修复了四处此前单测看不到的问题：非递归 `.dockerignore` 会把
+Windows 二进制送进 Linux 镜像；交付包 `0600 root:root` 导致冷启动用户读不到；
+TAR 抹掉 `codentum-start.sh` 的执行位；team-mode 镜像未选择 Team runtime 且没有
+Docker CLI。这里记录的是镜像与装配验证，**不等于**外部 AgentTeams 控制器、Matrix
+凭据和真实模型任务已经存在；缺少这些外部条件时仍必须 fail closed。
 
 ---
 
@@ -113,5 +106,17 @@ python packages/delivery/codentum_delivery/cold_start/verify.py /tmp/d.tar.gz
 
 # 镜像（需要 Docker，构建上下文是仓库根）
 docker build -f docker/cold-start/Dockerfile -t codentum-cold-start .
-docker run --rm -v /path/to/out:/delivery codentum-cold-start
+docker build -f docker/delivery/Dockerfile -t codentum-delivery .
+docker build -f docker/team-mode/Dockerfile -t codentum-team-mode .
+
+docker run --rm -v /path/to/project:/project:ro -v /path/to/out:/out \
+  codentum-delivery /project /out/delivery.tar.gz
+docker run --rm -v /path/to/out:/delivery:ro \
+  codentum-cold-start /delivery/delivery.tar.gz
+
+# Docker Desktop 的 socket 是 root:root 0660；镜像内 teammode 用户已加入 root 组。
+# 普通 Linux 主机若 socket GID 不同，额外传 --group-add "$(stat -c '%g' /var/run/docker.sock)"。
+docker run --rm -i -e DASHSCOPE_API_KEY -e AGENTTEAMS_ADMIN_PASSWORD \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /path/to/project:/project codentum-team-mode
 ```

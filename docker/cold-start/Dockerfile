@@ -9,18 +9,8 @@
 #
 # ★ 用具名 tag 而不是 latest（docker/README.md 硬约束第 3 条）。
 #
-# ★ 但这还不够，且这里如实说明：真正可复现要 pin 到 digest
-#   （`python:3.11-slim@sha256:...`），因为 tag 会被重新指向 ——
-#   `3.11-slim` 今天和下个月不是同一个镜像。
-#
-#   digest **没有填**，因为取 digest 需要真的连 registry 拉一次，
-#   而写这份文件的环境里 Docker daemon 起不来。
-#   **宁可留一条如实的待办，也不填一个编造的摘要** ——
-#   编造的 digest 会让构建以一个完全不指向真实原因的错误失败，
-#   而且它看起来像是验证过的。
-#
-#   补法：`docker pull python:3.11-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim`
-FROM python:3.11-slim
+# ★ tag 与 digest 同时固定；摘要来自真实 pull 后的 RepoDigest。
+FROM python:3.11-slim@sha256:a630a63cdb314e2d138a2fca3e375e319e8568346ffafac5b980f888630ac4f1
 
 # ★ 不装任何构建工具、不 apt-get update：
 #   装了就等于给容器补上了交付包本该自带的东西，
