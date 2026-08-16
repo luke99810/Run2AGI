@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { packageProjectArtifact, verifyArtifactArchive } from './artifact-packager'
 
 describe('project artifact packager', () => {
@@ -29,6 +30,7 @@ describe('project artifact packager', () => {
     expect(result.log.at(-1)).toContain('隔离解包验证通过')
     await expect(readFile(archive)).resolves.toHaveLength(result.archiveBytes)
     await expect(verifyArtifactArchive(archive)).resolves.toBeUndefined()
+    if (process.platform !== 'win32') expect((await stat(archive)).mode & 0o777).toBe(0o644)
   })
 
   it('excludes build caches — otherwise this very repository cannot be packaged', async () => {
@@ -76,5 +78,31 @@ describe('project artifact packager', () => {
     content[index] = (content[index] ?? 0) ^ 0xff
     await writeFile(archive, content)
     await expect(verifyArtifactArchive(archive)).rejects.toThrow()
+  })
+
+  it('marks the cold-start entrypoint executable on every packaging host', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codentum-artifact-start-'))
+    const output = await mkdtemp(join(tmpdir(), 'codentum-artifact-output-'))
+    created.push(root, output)
+    await writeFile(join(root, 'codentum-start.sh'), '#!/bin/sh\nexit 0\n', 'utf8')
+    const archive = join(output, 'demo.tar.gz')
+
+    await packageProjectArtifact(root, archive)
+
+    const tar = gunzipSync(await readFile(archive))
+    let offset = 0
+    let startupMode: number | undefined
+    while (offset + 512 <= tar.length) {
+      const header = tar.subarray(offset, offset + 512)
+      if (header.every((value) => value === 0)) break
+      const path = header.subarray(0, 100).toString('utf8').replace(/\0.*$/u, '')
+      const size = Number.parseInt(header.subarray(124, 136).toString('ascii').replace(/\0.*$/u, '').trim() || '0', 8)
+      if (path === 'project/codentum-start.sh') {
+        startupMode = Number.parseInt(header.subarray(100, 108).toString('ascii').replace(/\0.*$/u, '').trim(), 8)
+        break
+      }
+      offset += 512 + Math.ceil(size / 512) * 512
+    }
+    expect(startupMode).toBe(0o755)
   })
 })

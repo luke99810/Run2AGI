@@ -197,7 +197,56 @@ def check_entrypoint_scripts_are_lf() -> list[Finding]:
     return findings
 
 
+def check_context_excludes_host_artifacts() -> list[Finding]:
+    """The build context must recursively exclude host-only caches/artifacts.
+
+    A root-only ``node_modules`` rule does not protect nested workspaces such as
+    ``packages/desktop/node_modules``.  Apart from wasting hundreds of MB, that
+    can copy Windows executables into a Linux image and silently replace the
+    dependencies installed inside the container.
+    """
+
+    dockerignore = REPO / ".dockerignore"
+    if not dockerignore.is_file():
+        return [Finding(".dockerignore", "构建上下文隔离", "文件不存在")]
+
+    rules = {
+        line.strip()
+        for line in dockerignore.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    required = {
+        "**/__pycache__",
+        "**/.mypy_cache",
+        "**/.pytest_cache",
+        "**/.venv",
+        "**/venv",
+        "**/dist",
+        "**/out",
+        "**/build",
+        "**/node_modules",
+        "**/release",
+    }
+    missing = sorted(required - rules)
+    if not missing:
+        return []
+    return [
+        Finding(
+            ".dockerignore",
+            "构建上下文隔离",
+            "缺少递归排除规则：" + ", ".join(missing),
+        )
+    ]
+
+
 def main() -> int:
+    # Windows PowerShell commonly exposes a GBK stdout stream.  The report uses
+    # Unicode status marks, so force a deterministic encoding instead of
+    # crashing after all checks have already passed.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
+
     files = _dockerfiles()
     print("═" * 72)
     print(" 容器定义门禁")
@@ -217,6 +266,7 @@ def main() -> int:
         findings.extend(check_no_baked_credentials(path, lines))
         findings.extend(check_cold_start_is_from_zero(path, lines))
     findings.extend(check_entrypoint_scripts_are_lf())
+    findings.extend(check_context_excludes_host_artifacts())
 
     print(f"\n检查了 {len(files)} 个 Dockerfile：")
     for path in files:
@@ -229,7 +279,10 @@ def main() -> int:
             print(f"      {item.detail}")
         return 1
 
-    print("\n✓ 四条硬约束全部通过：用途说明 · 版本 pin · 不烘焙凭证 · 冷启动从零")
+    print(
+        "\n✓ Docker 定义门禁全部通过：用途说明 · 版本 pin · 不烘焙凭证 · "
+        "冷启动从零 · 构建上下文隔离"
+    )
     # ★ 说清它没验什么 —— 否则它就成了又一个「看起来在检查」的东西。
     print("\n⚠ 它**没有**构建镜像。Dockerfile 语法对不对、镜像建不建得出来，")
     print("   只有 `docker build` 知道。这道门禁通过 ≠ 镜像能建。")

@@ -10,10 +10,10 @@
 #   两个镜像刻意不合并 —— 合并之后「验」就能看到「造」的中间产物，
 #   而冷启动的全部意义在于它只拿得到交付包本身。
 #
-# ★ 具名 tag，非 latest；digest 待补，理由与补法见 cold-start/Dockerfile。
+# ★ tag 与 digest 同时固定；摘要来自真实 pull 后的 RepoDigest。
 #   node:22 起支持 `--experimental-strip-types`，下面的 .mts 入口靠它直接跑，
 #   不引入 ts 编译步骤。
-FROM node:22-slim
+FROM node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
 
 WORKDIR /build
 

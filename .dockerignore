@@ -14,24 +14,40 @@
 
 # 构建缓存 —— 进了镜像只会是过期产物
 __pycache__
+**/__pycache__
 *.pyc
 .mypy_cache
+**/.mypy_cache
 .pytest_cache
+**/.pytest_cache
 .ruff_cache
+**/.ruff_cache
 .tox
+**/.tox
 
 # 虚拟环境与构建产物 —— 里面全是宿主机绝对路径
 .venv
+**/.venv
 venv
+**/venv
 dist
+**/dist
 out
+**/out
 build
+**/build
 *.egg-info
+**/*.egg-info
 
 # Node
 node_modules
+**/node_modules
 .next
+**/.next
 .turbo
+**/.turbo
+release
+**/release
 
 # ★ 凭证：即使 secret_scan 会拦，构建上下文这一层也要挡。
 #   纵深防御的理由很具体 —— 上下文一旦送进 daemon，

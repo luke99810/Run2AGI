@@ -65,3 +65,26 @@ def test_entrypoint_scripts_must_be_lf_and_have_shebang(tmp_path: Path, monkeypa
 
     assert any("CRLF" in item.detail for item in findings)
     assert any("shebang" in item.detail for item in findings)
+
+
+def test_build_context_requires_recursive_host_artifact_excludes(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    (tmp_path / ".dockerignore").write_text("node_modules\nrelease\n", encoding="utf-8")
+    monkeypatch.setattr(docker_check, "REPO", tmp_path)
+
+    findings = docker_check.check_context_excludes_host_artifacts()
+
+    assert findings
+    assert findings[0].rule == "构建上下文隔离"
+    assert "**/node_modules" in findings[0].detail
+
+
+def test_team_mode_image_selects_team_runtime_and_supplies_docker_cli() -> None:
+    text = (docker_check.DOCKER / "team-mode" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "FROM docker:29.0.0-cli@sha256:" in text
+    assert "COPY --from=docker_cli /usr/local/bin/docker /usr/local/bin/docker" in text
+    assert "git config --system --add safe.directory /project" in text
+    assert "usermod --append --groups root teammode" in text
+    assert '"--worker-runtime", "team"' in text

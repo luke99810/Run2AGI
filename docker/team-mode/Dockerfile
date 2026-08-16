@@ -6,8 +6,13 @@
 #   没有 Node 时引擎照常能跑，只是接不上任何第三方工具 ——
 #   而那种「少了一半能力但看起来正常」正是本项目一直在拆的形态。
 #
-# ★ 具名 tag，非 latest；digest 待补，理由与补法见 cold-start/Dockerfile。
-FROM python:3.11-slim
+# ★ TeamWorkerRuntime 通过 `docker exec agentteams-controller agt ...` 调用
+#   AgentTeams，所以只装 Python/Node 仍是假 Team-mode。Docker CLI 从官方
+#   CLI 镜像复制；运行时再只读挂载宿主的 Docker socket。
+FROM docker:29.0.0-cli@sha256:87858a6dd14149240f4a2c33e0ec0f32a5ac1bb2548c04f5a20694ea25cb6157 AS docker_cli
+
+# ★ tag 与 digest 同时固定；摘要来自真实 pull 后的 RepoDigest。
+FROM python:3.11-slim@sha256:a630a63cdb314e2d138a2fca3e375e319e8568346ffafac5b980f888630ac4f1
 
 # ★ 用 --no-install-recommends 且装完就清 apt 缓存：
 #   镜像层删不掉，装了再删只会让镜像更大，不会更小。
@@ -17,6 +22,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends nodejs \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
+
+# 放在重依赖层之后：升级 Docker CLI 不应让 apt/Node 层全部失去缓存。
+COPY --from=docker_cli /usr/local/bin/docker /usr/local/bin/docker
 
 WORKDIR /codentum
 
@@ -43,14 +51,19 @@ RUN pip install --no-cache-dir --no-deps -e .
 
 # ★ 凭证一律不进镜像层 —— 镜像层删不掉，push 出去就是永久泄漏。
 #   模型 Key 在运行时注入：
-#     docker run --rm -e DASHSCOPE_API_KEY -v /path/to/project:/project codentum-team
+#     docker run --rm -i -e DASHSCOPE_API_KEY -e AGENTTEAMS_ADMIN_PASSWORD \
+#       -v /var/run/docker.sock:/var/run/docker.sock \
+#       -v /path/to/project:/project codentum-team
 #   这里刻意不写 ENV 占位，免得有人往里填。
 
 # ★ 以非 root 运行：引擎会执行模型产出的代码，那是**不可信输入**。
-RUN useradd --create-home teammode && chown -R teammode:teammode /codentum
+RUN useradd --create-home teammode \
+ && usermod --append --groups root teammode \
+ && git config --system --add safe.directory /project \
+ && chown -R teammode:teammode /codentum
 USER teammode
 
 VOLUME ["/project"]
 
 ENTRYPOINT ["python", "-m", "codentum_engine"]
-CMD ["--project-root", "/project"]
+CMD ["--project-root", "/project", "--worker-runtime", "team"]
