@@ -13,6 +13,8 @@
 - `secret_scan/`：同时扫描工作区和所有可达 Git blob；历史不可读时门禁失败。
 - `provisioning/`：只解析非敏感表单元数据并在内存中校验提交；不保存凭证，也不伪造连通成功。
 - `cold_start/`：真实安装、sidecar 握手、桌面启动、关闭和卸载验证脚本。
+- `cold_start/verify.py`：Linux/Docker 交付包验包器；只读 tar 包，校验
+  `CODENTUM-DELIVERY.json`、`project/` 文件数与逐文件 SHA-256，并提示可能带不走的宿主机路径。
 
 ## 真实引擎接入
 
@@ -69,6 +71,16 @@ secret-scan 是不可豁免门禁，没有 `--skip` 或 `--force`：
 $env:PYTHONPATH='packages/delivery'
 python -m codentum_delivery.secret_scan --root .
 ```
+
+交付包冷启动验包器：
+
+```powershell
+python packages/delivery/codentum_delivery/cold_start/verify.py `
+  C:\path\to\delivery.tar.gz
+```
+
+它会报告包体清单、文件数与逐文件 SHA-256 是否一致；宿主机绝对路径只进入 warning。
+完整 cold-start 容器会在验包后解包，再检查项目自己的 `codentum-start.sh` 启动契约。
 
 角色 C 的单元测试位于 `packages/delivery/tests`。按团队约定，secret-scan 的最终验收测试仍由
 A 编写和持有；C 的自测不能替代 A 的 QA-first 验收。

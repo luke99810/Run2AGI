@@ -8,7 +8,7 @@
 PY ?= python
 
 .PHONY: help gen gen-check verify verify-offline check-fixtures check-boundaries \
-        secret-scan test typecheck lint desktop-typecheck
+        check-docker secret-scan test typecheck lint desktop-typecheck
 
 help:
 	@echo "gen             生成 Python + TS 类型，以及契约测试"
@@ -32,6 +32,9 @@ check-fixtures:
 check-boundaries:
 	$(PY) scripts/check_boundaries.py
 
+check-docker:
+	$(PY) scripts/check_docker.py
+
 secret-scan:
 	$(PY) scripts/secret_scan.py
 
@@ -41,7 +44,7 @@ secret-scan:
 test:
 	$(PY) -m pytest -q
 
-verify-offline: gen-check check-fixtures check-boundaries test secret-scan
+verify-offline: gen-check check-fixtures check-boundaries check-docker test secret-scan
 
 # ── 需要装依赖 ────────────────────────────────────────────────
 typecheck:

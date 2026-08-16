@@ -8,6 +8,7 @@ import subprocess
 import threading
 import uuid
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, cast
@@ -71,8 +72,8 @@ class JsonlEngineProxy:
         request_timeout_seconds: float = 8.0,
         cwd: Path | None = None,
     ) -> None:
-        # ★ isinstance 在类型上是冗余的（签名已写 Sequence[str]），但这里是
-        #   信任边界：命令来自环境变量 CODENTUM_ENGINE_COMMAND_JSON，
+        # ★ isinstance 在类型上是冗余的(签名已写 Sequence[str]), 但这里是
+        #   信任边界: 命令来自环境变量 CODENTUM_ENGINE_COMMAND_JSON,
         #   调用方未必经过类型检查。删掉它等于把「运行时校验」当成「类型已保证」。
         if not command or not all(
             isinstance(part, str) and part for part in command  # type: ignore[redundant-expr]
@@ -80,7 +81,7 @@ class JsonlEngineProxy:
             raise ValueError("engine command must be a non-empty argv sequence")
         if request_timeout_seconds <= 0:
             raise ValueError("request timeout must be positive")
-        creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
         try:
             self._process = subprocess.Popen(  # noqa: S603 - argv is explicit and shell=False
                 list(command),
@@ -180,14 +181,10 @@ class JsonlEngineProxy:
             return self._process.poll() is not None
         stopped_cleanly = False
         if self._process.poll() is None:
-            try:
+            with suppress(EngineUnavailable, EngineTimeout, EngineRemoteError, ProtocolViolation, ValueError):
                 self.request("shutdown", {}, timeout_seconds=max(0.05, grace_seconds))
-            except (EngineUnavailable, EngineTimeout, EngineRemoteError, ProtocolViolation, ValueError):
-                pass
-            try:
+            with suppress(OSError):
                 self._stdin.close()
-            except OSError:
-                pass
             try:
                 self._process.wait(timeout=max(0.05, grace_seconds))
                 stopped_cleanly = True
@@ -205,10 +202,8 @@ class JsonlEngineProxy:
         self._stdout_thread.join(timeout=0.5)
         self._stderr_thread.join(timeout=0.5)
         for stream in (self._stdin, self._stdout, self._stderr):
-            try:
+            with suppress(OSError):
                 stream.close()
-            except OSError:
-                pass
         return stopped_cleanly
 
     def _read_stdout(self) -> None:
