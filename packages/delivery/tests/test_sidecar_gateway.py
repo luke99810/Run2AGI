@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ sys.path.insert(0, str(DELIVERY_ROOT))
 
 from codentum_delivery.gateway import SidecarGateway
 from codentum_delivery.protocol import CAPABILITY_NAMES, JsonValue, parse_request
+from codentum_delivery.sidecar import bundled_engine_command
 
 
 def _obj(value: JsonValue) -> dict[str, JsonValue]:
@@ -40,6 +42,26 @@ def command(command_id: str = "cmd-1", *, delay_ms: int = 0) -> dict[str, object
 
 
 class SidecarGatewayTests(unittest.TestCase):
+    def test_bundled_sidecar_discovers_adjacent_engine_only_for_a_bound_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sidecar = root / "python" / "codentum-sidecar" / "codentum-sidecar.exe"
+            engine = root / "python" / "codentum-engine" / (
+                "codentum-engine.exe" if os.name == "nt" else "codentum-engine"
+            )
+            project = root / "project"
+            sidecar.parent.mkdir(parents=True)
+            engine.parent.mkdir(parents=True)
+            project.mkdir()
+            sidecar.touch()
+            engine.touch()
+
+            self.assertIsNone(bundled_engine_command(sidecar, None))
+            self.assertEqual(
+                bundled_engine_command(sidecar, project),
+                [str(engine.resolve()), "--project-root", str(project.resolve())],
+            )
+
     def test_no_engine_is_explicitly_fail_closed(self) -> None:
         gateway = SidecarGateway(None)
         response = gateway.dispatch(

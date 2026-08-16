@@ -27,11 +27,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 
 这不是完整发布门禁；它会明确打印提示，不能代替下方的真实引擎验证。
 
-`verify-sidecar.ps1` 对打包后的 sidecar 执行真实 JSONL 握手和优雅退出。它默认要求
+`verify-sidecar.ps1` 对打包后的 sidecar 执行真实 JSONL 握手和优雅退出。传入
+`-ProjectRoot` 时还会提交真实需求，并要求 A/B 引擎写出至少一个 WorkPacket。它要求
 A/B 引擎 `connected=true`；只打包了网关、没有引擎时会明确失败。
 
 `verify-installer.ps1` 在系统临时目录静默安装 NSIS 产物，检查桌面程序和 sidecar 布局，
-执行上述真实引擎握手，启动桌面程序，并在结束时卸载和清理。它不是“检查文件存在就通过”
+执行上述真实引擎握手与任务创建，启动桌面程序，并在结束时卸载和清理。它不是“检查文件存在就通过”
 的占位脚本。
 
 ```powershell

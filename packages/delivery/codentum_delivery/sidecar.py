@@ -31,6 +31,37 @@ from codentum_delivery.protocol import (
 MAX_REQUEST_CHARACTERS = 2 * 1024 * 1024
 
 
+def bundled_engine_command(
+    executable: Path | None = None,
+    project_root: Path | None = None,
+) -> list[str] | None:
+    """Return the adjacent packaged engine argv without invoking a shell.
+
+    Development remains explicit through ``CODENTUM_ENGINE_COMMAND_JSON``. A
+    frozen sidecar may use the engine shipped beside it, but only after the
+    desktop has bound a real project. This avoids creating runtime state in the
+    installation directory during application startup.
+    """
+
+    if executable is None:
+        if not getattr(sys, "frozen", False):
+            return None
+        executable = Path(sys.executable)
+    if project_root is None:
+        encoded_root = os.environ.get("CODENTUM_PROJECT_ROOT", "").strip()
+        if not encoded_root:
+            return None
+        project_root = Path(encoded_root)
+    resolved_root = project_root.resolve()
+    if not resolved_root.is_dir():
+        return None
+    binary_name = "codentum-engine.exe" if os.name == "nt" else "codentum-engine"
+    candidate = executable.resolve().parent.parent / "codentum-engine" / binary_name
+    if not candidate.is_file():
+        return None
+    return [str(candidate), "--project-root", str(resolved_root)]
+
+
 def _positive_float_env(name: str, default: float) -> float:
     encoded = os.environ.get(name)
     if encoded is None:
@@ -59,7 +90,7 @@ def _positive_int_env(name: str, default: int) -> int:
 
 def gateway_from_environment() -> SidecarGateway:
     try:
-        command = command_from_environment()
+        command = command_from_environment() or bundled_engine_command()
         timeout = _positive_float_env("CODENTUM_ENGINE_TIMEOUT_SECONDS", 8.0)
         cache_limit = _positive_int_env("CODENTUM_IDEMPOTENCY_CACHE_SIZE", 2048)
     except ValueError:

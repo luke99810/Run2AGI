@@ -41,23 +41,43 @@ try {
 
     $ApplicationPath = Join-Path $InstallDirectory "Codentum.exe"
     $SidecarPath = Join-Path $InstallDirectory "resources\python\codentum-sidecar\codentum-sidecar.exe"
+    $EnginePath = Join-Path $InstallDirectory "resources\python\codentum-engine\codentum-engine.exe"
     if (-not (Test-Path -LiteralPath $ApplicationPath -PathType Leaf)) {
         throw "Installed desktop executable is missing: $ApplicationPath"
     }
     if (-not (Test-Path -LiteralPath $SidecarPath -PathType Leaf)) {
         throw "Installed Python sidecar is missing: $SidecarPath"
     }
+    if (-not (Test-Path -LiteralPath $EnginePath -PathType Leaf)) {
+        throw "Installed A/B engine is missing: $EnginePath"
+    }
 
-    & (Join-Path $PSScriptRoot "verify-sidecar.ps1") `
-        -SidecarPath $SidecarPath `
-        -TimeoutSeconds $StartupTimeoutSeconds
+    $ProjectRoot = Join-Path $InstallDirectory "cold-start-project"
+    New-Item -ItemType Directory -Force -Path $ProjectRoot | Out-Null
+    $SavedProjectRoot = $env:CODENTUM_PROJECT_ROOT
+    $env:CODENTUM_PROJECT_ROOT = $ProjectRoot
+
+    try {
+        & (Join-Path $PSScriptRoot "verify-sidecar.ps1") `
+            -SidecarPath $SidecarPath `
+            -TimeoutSeconds $StartupTimeoutSeconds `
+            -ProjectRoot $ProjectRoot
+    }
+    finally {
+        if ($null -eq $SavedProjectRoot) {
+            Remove-Item Env:CODENTUM_PROJECT_ROOT -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:CODENTUM_PROJECT_ROOT = $SavedProjectRoot
+        }
+    }
 
     $ApplicationProcess = Start-Process -FilePath $ApplicationPath -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds ([Math]::Min(5, $StartupTimeoutSeconds))
     if ($ApplicationProcess.HasExited) {
         throw "Installed desktop application exited during startup with code $($ApplicationProcess.ExitCode)."
     }
-    Write-Host "PASS: installer layout, real engine handshake, and desktop startup verified."
+    Write-Host "PASS: installer layout, real engine task creation, and desktop startup verified."
 }
 finally {
     if ($null -ne $ApplicationProcess -and -not $ApplicationProcess.HasExited) {

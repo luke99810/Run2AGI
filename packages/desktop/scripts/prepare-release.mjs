@@ -120,15 +120,15 @@ SHA-256: \`${hash}\`
 ## Included
 
 - Electron desktop shell with real local \`.codentum\` state projection.
-- Capability-gated operator commands through the bundled Python JSONL sidecar.
+- Bundled Python JSONL sidecar and real A/B engine; users do not need Python or Node.js.
+- Capability-gated operator commands and real WorkPacket creation through the packaged engine.
 - Worker, module, packet, dependency, cost, role, and integration views backed by local state files and observed events.
 
 ## Release gate status
 
-- Desktop tests, renderer screenshot smoke, sidecar self-test, and installer shell cold-start pass.
-- The real A/B engine cold-start does not pass because no packageable A/B engine has been supplied.
-- This build must not be marked as a production release or uploaded as a complete A/B integration.
-- The Windows binaries are not code-signed; SmartScreen may warn during local testing.
+- Required before publication: desktop tests, renderer screenshot smoke, packaged-engine protocol smoke, installer real-engine task creation, packaged secret scan, and Authenticode verification.
+- The installer contains the real A/B engine; \`verify-installer.ps1\` must prove handshake and WorkPacket creation on the final artifact.
+- An unsigned build is a local preview only. It must not be uploaded as a public production release until \`release:verify-signature\` passes.
 `
   await writeFile(join(releaseDirectory, 'RELEASE_NOTES.md'), notes, 'utf8')
 

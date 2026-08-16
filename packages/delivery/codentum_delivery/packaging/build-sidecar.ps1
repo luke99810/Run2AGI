@@ -65,7 +65,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "The packaged sidecar failed its dependency-free self-test."
 }
 
-$Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ExpectedExecutable).Hash.ToLowerInvariant()
+$HashStream = [System.IO.File]::OpenRead($ExpectedExecutable)
+try {
+    $HashBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash($HashStream)
+    $Hash = ([System.BitConverter]::ToString($HashBytes) -replace "-", "").ToLowerInvariant()
+}
+finally {
+    $HashStream.Dispose()
+}
 $HashFile = "$ExpectedExecutable.sha256"
 Set-Content -LiteralPath $HashFile -Encoding ascii -NoNewline -Value "$Hash  codentum-sidecar.exe"
 
