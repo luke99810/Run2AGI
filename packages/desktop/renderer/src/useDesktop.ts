@@ -64,6 +64,8 @@ export interface DesktopState {
   readonly listMcpConfigurations: () => Promise<readonly McpConfiguration[]>
   readonly saveMcpConfiguration: (input: McpConfigurationInput) => Promise<McpConfiguration>
   readonly removeMcpConfiguration: (id: string) => Promise<boolean>
+  readonly getCloudSkillsCatalog: () => Promise<string>
+  readonly setCloudSkillsCatalog: (value: string) => Promise<void>
   readonly refresh: () => Promise<void>
   readonly sendCommand: (command: OperatorCommand) => Promise<CommandReceipt>
 }
@@ -324,6 +326,11 @@ export function useDesktop(): DesktopState {
     if (bridge === undefined) throw new Error('桌面桥接未加载')
     return bridge.removeMcpConfiguration(id)
   }, [bridge])
+  const getCloudSkillsCatalog = useCallback(async () => bridge?.getCloudSkillsCatalog() ?? '', [bridge])
+  const setCloudSkillsCatalog = useCallback(async (value: string) => {
+    if (bridge === undefined) throw new Error('桌面桥接未加载')
+    return bridge.setCloudSkillsCatalog(value)
+  }, [bridge])
 
   const refresh = useCallback(async () => {
     if (bridge === undefined) return
@@ -387,7 +394,9 @@ export function useDesktop(): DesktopState {
     listMcpConfigurations,
     saveMcpConfiguration,
     removeMcpConfiguration,
+    getCloudSkillsCatalog,
+    setCloudSkillsCatalog,
     refresh,
     sendCommand
-  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, packageProjectArtifact, listManagedResources, selectManagedResources, addManagedResourceUrl, updateManagedResource, removeManagedResource, listConnectors, saveConnector, removeConnector, listAgentConfigurations, saveAgentConfiguration, removeAgentConfiguration, selectAgentSystemDocument, clearAgentSystemDocument, listMcpConfigurations, saveMcpConfiguration, removeMcpConfiguration, refresh, sendCommand])
+  }), [bridge, sources, selectedSourceId, snapshot, handshake, loading, error, selectSource, selectProject, selectDraftFiles, selectDraftFolders, loadRequirementDraft, saveRequirementDraft, moveRequirementDraft, discardDraftAttachment, exportTaskRecord, packageProjectArtifact, listManagedResources, selectManagedResources, addManagedResourceUrl, updateManagedResource, removeManagedResource, listConnectors, saveConnector, removeConnector, listAgentConfigurations, saveAgentConfiguration, removeAgentConfiguration, selectAgentSystemDocument, clearAgentSystemDocument, listMcpConfigurations, saveMcpConfiguration, removeMcpConfiguration, getCloudSkillsCatalog, setCloudSkillsCatalog, refresh, sendCommand])
 }

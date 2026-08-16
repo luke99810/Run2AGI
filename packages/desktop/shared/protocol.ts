@@ -523,6 +523,8 @@ export interface DesktopBridge {
   listMcpConfigurations(): Promise<readonly McpConfiguration[]>
   saveMcpConfiguration(input: McpConfigurationInput): Promise<McpConfiguration>
   removeMcpConfiguration(id: string): Promise<boolean>
+  getCloudSkillsCatalog(): Promise<string>
+  setCloudSkillsCatalog(value: string): Promise<void>
   watchSource(sourceId: string): Promise<void>
   onSnapshot(listener: (snapshot: StateSnapshot) => void): () => void
   getEngineHandshake(): Promise<EngineHandshake>

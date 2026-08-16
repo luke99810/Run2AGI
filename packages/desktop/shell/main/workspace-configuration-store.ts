@@ -24,6 +24,7 @@ interface ConfigurationFile {
   readonly connectors: readonly StoredConnector[]
   readonly agents: readonly StoredAgent[]
   readonly mcp: readonly StoredMcp[]
+  readonly cloudSkillsCatalog: string
 }
 
 const ROLE_IDS = new Set(['intake', 'architect', 'planner', 'qa', 'coder', 'helper', 'reviewer', 'integrator', 'manager', 'evolver', 'guardian'])
@@ -37,6 +38,7 @@ export class WorkspaceConfigurationStore {
   #connectors: StoredConnector[] = []
   #agents: StoredAgent[] = []
   #mcp: StoredMcp[] = []
+  #cloudSkillsCatalog = ''
 
   constructor(directory: string) {
     this.#directory = resolve(directory)
@@ -50,6 +52,7 @@ export class WorkspaceConfigurationStore {
       this.#connectors = [...value.connectors]
       this.#agents = [...value.agents]
       this.#mcp = [...value.mcp]
+      this.#cloudSkillsCatalog = value.cloudSkillsCatalog
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       await this.#persist()
@@ -59,6 +62,17 @@ export class WorkspaceConfigurationStore {
   listConnectors(): readonly ConnectorConfiguration[] { return this.#connectors.filter((item) => item.provider === 'custom').map(publicConnector) }
   listAgents(): readonly AgentConfiguration[] { return this.#agents.map(publicAgent) }
   listMcp(): readonly McpConfiguration[] { return this.#mcp.map(publicMcp) }
+
+  getCloudSkillsCatalog(): string { return this.#cloudSkillsCatalog }
+  cloudSkillsCatalog(): string { return this.#cloudSkillsCatalog }
+
+  async setCloudSkillsCatalog(value: string): Promise<void> {
+    // ★ 空字符串 = 关闭云 Skills 检索，字段不传 = 不改动（这里总是整值覆盖）。
+    const trimmed = value.trim()
+    if (trimmed.length > 2_048) throw new TypeError('云 Skills catalog 路径过长。')
+    this.#cloudSkillsCatalog = trimmed
+    await this.#persist()
+  }
 
   async saveConnector(input: ConnectorConfigurationInput): Promise<ConnectorConfiguration> {
     assertConnectorInput(input)
@@ -210,7 +224,7 @@ export class WorkspaceConfigurationStore {
 
   async #persist(): Promise<void> {
     const temporary = join(this.#directory, `configuration-${randomUUID()}.tmp`)
-    const file: ConfigurationFile = { schemaVersion: 1, connectors: this.#connectors, agents: this.#agents, mcp: this.#mcp }
+    const file: ConfigurationFile = { schemaVersion: 1, connectors: this.#connectors, agents: this.#agents, mcp: this.#mcp, cloudSkillsCatalog: this.#cloudSkillsCatalog }
     await writeFile(temporary, `${JSON.stringify(file, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
     try { await rename(temporary, this.#path) } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST' && (error as NodeJS.ErrnoException).code !== 'EPERM') throw error
@@ -289,5 +303,9 @@ function parseFile(value: unknown): ConfigurationFile {
   if (typeof value !== 'object' || value === null || (value as Record<string, unknown>)['schemaVersion'] !== 1) throw new Error('配置文件格式无效。')
   const file = value as ConfigurationFile
   if (!Array.isArray(file.connectors) || !Array.isArray(file.agents) || !Array.isArray(file.mcp)) throw new Error('配置文件内容无效。')
-  return file
+  return {
+    ...file,
+    // ★ 旧配置文件没有这个字段，读进来给空串默认，别让老文件在升级后失效。
+    cloudSkillsCatalog: typeof file.cloudSkillsCatalog === 'string' ? file.cloudSkillsCatalog : ''
+  }
 }

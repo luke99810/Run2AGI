@@ -412,7 +412,7 @@ export function App(): ReactNode {
       view = <McpView services={desktop.snapshot?.mcpServices ?? []} listConfigurations={desktop.listMcpConfigurations} saveConfiguration={desktop.saveMcpConfiguration} removeConfiguration={desktop.removeMcpConfiguration} />
       break
     case 'settings':
-      view = <SettingsView preferences={preferences} onChange={setPreferences} onOpenMcp={() => setNavigation('mcp')} />
+      view = <SettingsView preferences={preferences} onChange={setPreferences} onOpenMcp={() => setNavigation('mcp')} getCloudSkillsCatalog={desktop.getCloudSkillsCatalog} setCloudSkillsCatalog={desktop.setCloudSkillsCatalog} />
       break
     case 'help':
       view = <HelpView snapshot={desktop.snapshot} onOpenAgents={() => setNavigation('roles')} />

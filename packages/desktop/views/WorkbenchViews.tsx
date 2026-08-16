@@ -395,11 +395,19 @@ function KnowledgeRuntimeStatus({ snapshot }: { readonly snapshot: StateSnapshot
   )
 }
 
-export function SettingsView({ preferences, onChange, onOpenMcp }: {
+export function SettingsView({ preferences, onChange, onOpenMcp, getCloudSkillsCatalog, setCloudSkillsCatalog }: {
   readonly preferences: WorkbenchPreferences
   readonly onChange: (preferences: WorkbenchPreferences) => void
   readonly onOpenMcp: () => void
+  readonly getCloudSkillsCatalog: () => Promise<string>
+  readonly setCloudSkillsCatalog: (value: string) => Promise<void>
 }): ReactNode {
+  const [catalog, setCatalog] = useState('')
+  const [catalogSaved, setCatalogSaved] = useState(false)
+  useEffect(() => { void getCloudSkillsCatalog().then((value) => { setCatalog(value); setCatalogSaved(false) }).catch(() => undefined) }, [getCloudSkillsCatalog])
+  async function saveCatalog(): Promise<void> {
+    try { await setCloudSkillsCatalog(catalog); setCatalogSaved(true) } catch { setCatalogSaved(false) }
+  }
   return (
     <main className="page settings-page">
       <PageHeader title="设置" description="设置只影响以后新建的任务；已有任务保持各自独立配置。" />
@@ -429,6 +437,19 @@ export function SettingsView({ preferences, onChange, onOpenMcp }: {
           <span><strong>Agent 工具与 MCP</strong><small>配置 MCP Server，查看 A/B 运行时投影的连接状态和可用工具。</small></span>
           <Icon name="chevron" size={18} />
         </button>
+      </section>
+      <section className="settings-section">
+        <header><strong>云 Skills</strong><span>主 Agent 按需求文本与角色检索的云 Skill 目录；留空关闭云 Skills，仅用内置自研 Skill。</span></header>
+        <label className="settings-text-field">
+          <span>Catalog 路径或 URL</span>
+          <input
+            value={catalog}
+            placeholder="packages/roles/cloud_skills/catalog.json 或 https://…"
+            onChange={(event) => { setCatalog(event.target.value); setCatalogSaved(false) }}
+            onBlur={() => void saveCatalog()}
+          />
+        </label>
+        <small className="settings-hint">{catalogSaved ? '已保存，下次启动引擎生效。' : catalog.trim() === '' ? '未配置：云 Skills 关闭，仅用内置 13 个自研 Skill。' : '修改后点击输入框外保存；下次启动引擎生效。'}</small>
       </section>
     </main>
   )

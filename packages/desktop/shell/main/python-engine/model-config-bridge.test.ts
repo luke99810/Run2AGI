@@ -21,11 +21,11 @@ afterEach(async () => {
 })
 
 function source(
-  endpoints: Record<string, { model?: string; effort?: string; baseUrl?: string }>,
+  endpoints: Record<string, { model?: string; effort?: string; baseUrl?: string; systemPrompt?: string }>,
   keysByRole: Record<string, string> = {},
   undecryptable: readonly string[] = []
 ): ModelConfigSource {
-  return { endpoints: () => endpoints, resolveSecrets: () => ({ keysByRole, undecryptable }) }
+  return { endpoints: () => endpoints, resolveSecrets: () => ({ keysByRole, undecryptable }), cloudSkillsCatalog: () => '' }
 }
 
 async function tempProject(): Promise<string> {

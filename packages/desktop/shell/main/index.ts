@@ -390,6 +390,16 @@ function registerIpc(): void {
     if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
     return configurationStore.removeMcp(id)
   })
+  ipcMain.handle(IPC_CHANNELS.getCloudSkillsCatalog, (event) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.getCloudSkillsCatalog()
+  })
+  ipcMain.handle(IPC_CHANNELS.setCloudSkillsCatalog, async (event, value: unknown) => {
+    assertTrustedSender(event)
+    if (configurationStore === undefined) throw new Error('Configuration store is unavailable')
+    return configurationStore.setCloudSkillsCatalog(typeof value === 'string' ? value : '')
+  })
   ipcMain.handle(IPC_CHANNELS.watchSource, async (event, sourceId: unknown) => {
     assertTrustedSender(event)
     assertSourceId(sourceId)

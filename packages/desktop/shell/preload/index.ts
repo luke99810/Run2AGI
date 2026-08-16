@@ -30,6 +30,8 @@ const bridge: DesktopBridge = {
   listMcpConfigurations: () => ipcRenderer.invoke(IPC_CHANNELS.listMcpConfigurations),
   saveMcpConfiguration: (input) => ipcRenderer.invoke(IPC_CHANNELS.saveMcpConfiguration, input),
   removeMcpConfiguration: (id) => ipcRenderer.invoke(IPC_CHANNELS.removeMcpConfiguration, id),
+  getCloudSkillsCatalog: () => ipcRenderer.invoke(IPC_CHANNELS.getCloudSkillsCatalog),
+  setCloudSkillsCatalog: (value) => ipcRenderer.invoke(IPC_CHANNELS.setCloudSkillsCatalog, value),
   watchSource: (sourceId) => ipcRenderer.invoke(IPC_CHANNELS.watchSource, sourceId),
   onSnapshot: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: StateSnapshot): void => listener(snapshot)

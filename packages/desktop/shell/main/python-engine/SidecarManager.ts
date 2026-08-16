@@ -186,6 +186,7 @@ export function resolveSidecarLaunch(app: Pick<App, 'isPackaged' | 'getAppPath'>
 export interface ModelConfigSource {
   endpoints(): Record<string, { model?: string; effort?: string; baseUrl?: string; systemPrompt?: string }>
   resolveSecrets(): { readonly keysByRole: Record<string, string>; readonly undecryptable: readonly string[] }
+  cloudSkillsCatalog(): string
 }
 
 /**
@@ -313,6 +314,7 @@ export class SidecarManager {
       // ★ 每次启动前重写一次配置文件：使用者改完配置会重启引擎，
       //   而配置必须在引擎读它之前就位。
       const agentKeyEnv = await this.#publishModelConfig()
+      const cloudCatalog = this.#modelSource?.cloudSkillsCatalog()?.trim() ?? ''
       this.#client = PythonEngineClient.launch({
         ...launch,
         ...(this.#projectRoot === undefined ? {} : { cwd: this.#projectRoot }),
@@ -324,7 +326,10 @@ export class SidecarManager {
           // ★ 各 Agent 的专属 API Key。密钥在主进程内存里解开，作为环境变量
           //   交给引擎子进程 —— 从不落盘明文，渲染进程也永远拿不到。
           //   在这一行之前，界面上存的 Key 从来没有到达过引擎。
-          ...agentKeyEnv
+          ...agentKeyEnv,
+          // ★ 云 Skills catalog：非密配置，走环境变量交给引擎子进程。
+          //   空串 = 不启用（引擎侧默认 None，离线安全）。
+          ...(cloudCatalog === '' ? {} : { CODENTUM_CLOUD_SKILLS_CATALOG: cloudCatalog })
         }
       })
       const raw = await this.#client.request<unknown>('handshake', { protocolVersion: PROTOCOL_VERSION }, 12_000)

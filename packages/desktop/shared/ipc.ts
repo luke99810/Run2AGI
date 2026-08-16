@@ -26,6 +26,8 @@ export const IPC_CHANNELS = {
   listMcpConfigurations: 'codentum:mcp:list-config',
   saveMcpConfiguration: 'codentum:mcp:save-config',
   removeMcpConfiguration: 'codentum:mcp:remove-config',
+  getCloudSkillsCatalog: 'codentum:skills:get-cloud-catalog',
+  setCloudSkillsCatalog: 'codentum:skills:set-cloud-catalog',
   watchSource: 'codentum:state:watch-source',
   snapshotChanged: 'codentum:state:snapshot-changed',
   engineHandshake: 'codentum:engine:handshake',
