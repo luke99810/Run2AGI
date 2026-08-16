@@ -265,6 +265,25 @@ python -m codentum_engine --project-root <项目> --mcp-config-dir packages/role
 
 ---
 
+## 安装
+
+### Windows 安装包（推荐，无需 Node / Python）
+
+桌面端提供自包含的 Windows 安装包，真实引擎与 sidecar 网关已用 PyInstaller 打包进安装目录（`resources/python/`），安装后无需 Node 或 Python 环境。
+
+```bash
+cd packages/desktop
+npm run dist:win   # 引擎/sidecar 打包 + typecheck + 测试 + electron-builder NSIS
+```
+
+产物位于 `packages/desktop/release/`：`Codentum-Setup.exe`（NSIS 安装程序，约 130 MB）与 `win-unpacked/`（免安装目录版）。
+
+**使用前提**：安装后需自行配置模型 API Key（`DASHSCOPE_API_KEY` 等）。安装包不携带任何凭据——未配置 Key 时引擎握手返回 `connected=false`、能力全部关闭，桌面端相应按钮禁用。
+
+**发布门槛**：未经 Authenticode 签名的构建，Windows SmartScreen 会提示「未知发布者」；只有通过 `cold_start/verify-installer.ps1`（含真实引擎握手）并完成签名的构建，才可作为公开正式 Release。完整流程见 [`packages/delivery/docs/PACKAGING_RELEASE_RUNBOOK.md`](packages/delivery/docs/PACKAGING_RELEASE_RUNBOOK.md)。
+
+---
+
 ## 快速开始
 
 ```bash
