@@ -12,6 +12,7 @@ import type {
   WorkPacket
 } from '@codentum/contracts'
 import type {
+  AgentRuntimeProfile,
   FlowProjection,
   McpServiceProjection,
   RequirementProjection,
@@ -285,6 +286,7 @@ async function readDirectorySnapshot(
   const workers = parseWorkers(context, staleAfterMs)
   const scheduling = parseJsonFile(context, 'scheduling.json', isSchedulingProjection, false)
   const flow = parseJsonFile(context, 'flow.json', isFlowProjection, false)
+  const agents = parseAgentProfiles(context)
 
   checkGraphPacketCoherence(context, graph, packets)
 
@@ -309,6 +311,7 @@ async function readDirectorySnapshot(
       workers,
       scheduling,
       flow,
+      agents,
       warnings: unique(context.warnings)
     }
   }
@@ -362,6 +365,7 @@ async function scanStateDirectory(stateDirectory: string): Promise<StateScan> {
   await addFile('knowledge.json')
   await addFile('scheduling.json')
   await addFile('flow.json')
+  await addFile('agents.json')
 
   await scanFlatJsonDirectory(stateDirectory, 'packets', directories, warnings, addFile)
   await scanFlatJsonDirectory(stateDirectory, 'knowledge', directories, warnings, addFile)
@@ -1187,6 +1191,44 @@ function isAndon(value: unknown): boolean {
     (value['consecutiveFailures'] === undefined || (Number.isInteger(value['consecutiveFailures']) && (value['consecutiveFailures'] as number) >= 0)) &&
     (value['evidenceRefs'] === undefined || isStringArray(value['evidenceRefs'])) &&
     typeof value['at'] === 'string'
+  )
+}
+
+
+/**
+ * 读 `.codentum/agents.json` 里的各子 Agent 画像。
+ *
+ * ★ **fail-closed**：任何一条不合形状就整份丢弃并记一条 warning，
+ *   而不是「能解析几条算几条」。半份指标比没有指标更坏 ——
+ *   界面会显示一个看起来正常的数字，而它其实少了几个 Agent。
+ *
+ * ★ 与 `flow.json` 同一个做法（`isFlowProjection`）：投影是引擎单向写的，
+ *   桌面端不该去猜它的意图。形状不对就是投影坏了，要说出来。
+ */
+function parseAgentProfiles(context: ParseContext): readonly AgentRuntimeProfile[] {
+  const raw = parseJsonFile(context, 'agents.json', isAgentsFile, false)
+  return raw === null ? [] : raw.agents
+}
+
+function isAgentsFile(value: unknown): value is { readonly agents: readonly AgentRuntimeProfile[] } {
+  return (
+    isRecord(value) &&
+    value['schema'] === 'codentum.agents.v1' &&
+    Array.isArray(value['agents']) &&
+    value['agents'].every(isAgentRuntimeProfile)
+  )
+}
+
+function isAgentRuntimeProfile(value: unknown): value is AgentRuntimeProfile {
+  if (!isRecord(value)) return false
+  const packets = value['packets']
+  return (
+    typeof value['role'] === 'string' &&
+    typeof value['attempts'] === 'number' &&
+    typeof value['spentCny'] === 'number' &&
+    isRecord(packets) &&
+    typeof packets['total'] === 'number' &&
+    isRecord(packets['byState'])
   )
 }
 

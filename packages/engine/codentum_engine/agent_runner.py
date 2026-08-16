@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from codentum_contracts.interfaces import (
@@ -114,6 +115,19 @@ class AgentRunnerConfig:
     ★ 没传 = 关闭，这件事会写进 result.json 的 `evolution` 字段，
       从外面看得见。否则「忘了接线」和「还没攒够」不可区分 ——
       那正是这个项目一路在拆的那类问题。
+    """
+
+    gateway_by_role: Mapping[str, ModelGateway] | None = None
+    """按角色分的网关。命中就用它，没命中用 `gateway`。
+
+    ★ 为什么需要它：每个子 Agent 可以配自己的 API Key / baseUrl，
+      而一个 `ModelGateway` 实例只持有一份凭据。要让「给 coder 单独配一把
+      Key」真的生效，就必须有第二个网关。
+
+    ★ 为什么不是「每个角色都建一个」：装配层只在该角色**确实配了自己的
+      Key 或 baseUrl，且那个环境变量真的有值**时才建。否则会建出一堆
+      拿不到 Key 的网关，把本来能用全局 Key 跑通的角色搞成运行时报错 ——
+      而现象是「配了 Key 反而不能用了」，最难查的一种。
     """
 
     otel_system: str = "dashscope"
@@ -203,7 +217,7 @@ class _AgentRun:
         ]
 
         try:
-            session = await self._config.gateway.open(
+            session = await self._gateway().open(
                 self._req.role, self._req.routing, self._req.budget.limit_cny
             )
             # ★ 按 ADR-0004：执行平面的控制流由 LangGraph 图驱动。
@@ -585,6 +599,16 @@ class _AgentRun:
             spent_cny=self._spent,
             touched_paths=written,
         )
+
+    def _gateway(self) -> ModelGateway:
+        """这个角色该用哪个网关。
+
+        ★ 没有为该角色单独配 Key/baseUrl 时用全局那个 —— 这是绝大多数情况，
+          也是唯一安全的默认：拿不到 Key 的专属网关会让「配了反而不能用」。
+        """
+
+        by_role = self._config.gateway_by_role or {}
+        return by_role.get(str(self._req.role), self._config.gateway)
 
     def _record_turn(
         self,

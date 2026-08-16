@@ -60,6 +60,37 @@ export interface ConnectorConfigurationInput {
   readonly clearCredential?: boolean
 }
 
+/**
+ * 模型接入的三个作用域。
+ *
+ * ★ `global` 与 `orchestrator` 不是角色，是**作用域**。它们借用 roleId 这个
+ *   字段位存放，因为存储层本来就按 roleId 索引；用两个保留值而不是新开一张表，
+ *   是为了让「三级配置」在存储、IPC、界面三处都是同一个形状。
+ *
+ * ★ `orchestrator`（主 Agent）在引擎侧对应 planner 角色。名字不同是因为
+ *   对使用者而言它是「那个统筹的」，而代码里它是 11 个角色之一。
+ *   两边的映射写在引擎的 `model_config.ORCHESTRATOR_ROLE`，只此一处。
+ */
+export const GLOBAL_SCOPE = '__global__'
+export const ORCHESTRATOR_SCOPE = '__orchestrator__'
+
+/**
+ * 一层模型接入配置。每个字段都可缺省，缺省即穿透到下一层。
+ *
+ * ★ 字段级穿透（而不是整块覆盖）是刻意的：只想给某个 Agent 提高 effort 的人，
+ *   不该被迫把 model / baseUrl 全抄一遍 —— 抄一遍就意味着全局改了之后
+ *   这个 Agent 不会跟着改，而**那种漂移不会有任何东西报错**。
+ */
+export interface ModelEndpoint {
+  readonly model?: string
+  readonly effort?: ModelEffort
+  readonly baseUrl?: string
+}
+
+export type ModelEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export const MODEL_EFFORTS: readonly ModelEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
 export interface AgentConfiguration {
   readonly roleId: string
   readonly name?: string
@@ -67,7 +98,27 @@ export interface AgentConfiguration {
   readonly systemPrompt: string
   readonly systemDocumentName?: string
   readonly apiKeyConfigured: boolean
+  /** 这一层显式配置的模型接入参数（未配的字段不出现）。 */
+  readonly endpoint?: ModelEndpoint
   readonly updatedAt: string
+}
+
+/**
+ * 提交用的接入参数。**与存储用的 `ModelEndpoint` 刻意不是同一个类型。**
+ *
+ * ★ 区别只在 effort 允许空串：空串 = 取消这一层的配置（回落到下一层），
+ *   字段不传 = 不改动。这两者必须可区分 —— 界面上把下拉框选回
+ *   「跟随上一层」是**取消**，不是「无操作」。
+ *
+ * ★ 这里差点出过事：为了让 `exactOptionalPropertyTypes` 通过，
+ *   一度把空 effort 写成「省略该字段」—— 类型检查绿了，
+ *   而清除功能变成了静默无操作。**为了让类型通过而改变语义，
+ *   是最容易漏掉的一类缺陷。**
+ */
+export interface ModelEndpointPatch {
+  readonly model?: string
+  readonly effort?: ModelEffort | ''
+  readonly baseUrl?: string
 }
 
 export interface AgentConfigurationPatch {
@@ -75,6 +126,31 @@ export interface AgentConfigurationPatch {
   readonly systemPrompt?: string
   readonly apiKey?: string
   readonly clearApiKey?: boolean
+  /** 见 `ModelEndpointPatch`：空串 = 取消这一层，不传 = 不改动。 */
+  readonly endpoint?: ModelEndpointPatch
+}
+
+/**
+ * 某个 Agent 当前**实际生效**的配置与运行指标，来自引擎写的
+ * `.codentum/agents.json`（只读投影，不是配置）。
+ *
+ * ★ `source` 说明每个值来自哪一层。没有它，「我明明配了却没生效」
+ *   只能靠猜 —— 而那有三种原因（没保存 / 被 RoleSpec 覆盖 / 引擎没读到），
+ *   现象完全一样，修法完全不同。
+ */
+export interface AgentRuntimeProfile {
+  readonly role: string
+  readonly config?: {
+    readonly model?: string
+    readonly effort?: string
+    readonly baseUrl?: string | null
+    readonly apiKeyEnv?: string | null
+    readonly source?: Readonly<Record<string, string>>
+  }
+  readonly packets: { readonly total: number; readonly byState: Readonly<Record<string, number>> }
+  readonly attempts: number
+  readonly spentCny: number
+  readonly lastActivityAt?: string | null
 }
 
 export interface McpConfiguration {
@@ -355,6 +431,8 @@ export interface StateSnapshot {
   readonly workers: readonly WorkerProjection[]
   readonly scheduling: SchedulingProjection | null
   readonly flow: FlowProjection | null
+  /** 各子 Agent 的生效配置与运行指标，来自引擎写的 `.codentum/agents.json`。 */
+  readonly agents: readonly AgentRuntimeProfile[]
   readonly warnings: readonly string[]
 }
 

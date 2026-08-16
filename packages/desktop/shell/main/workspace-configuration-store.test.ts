@@ -6,7 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({
   safeStorage: {
     isEncryptionAvailable: () => true,
-    encryptString: (value: string) => Buffer.from(`encrypted:${value}`, 'utf8')
+    encryptString: (value: string) => Buffer.from(`encrypted:${value}`, 'utf8'),
+    // ★ 这个 mock 此前**没有 decryptString** —— 因为生产代码里根本没人读。
+    //   加它本身就是这次修复的一个标记：密钥终于有了读出口。
+    decryptString: (value: Buffer) => {
+      const text = value.toString('utf8')
+      if (!text.startsWith('encrypted:')) throw new Error('解不开')
+      return text.slice('encrypted:'.length)
+    }
   }
 }))
 
@@ -68,3 +75,82 @@ describe('WorkspaceConfigurationStore', () => {
     expect(store.listConnectors()).toEqual([])
   })
 })
+
+
+describe('模型接入配置（三级覆盖）', () => {
+  it('保存并读回某个 Agent 的模型与强度', async () => {
+    const store = new WorkspaceConfigurationStore(await root())
+    await store.initialize()
+    await store.saveAgent('coder', { endpoint: { model: 'deepseek-v4-pro', effort: 'max' } })
+
+    expect(store.endpoints()['coder']).toEqual({ model: 'deepseek-v4-pro', effort: 'max' })
+  })
+
+  it('空串 = 取消这一层，字段不传 = 不改动', async () => {
+    // ★ 这条守的是一个差点被类型检查「修」掉的语义：
+    //   为了迁就 exactOptionalPropertyTypes，空 effort 一度被写成
+    //   「省略该字段」—— tsc 绿了，而清除变成了静默无操作。
+    const store = new WorkspaceConfigurationStore(await root())
+    await store.initialize()
+    await store.saveAgent('coder', { endpoint: { model: 'm1', effort: 'high', baseUrl: 'u1' } })
+
+    // 只动 effort，其余不传 → 其余保持
+    await store.saveAgent('coder', { endpoint: { effort: '' } })
+    expect(store.endpoints()['coder']).toEqual({ model: 'm1', baseUrl: 'u1' })
+
+    // 全部清空 → 整层消失
+    await store.saveAgent('coder', { endpoint: { model: '', baseUrl: '' } })
+    expect(store.endpoints()['coder']).toBeUndefined()
+  })
+
+  it('两个作用域（全局 / 主 Agent）也能保存', async () => {
+    const store = new WorkspaceConfigurationStore(await root())
+    await store.initialize()
+    await store.saveAgent('__global__', { endpoint: { model: 'qwen-plus' } })
+    await store.saveAgent('__orchestrator__', { endpoint: { model: 'qwen3-max' } })
+
+    expect(store.endpoints()['__global__']).toEqual({ model: 'qwen-plus' })
+    expect(store.endpoints()['__orchestrator__']).toEqual({ model: 'qwen3-max' })
+  })
+
+  it('密钥能被解回来 —— 此前它只进不出', async () => {
+    // ★ 在这条之前，safeStorage.encryptString 有，而全仓库没有任何
+    //   decryptString。存进去的 Key 从来没有被读出来过，
+    //   而界面显示「已配置」。**一个会撒谎的已配置状态。**
+    const store = new WorkspaceConfigurationStore(await root())
+    await store.initialize()
+    await store.saveAgent('coder', { apiKey: 'sk-real-key' })
+
+    expect(store.resolveSecrets().keysByRole['coder']).toBe('sk-real-key')
+  })
+
+  it('解不开的旧密文被单列出来，而不是当作没配', async () => {
+    // ★ 换机器或重装系统后旧密文解不开是正常的。静默跳过会让使用者
+    //   盯着一个显示「已配置」但永远不生效的状态等下去。
+    const directory = await root()
+    const store = new WorkspaceConfigurationStore(directory)
+    await store.initialize()
+    await store.saveAgent('coder', { apiKey: 'sk-ok' })
+    await writeCorruptedKey(directory, 'qa')
+
+    const reloaded = new WorkspaceConfigurationStore(directory)
+    await reloaded.initialize()
+    const { keysByRole, undecryptable } = reloaded.resolveSecrets()
+
+    expect(keysByRole['coder']).toBe('sk-ok')
+    expect(undecryptable).toContain('qa')
+  })
+})
+
+async function writeCorruptedKey(directory: string, roleId: string): Promise<void> {
+  const path = join(directory, 'configuration.json')
+  const file = JSON.parse(await readFile(path, 'utf8'))
+  file.agents.push({
+    roleId,
+    systemPrompt: '',
+    encryptedApiKey: Buffer.from('这不是本机加密的', 'utf8').toString('base64'),
+    updatedAt: new Date().toISOString()
+  })
+  const { writeFile } = await import('node:fs/promises')
+  await writeFile(path, JSON.stringify(file, null, 2), 'utf8')
+}

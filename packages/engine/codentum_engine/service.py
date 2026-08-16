@@ -104,7 +104,13 @@ from .acceptance import _latest_workspace, build_executing_acceptance_gate
 from .mcp_client import describe_skipped
 from .mcp_toolbox import McpToolbox, build_mcp_toolbox
 from .planner import PlannedTask, build_packets_from_plan, parse_plan, plan_prompt
-from .projections import write_flow
+from .model_config import (
+    ORCHESTRATOR_ROLE,
+    ModelConfig,
+    Resolution,
+    load_model_config,
+)
+from .projections import write_agents, write_flow
 from .agent_runner import DEFAULT_MAX_TURNS, AgentRunnerConfig, build_agent_runner
 from .intake import (
     DEFAULT_PACKET_BUDGET_CNY,
@@ -124,6 +130,15 @@ logger = logging.getLogger(__name__)
 ENGINE_VERSION = "codentum-engine/0.1.0"
 
 _KEY_ENVS = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY", "AGENTTEAMS_LLM_API_KEY")
+
+_GLOBAL_DEFAULT_ROLE = "__default__"
+"""解析「全局那一层」时用的哨兵角色名。
+
+★ 它**故意不是任何真实角色**：解析它时不会命中任何 agent 覆盖、
+  不是主 Agent、也没有 RoleSpec，于是自然落到 global → 命令行兜底。
+  这样「全局默认是什么」与「某个角色是什么」走的是同一条解析路径，
+  而不是在两个地方各写一遍优先级 —— 两份优先级一定会漂移。
+"""
 
 GEN_AI_SYSTEM_BY_GATEWAY: dict[str, str] = {
     "bailian": "dashscope",
@@ -790,11 +805,22 @@ class EngineService:
             logger.info("需求只拆出 1 个任务，按单 packet 处理")
             return (self._single_packet(requirement, packet_id, owns, reads, budget_cny),)
 
+        # ★ 兜底值也要走三级解析。
+        #
+        #   `model_by_role` 只覆盖有 RoleSpec 的角色，`model=` 是其余情况的
+        #   兜底 —— 此前它直接取 `self.config.model`，于是「在界面上配了全局
+        #   模型」对这条兜底路径**不生效**，而那条路径正是没有 RoleSpec 的
+        #   角色会走的。
+        #
+        #   解析一个不存在的角色得到的恰好就是「全局那一层」：没有该 Agent
+        #   覆盖、不是主 Agent、没有 RoleSpec → 落到 global → 落到命令行兜底。
+        #   复用同一条解析路径，而不是再写一遍优先级。
+        default = self.resolve_model_for(_GLOBAL_DEFAULT_ROLE)
         packets = build_packets_from_plan(
             tasks,
             requirement=requirement,
-            model=self.config.model,
-            effort=self.config.effort,
+            model=default.model,
+            effort=default.effort,
             total_budget_cny=budget_cny * len(tasks),
             # ★ 必须按角色取模型：qa / reviewer 声明了 mustDifferFrom: [coder]，
             #   共用一个模型会被准入以 MODEL_ISOLATION 拒绝。
@@ -816,10 +842,22 @@ class EngineService:
 
         gateway = build_model_gateway(self._gateway_config())
 
+        # ★ 主 Agent（planner）走三级解析里属于自己的那一层。
+        #   此前这里写死 `self.config.model` —— 也就是界面上「只给主 Agent
+        #   换个强模型」这件事，在拆解需求这一步**完全不生效**，
+        #   而拆解恰恰是最吃模型能力的一步。
+        planning = self.resolve_model_for(ORCHESTRATOR_ROLE)
+        logger.info(
+            "主 Agent 规划用 %s（effort=%s，来源 %s）",
+            planning.model,
+            planning.effort,
+            planning.source,
+        )
+
         async def run() -> str:
             session = await gateway.open(
-                "planner",
-                ModelRouting(model=self.config.model, effort=self.config.effort),  # type: ignore[arg-type]
+                ORCHESTRATOR_ROLE,  # type: ignore[arg-type]
+                planning.to_routing(),
                 self.config.packet_budget_cny,
             )
             try:
@@ -835,20 +873,106 @@ class EngineService:
 
         return parse_plan(asyncio.run(asyncio.wait_for(run(), timeout=120.0)))
 
-    def _model_by_role(self) -> dict[str, str]:
-        """从 RoleSpec 读各角色的默认模型。
+    def _gateways_by_role(self, base: ModelGatewayConfig) -> dict[str, Any]:
+        """给「配了自己 Key 或 baseUrl」的角色各建一个网关。
 
-        ★ 真源是 B 的 `modelPolicy.defaultModel`，不是引擎的配置 ——
-          引擎的 `config.model` 只是**降级用的兜底**。
+        ★ 只在那个环境变量**确实有值**时才建（`_resolve_key_env` 的判据）。
+          建一个拿不到 Key 的专属网关，会把本来能用全局 Key 跑通的角色
+          变成运行时报错 —— 现象是「配了 Key 反而不能用了」。
+
+        ★ 按 (api_key_env, base_url) 去重：五个角色配同一把 Key 时只建一个
+          网关实例，五个角色共享。每个角色各建一个会让并发连接数翻五倍，
+          而它们本来就是同一个 provider 的同一份凭据。
         """
 
-        table: dict[str, str] = {}
+        config = self._model_config()
+        pool: dict[tuple[str | None, str | None], Any] = {}
+        table: dict[str, Any] = {}
+
         for spec in self._role_specs:
-            policy = getattr(spec, "modelPolicy", None)
-            default = getattr(policy, "defaultModel", None) if policy else None
-            if isinstance(default, str) and default:
-                table[str(spec.id)] = default
+            role = str(spec.id)
+            resolved = self.resolve_model_for(role)
+            override = config.agents.get(role)
+            wants_own = override is not None and (
+                override.api_key_env is not None or override.base_url is not None
+            )
+            if not wants_own:
+                continue
+
+            key_env = _resolve_key_env(resolved.api_key_env)
+            if key_env is None and resolved.base_url is None:
+                # ★ 声明了专属 Key 但那个变量是空的 —— 退回全局网关，
+                #   并出声。静默退回会让使用者以为专属 Key 生效了。
+                logger.warning(
+                    "角色 %s 声明了专属 Key 环境变量 %s，但它没有值 —— 退回全局网关",
+                    role,
+                    resolved.api_key_env,
+                )
+                continue
+
+            signature = (key_env, resolved.base_url)
+            if signature not in pool:
+                pool[signature] = build_model_gateway(
+                    ModelGatewayConfig.bailian(
+                        pricing=base.pricing,
+                        api_key_env=key_env or base.api_key_env,
+                        base_url=resolved.base_url or base.base_url,
+                        require_pricing=base.require_pricing,
+                        provider_timeout_seconds=base.provider_timeout_seconds,
+                    ),
+                    role_specs=tuple(self._role_specs),
+                )
+                logger.info(
+                    "为角色 %s 建专属网关（key_env=%s, base_url=%s）",
+                    role,
+                    key_env,
+                    resolved.base_url or "默认",
+                )
+            table[role] = pool[signature]
+
         return table
+
+    def _model_config(self) -> ModelConfig:
+        """读界面写下来的三级模型配置（全局 / 主 Agent / 各子 Agent）。
+
+        ★ 每次用时重读，不缓存：使用者在界面上改完配置，期望**下一个 packet
+          就生效**，而不是重启引擎。引擎是长驻进程，缓存等于让配置界面失灵。
+          文件很小，重读的代价可以忽略。
+        """
+
+        return load_model_config(self.config.resolved_state_dir())
+
+    def resolve_model_for(self, role: str) -> Resolution:
+        """某个角色最终用什么模型 —— **唯一的解析入口**。
+
+        ★ 三处调用点（规划、多 packet、单 packet）此前各自算各自的，
+          于是「界面上配了 coder 的模型」在其中两处生效、一处不生效
+          是完全可能的，而且不会有任何东西报错。收敛到一个函数之后，
+          「哪里生效」不再是一个需要逐处核对的问题。
+        """
+
+        return self._model_config().resolve(
+            role,
+            role_specs=tuple(self._role_specs),
+            fallback_model=self.config.model,
+            fallback_effort=self.config.effort,
+        )
+
+    def _model_by_role(self) -> dict[str, str]:
+        """各角色最终生效的模型。
+
+        ★ 优先级见 `model_config.ModelConfig.resolve`：
+          该子 Agent > 主 Agent（仅主 Agent）> RoleSpec > 全局 > 命令行兜底。
+
+        ★ RoleSpec 仍排在全局之上 —— `modelPolicy.defaultModel` 是角色固有的
+          能力要求（qa/reviewer 声明 mustDifferFrom: [coder]），
+          被一个笼统的全局值覆盖会让准入直接以 MODEL_ISOLATION 拒绝。
+        """
+
+        return {
+            str(spec.id): self.resolve_model_for(str(spec.id)).model
+            for spec in self._role_specs
+        }
 
     def _single_packet(
         self,
@@ -858,13 +982,18 @@ class EngineService:
         reads: tuple[str, ...],
         budget_cny: float,
     ) -> WorkPacket:
+        # ★ 单 packet 路径的角色固定是 coder（见 build_packet_for_requirement），
+        #   所以这里按 coder 解析 —— 而不是用全局默认。
+        #   不这么做的话，「只给 coder 配了模型」在多 packet 时生效、
+        #   在单 packet 时不生效，而两条路径对使用者是同一个操作。
+        coder = self.resolve_model_for("coder")
         return build_packet_for_requirement(
             packet_id=packet_id,
             requirement=requirement,
             owns_paths=owns,
             reads_paths=reads,
-            model=self.config.model,
-            effort=self.config.effort,
+            model=coder.model,
+            effort=coder.effort,
             budget_cny=budget_cny,
             acceptance_author=choose_acceptance_author(
                 [str(spec.id) for spec in self._role_specs], packet_role="coder"
@@ -941,6 +1070,9 @@ class EngineService:
                         #   会言之凿凿地报错误的 provider —— 内容是假的 trace
                         #   比没有 trace 更坏，因为它看起来完全正常。
                         otel_system=GEN_AI_SYSTEM_BY_GATEWAY[gateway_config.kind],
+                        # ★ 各子 Agent 的专属 Key / baseUrl。没配的角色
+                        #   不在这张表里，走上面那个全局网关。
+                        gateway_by_role=self._gateways_by_role(gateway_config),
                     )
                 ),
                 role_specs=self._role_specs,
@@ -1207,7 +1339,20 @@ class EngineService:
         try:
             # ★ `scheduling.json` 由控制平面自己写（它才知道真正被执行的 WIP 上限）。
             #   这里只补 `flow.json` —— 它要的是决策日志，那是引擎这一侧的账。
-            write_flow(self.config.resolved_state_dir(), loop.packets)
+            state_dir = self.config.resolved_state_dir()
+            write_flow(state_dir, loop.packets)
+            # ★ 各子 Agent 的画像：生效配置（含每个值来自哪一层）+ 运行指标。
+            #   界面上看某个 Agent 时问的是同一个问题的两半 ——
+            #   它现在用什么在跑、跑得怎么样。
+            roles = tuple(str(spec.id) for spec in self._role_specs)
+            write_agents(
+                state_dir,
+                loop.packets,
+                resolutions={
+                    role: self.resolve_model_for(role).as_json() for role in roles
+                },
+                roles=roles,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("调度/流动投影写入失败（不影响状态推进）：%s", exc)
 

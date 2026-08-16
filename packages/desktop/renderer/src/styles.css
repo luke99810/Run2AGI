@@ -620,3 +620,47 @@ small,
   .agent-document-row { align-items: stretch; flex-wrap: wrap; }
   .team-agent-add-row { grid-template-columns: 42px minmax(0, 1fr) auto; }.team-agent-add-row small { display: none; }.custom-agent-section > header, .system-role-section > header { align-items: flex-start; flex-direction: column; gap: 4px; }
 }
+
+/* ── 模型接入配置与各 Agent 运行画像 ───────────────────────── */
+
+.agent-endpoint {
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 10px;
+  padding: 14px 16px 12px;
+  margin: 4px 0 8px;
+  display: grid;
+  gap: 10px;
+}
+.agent-endpoint legend { padding: 0 6px; font-size: 13px; opacity: .75; }
+
+.endpoint-effective {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  opacity: .85;
+}
+.endpoint-effective code { padding: 1px 6px; border-radius: 5px; background: rgba(255,255,255,.06); }
+/* ★ 来源说明用弱化的样式：它是解释，不是主信息 —— 但必须始终可见，
+      因为「配了没生效」的排查全靠它。 */
+.endpoint-source { opacity: .6; margin-left: 6px; }
+
+.agent-runtime {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255,255,255,.10);
+  font-size: 12.5px;
+  opacity: .9;
+}
+.agent-runtime strong { font-size: 14px; }
+.agent-runtime-model code { padding: 1px 6px; border-radius: 5px; background: rgba(255,255,255,.06); }
+.agent-runtime-model small { margin-left: 5px; opacity: .6; }
+.agent-runtime-time { margin-left: auto; opacity: .55; }
+/* ★ 「引擎尚未产出」用与数字明显不同的样式 —— 它不是一个更小的数字，
+      而是「这里没有数字」。看起来像 0 的空状态是最容易被误读的。 */
+.agent-runtime.empty { font-style: italic; opacity: .5; border-top-style: dotted; }
+
+.scope-config-section .role-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.scope-card .role-avatar { display: inline-flex; align-items: center; justify-content: center; }

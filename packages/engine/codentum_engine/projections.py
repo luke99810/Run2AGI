@@ -141,20 +141,31 @@ def _segments_by_packet(
     return result
 
 
+def _read_decisions(state_dir: Path) -> list[Mapping[str, Any]]:
+    """读决策日志。
+
+    ★ 坏行跳过而不是整份放弃：日志是**追加**的，进程被杀时最后一行可能
+      只写了一半。为一行残缺就丢掉整段历史，等于让一次崩溃抹掉所有指标。
+    """
+
+    path = state_dir / "decisions.jsonl"
+    if not path.exists():
+        return []
+    rows: list[Mapping[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
 def write_flow(state_dir: Path, packets: Mapping[PacketId, WorkPacket]) -> None:
     """从 `decisions.jsonl` 算出 `.codentum/flow.json`。"""
 
-    decisions_path = state_dir / "decisions.jsonl"
-    decisions: list[Mapping[str, Any]] = []
-    if decisions_path.exists():
-        for line in decisions_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                decisions.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
+    decisions = _read_decisions(state_dir)
     by_packet = _segments_by_packet(decisions, packets)
 
     packet_flows: list[dict[str, Any]] = []
@@ -296,3 +307,89 @@ def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
         encoding="utf-8",
     )
     tmp.replace(path)
+
+
+# ══════════════════════════════════════════════════════════════
+#  各子 Agent 的运行画像
+# ══════════════════════════════════════════════════════════════
+
+AGENTS_FILENAME = "agents.json"
+AGENTS_SCHEMA = "codentum.agents.v1"
+
+
+def write_agents(
+    state_dir: Path,
+    packets: Mapping[PacketId, WorkPacket],
+    *,
+    resolutions: Mapping[str, Mapping[str, Any]],
+    roles: Sequence[str],
+) -> None:
+    """写 `.codentum/agents.json` —— 每个子 Agent 的**生效配置 + 运行指标**。
+
+    ★ 为什么把「配置」和「指标」放在同一份投影里：使用者在界面上看某个
+      Agent 时，问的是同一个问题的两半 —— **它现在用什么在跑、跑得怎么样**。
+      分成两份文件，界面就要自己做关联，而两份文件的时间点还可能不一致。
+
+    ★ `config` 里带 `source`（每个值来自全局/主Agent/该Agent/RoleSpec/兜底）。
+      没有它，「我明明配了却没生效」只能靠猜 —— 而那有三种原因，
+      现象完全一样，修法完全不同。
+
+    ★ 指标只用**权威来源**：packet 自身的 state / attempts / budget.spentCny，
+      以及 decisions.jsonl 的时间戳。不去扫 evidence 目录估算 ——
+      估算出来的数字看起来更丰富，但它会在无声中变得不准，
+      而使用者没有办法判断该不该信。
+
+    ★ 没有任何 packet 的角色也要出现在表里，指标为零。
+      漏掉它们会让「这个 Agent 从没干过活」与「这个 Agent 不存在」
+      在界面上不可区分 —— 而前者往往正是要排查的现象。
+    """
+
+    decisions = _read_decisions(state_dir)
+    last_seen: dict[str, str] = {}
+    for row in decisions:
+        packet_id = str(row.get("packetId", ""))
+        packet = packets.get(PacketId(packet_id)) if packet_id else None
+        if packet is None:
+            continue
+        at = str(row.get("at", ""))
+        role = str(packet.role)
+        if at and at > last_seen.get(role, ""):
+            last_seen[role] = at
+
+    by_role: dict[str, dict[str, Any]] = {
+        role: {
+            "role": role,
+            "config": dict(resolutions.get(role, {})),
+            "packets": {"total": 0, "byState": {}},
+            "attempts": 0,
+            "spentCny": 0.0,
+            "lastActivityAt": last_seen.get(role),
+        }
+        for role in roles
+    }
+
+    for packet in packets.values():
+        role = str(packet.role)
+        row = by_role.setdefault(
+            role,
+            {
+                "role": role,
+                "config": dict(resolutions.get(role, {})),
+                "packets": {"total": 0, "byState": {}},
+                "attempts": 0,
+                "spentCny": 0.0,
+                "lastActivityAt": last_seen.get(role),
+            },
+        )
+        row["packets"]["total"] += 1
+        state = str(packet.state)
+        row["packets"]["byState"][state] = row["packets"]["byState"].get(state, 0) + 1
+        row["attempts"] += int(packet.attempts or 0)
+        row["spentCny"] += float(getattr(packet.budget, "spentCny", 0.0) or 0.0)
+
+    payload = {
+        "schema": AGENTS_SCHEMA,
+        "generatedAt": _now_iso(),
+        "agents": [by_role[key] for key in sorted(by_role)],
+    }
+    _atomic_write(state_dir / AGENTS_FILENAME, payload)

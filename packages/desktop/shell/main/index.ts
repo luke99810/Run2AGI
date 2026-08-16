@@ -509,6 +509,11 @@ void app.whenReady().then(async () => {
   configurationStore = new WorkspaceConfigurationStore(resolve(app.getPath('userData'), 'workspace-configurations'))
   await configurationStore.initialize()
   sidecar = new SidecarManager(app)
+  // ★ 这一行是整条链路的接点。在它之前，配置存了、密钥加密了，而引擎
+  //   从来读不到 —— 界面显示「已配置」，引擎照旧读操作系统环境变量。
+  //   接线本身有测试守着（SidecarManager.test.ts），因为**接线正是
+  //   最容易在重构中悄悄丢掉、且不会有任何东西变红的那一段**。
+  sidecar.useModelConfig(configurationStore)
   registerIpc()
   createApplicationMenu()
   createTray()

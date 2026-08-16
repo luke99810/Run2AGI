@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
@@ -9,8 +10,11 @@ import type {
   ConnectorConfigurationInput,
   ConnectorProvider,
   McpConfiguration,
-  McpConfigurationInput
+  McpConfigurationInput,
+  ModelEndpoint,
+  ModelEndpointPatch
 } from '../../shared/protocol'
+import { GLOBAL_SCOPE, ORCHESTRATOR_SCOPE } from '../../shared/protocol'
 
 interface StoredConnector extends Omit<ConnectorConfiguration, 'credentialConfigured'> { readonly encryptedCredential?: string }
 interface StoredAgent extends Omit<AgentConfiguration, 'apiKeyConfigured'> { readonly systemDocumentPath?: string; readonly encryptedApiKey?: string }
@@ -88,6 +92,7 @@ export class WorkspaceConfigurationStore {
     const current = this.#agents.find((item) => item.roleId === roleId)
     assertAgentPatch(roleId, patch, current?.name)
     const encryptedApiKey = updateSecret(current?.encryptedApiKey, patch.apiKey, patch.clearApiKey)
+    const endpoint = mergeEndpoint(current?.endpoint, patch.endpoint)
     const next: StoredAgent = {
       roleId,
       ...(roleId.startsWith('custom:') ? { custom: true, name: patch.name?.trim() ?? current?.name ?? '自定义 Agent' } : {}),
@@ -95,6 +100,7 @@ export class WorkspaceConfigurationStore {
       ...(current?.systemDocumentName === undefined ? {} : { systemDocumentName: current.systemDocumentName }),
       ...(current?.systemDocumentPath === undefined ? {} : { systemDocumentPath: current.systemDocumentPath }),
       ...(encryptedApiKey === undefined ? {} : { encryptedApiKey }),
+      ...(endpoint === undefined ? {} : { endpoint }),
       updatedAt: new Date().toISOString()
     }
     this.#agents = [...this.#agents.filter((item) => item.roleId !== roleId), next]
@@ -120,6 +126,7 @@ export class WorkspaceConfigurationStore {
       systemPrompt: current?.systemPrompt ?? '',
       ...(path === undefined ? {} : { systemDocumentName: basename(path), systemDocumentPath: resolve(path) }),
       ...(current?.encryptedApiKey === undefined ? {} : { encryptedApiKey: current.encryptedApiKey }),
+      ...(current?.endpoint === undefined ? {} : { endpoint: current.endpoint }),
       updatedAt: new Date().toISOString()
     }
     this.#agents = [...this.#agents.filter((item) => item.roleId !== roleId), next]
@@ -154,6 +161,46 @@ export class WorkspaceConfigurationStore {
     return true
   }
 
+  /**
+   * 主进程专用：解出各 Agent 的密钥与生效的接入配置，用于**注入引擎进程**。
+   *
+   * ★ 这个方法是这次修复的核心。在它之前，`safeStorage.encryptString` 有
+   *   （写入），而**全仓库没有任何 decryptString**（读出）—— 存进去的
+   *   API Key 从来没有被读出来过。界面显示「已配置」，引擎照旧读操作系统
+   *   环境变量。**一个会撒谎的已配置状态，比功能缺失难查得多。**
+   *
+   * ★ 刻意不经过 IPC 暴露给渲染进程：密钥解开之后只在主进程内存里存在，
+   *   随即作为环境变量交给引擎子进程。渲染进程永远拿不到明文 ——
+   *   那正是当初用 safeStorage 的理由，不能在补链路的时候把它拆了。
+   *
+   * ★ 解密失败**不抛**：换过机器或重装系统后，旧密文解不开是正常的。
+   *   抛异常会让整个引擎起不来；这里跳过并交给调用方去报「需要重新填写」。
+   */
+  resolveSecrets(): { readonly keysByRole: Record<string, string>; readonly undecryptable: readonly string[] } {
+    const keysByRole: Record<string, string> = {}
+    const undecryptable: string[] = []
+    if (!safeStorage.isEncryptionAvailable()) return { keysByRole, undecryptable }
+    for (const agent of this.#agents) {
+      if (agent.encryptedApiKey === undefined) continue
+      try {
+        const plain = safeStorage.decryptString(Buffer.from(agent.encryptedApiKey, 'base64'))
+        if (plain.trim() !== '') keysByRole[agent.roleId] = plain
+      } catch {
+        undecryptable.push(agent.roleId)
+      }
+    }
+    return { keysByRole, undecryptable }
+  }
+
+  /** 各层显式配置的接入参数，用于生成引擎读的 `model-config.json`。 */
+  endpoints(): Record<string, ModelEndpoint> {
+    const table: Record<string, ModelEndpoint> = {}
+    for (const agent of this.#agents) {
+      if (agent.endpoint !== undefined) table[agent.roleId] = agent.endpoint
+    }
+    return table
+  }
+
   async #persist(): Promise<void> {
     const temporary = join(this.#directory, `configuration-${randomUUID()}.tmp`)
     const file: ConfigurationFile = { schemaVersion: 1, connectors: this.#connectors, agents: this.#agents, mcp: this.#mcp }
@@ -168,6 +215,25 @@ export class WorkspaceConfigurationStore {
 function encrypt(secret: string): string {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储当前不可用，不能保存凭据。')
   return safeStorage.encryptString(secret).toString('base64')
+}
+
+/**
+ * 合并这一层的模型接入配置。
+ *
+ * ★ 空字符串 = **取消这一层的配置**（回落到下一层），字段不传 = 不改动。
+ *   这两者必须可区分：界面上把输入框清空是「取消」，而不是「无操作」——
+ *   混成一个会让使用者发现自己清不掉已经配过的值。
+ */
+function mergeEndpoint(current?: ModelEndpoint, patch?: ModelEndpointPatch): ModelEndpoint | undefined {
+  if (patch === undefined) return current
+  const merged: Record<string, string> = {}
+  for (const key of ['model', 'effort', 'baseUrl'] as const) {
+    const incoming = patch[key]
+    const existing = current?.[key]
+    const value = incoming === undefined ? existing : incoming
+    if (typeof value === 'string' && value.trim() !== '') merged[key] = value.trim()
+  }
+  return Object.keys(merged).length === 0 ? undefined : (merged as ModelEndpoint)
 }
 
 function updateSecret(current: string | undefined, next: string | undefined, clear?: boolean): string | undefined {
@@ -206,7 +272,12 @@ function assertMcpInput(value: unknown): asserts value is McpConfigurationInput 
   const item = value as Record<string, unknown>
   if (typeof item['name'] !== 'string' || item['name'].trim().length < 1 || item['name'].length > 120 || !['stdio', 'http', 'sse'].includes(String(item['transport'])) || typeof item['endpoint'] !== 'string' || item['endpoint'].trim().length < 1 || item['endpoint'].length > 2_048 || typeof item['enabled'] !== 'boolean') throw new TypeError('MCP 配置无效。')
 }
-function assertAgentId(roleId: string): void { if (!ROLE_IDS.has(roleId) && !/^custom:[0-9a-f-]{16,}$/i.test(roleId)) throw new TypeError('Agent 标识无效。') }
+// ★ 两个作用域（全局 / 主 Agent）借用 roleId 字段位存放，所以它们也必须
+//   通过这道校验。用保留值而不是新开一张表，是为了让「三级配置」在存储、
+//   IPC、界面三处都是同一个形状 —— 三种形状意味着三次转换，也就是三处漂移点。
+const SCOPE_IDS = new Set<string>([GLOBAL_SCOPE, ORCHESTRATOR_SCOPE])
+
+function assertAgentId(roleId: string): void { if (!ROLE_IDS.has(roleId) && !SCOPE_IDS.has(roleId) && !/^custom:[0-9a-f-]{16,}$/i.test(roleId)) throw new TypeError('Agent 标识无效。') }
 function parseFile(value: unknown): ConfigurationFile {
   if (typeof value !== 'object' || value === null || (value as Record<string, unknown>)['schemaVersion'] !== 1) throw new Error('配置文件格式无效。')
   const file = value as ConfigurationFile
