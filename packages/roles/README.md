@@ -72,8 +72,15 @@ loader 会校验引用的 Skill manifest 必须存在、id 与目录名一致，
 `.codentum/skills/shared/cloud-*/`。最近一次本地/云注入事实会写入
 `.codentum/skills/projection.json`，供 C 的 Skills 面板展示。
 
-仓库提供了一个离线 catalog 示例：`cloud_skills/catalog.sample.json`。生产环境可替换为
-阿里云 Skills 门户或团队内部可信 catalog 的导出结果；catalog 只描述 Skill 正文，不承载密钥。
+仓库提供两个离线 catalog：
+
+- `cloud_skills/catalog.json` —— **完整版（推荐默认）**：18 条 Skill，覆盖全部 11 个
+  职能角色（每个角色至少一条）+ 5 条全局能力（`roles` 为空即所有角色 / 主 Agent 可用）。
+  由 `test_cloud_catalog_covers_every_role` 钉住「每个角色 ≥1」的覆盖约束。
+- `cloud_skills/catalog.sample.json` —— 最小示例（4 条），仅演示 catalog 字段结构。
+
+生产环境可替换为阿里云 Skills 门户或团队内部可信 catalog 的导出结果；catalog 只描述
+Skill 正文，不承载密钥。
 
 ### 内置 MCP 服务清单
 

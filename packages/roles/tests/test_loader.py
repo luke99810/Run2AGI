@@ -290,3 +290,35 @@ def test_prompt_ref_rejects_path_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(RolePromptLoadError, match="路径穿越"):
         load_role_prompt(spec, prompts_dir=tmp_path)
+
+
+def test_cloud_catalog_covers_every_role() -> None:
+    """★ 云 Skills catalog 覆盖全部 11 个职能角色，且至少有一条全局能力。
+
+    这是「云Skills 打底」承诺的可验证形式：每个子 Agent 都能从云 catalog
+    里拿到至少一条相关 Skill，主 Agent / 全局另有通用能力兜底。
+    缺了这条测试，catalog 增删 Skill 时可能悄悄漏掉某个角色。
+    """
+    catalog_path = Path(__file__).resolve().parents[1] / "cloud_skills" / "catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    skills = catalog["skills"]
+    assert isinstance(skills, list) and skills, "catalog 必须有 skills 数组"
+
+    for s in skills:
+        assert s.get("id") and s.get("name") and s.get("body"), (
+            f"Skill 缺 id/name/body: {s.get('id')!r}"
+        )
+
+    roles_in_catalog: set[str] = set()
+    has_global = False
+    for s in skills:
+        rs = s.get("roles") or []
+        if not rs or "*" in rs:
+            has_global = True
+        roles_in_catalog.update(str(r) for r in rs)
+
+    all_roles = {spec.id for spec in load_builtin_role_specs()}
+    missing = all_roles - roles_in_catalog
+    assert not missing, f"云 catalog 未覆盖这些角色：{sorted(missing)}"
+    assert has_global, "catalog 至少要有一条全局 Skill（roles 为空或 '*'）"
+
