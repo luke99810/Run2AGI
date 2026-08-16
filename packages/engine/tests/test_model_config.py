@@ -365,3 +365,78 @@ def test_env_name_convention_matches_the_desktop_side() -> None:
     assert rendered == agent_key_env("coder"), (
         f"两边的环境变量名约定不一致：桌面端 {rendered!r} vs 引擎 {agent_key_env('coder')!r}"
     )
+
+
+# ══════════════════════════════════════════════════════════════
+#  系统提示词 —— 叠加，不是覆盖
+# ══════════════════════════════════════════════════════════════
+
+
+def test_prompts_stack_instead_of_overriding(tmp_path: Path) -> None:
+    """★ 与模型的合并规则**刻意不同**。
+
+    在全局写了团队规范、又给 coder 补一句要求的人，期望两条都生效。
+    若按覆盖处理，给某个 Agent 写一句话会让全局那条**静默消失** ——
+    而现象是「模型不守规范了」，没人会想到去查提示词的合并规则。
+    """
+
+    _write(
+        tmp_path,
+        {
+            "global": {"systemPrompt": "所有代码必须写中文注释。"},
+            "agents": {"coder": {"systemPrompt": "优先用组合而不是继承。"}},
+        },
+    )
+    notes = load_model_config(tmp_path).resolve_prompt("coder")
+
+    assert [text for _, text in notes] == ["所有代码必须写中文注释。", "优先用组合而不是继承。"]
+    assert [scope for scope, _ in notes] == ["全局", "Agent coder"], "来源标注丢了就无法归因"
+
+
+def test_prompt_order_is_broad_to_specific(tmp_path: Path) -> None:
+    """★ 顺序是 全局 → 主 Agent → 该 Agent。
+
+    模型对靠后的内容更敏感，而越具体的要求越该压过泛泛的规范。
+    """
+
+    _write(
+        tmp_path,
+        {
+            "global": {"systemPrompt": "G"},
+            "orchestrator": {"systemPrompt": "O"},
+            "agents": {"planner": {"systemPrompt": "A"}},
+        },
+    )
+    assert [t for _, t in load_model_config(tmp_path).resolve_prompt("planner")] == ["G", "O", "A"]
+
+
+def test_orchestrator_prompt_does_not_leak_to_sub_agents(tmp_path: Path) -> None:
+    """给主 Agent 写的话不该出现在 coder 的提示词里。"""
+
+    _write(tmp_path, {"orchestrator": {"systemPrompt": "只输出 JSON。"}})
+    assert load_model_config(tmp_path).resolve_prompt("coder") == ()
+    assert len(load_model_config(tmp_path).resolve_prompt(ORCHESTRATOR_ROLE)) == 1
+
+
+def test_blank_prompt_is_not_a_note(tmp_path: Path) -> None:
+    """★ 界面上把提示词清空 = 不追加，而不是追加一段空白。
+
+    追加空白会在提示词里留下一个没有内容的 `### 来自：…` 小节 ——
+    模型会看到一个空指令，而使用者以为自己已经删掉了。
+    """
+
+    _write(tmp_path, {"agents": {"coder": {"systemPrompt": "   \n  "}}})
+    assert load_model_config(tmp_path).resolve_prompt("coder") == ()
+
+
+def test_engine_wires_the_prompt_resolver_into_the_runtime() -> None:
+    """★ 守接线本身。
+
+    此前 systemPrompt 存了、加密了、界面显示已保存，而引擎从不读它 ——
+    这一条盯的正是那段链路不能再断。
+    """
+
+    source = (REPO_ENGINE / "codentum_engine" / "service.py").read_text(encoding="utf-8")
+    assert "operator_note_resolver=self.resolve_prompt_for" in source, (
+        "生产装配没有把提示词解析器传给 runtime —— 界面填的提示词到不了模型"
+    )

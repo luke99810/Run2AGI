@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -68,6 +68,7 @@ class LocalWorkerRuntime:
         role_spec_resolver: WorkerRoleSpecResolver | None = None,
         context_char_budget: int | None = None,
         project_state_dir: Path | str | None = None,
+        operator_note_resolver: Callable[[str], Sequence[tuple[str, str]]] | None = None,
     ) -> None:
         if context_loader is not None and context_char_budget is None:
             raise ValueError("context_char_budget is required when context_loader is provided")
@@ -78,6 +79,10 @@ class LocalWorkerRuntime:
         self._role_specs = {spec.id: spec for spec in specs}
         self._context_loader = context_loader
         self._role_spec_resolver = role_spec_resolver
+        # ★ 收一个**回调**而不是自己去读配置文件：「配置从哪来」是装配层的
+        #   决定，harness 不该知道 `.codentum/agent-config.json` 的存在。
+        #   为 None 时不追加任何说明 —— 与「没配」在行为上一致。
+        self._operator_note_resolver = operator_note_resolver
         self._context_char_budget = context_char_budget or DEFAULT_INTENT_CONTEXT_CHAR_BUDGET
         self._project_evidence_root = (
             None if project_state_dir is None else Path(project_state_dir) / "evidence"
@@ -152,6 +157,12 @@ class LocalWorkerRuntime:
             prepared.role_spec,
             prepared.context,
             skills_dir=self._shared_skills_dir(),
+            # ★ 每次派发时现取：使用者改完提示词，期望**下一个 packet
+            #   就生效**，而不是重启引擎。缓存等于让配置界面失灵。
+            operator_notes=(
+                () if self._operator_note_resolver is None
+                else tuple(self._operator_note_resolver(str(req.role)))
+            ),
         )
         session.append(
             "started",
@@ -296,6 +307,7 @@ class _Session:
         context: ContextBundle | None,
         *,
         skills_dir: Path | str | None = None,
+        operator_notes: Sequence[tuple[str, str]] = (),
     ) -> WorkerPromptBundle:
         bundle = write_worker_prompt_bundle(
             request=self.request,
@@ -303,6 +315,7 @@ class _Session:
             evidence_dir=self.evidence_dir,
             context=context,
             skills_dir=skills_dir,
+            operator_notes=operator_notes,
         )
         self._evidence.mirror_tree("prompt")
         return bundle

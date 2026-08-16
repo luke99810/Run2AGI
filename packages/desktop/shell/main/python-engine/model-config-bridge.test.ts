@@ -35,7 +35,7 @@ async function tempProject(): Promise<string> {
 }
 
 describe('模型配置桥', () => {
-  it('把三级配置写成引擎读得懂的 model-config.json', async () => {
+  it('把三级配置写成引擎读得懂的 agent-config.json', async () => {
     const root = await tempProject()
     await publishModelConfig(
       source({
@@ -45,9 +45,9 @@ describe('模型配置桥', () => {
       }),
       root
     )
-    const written = JSON.parse(await readFile(join(root, '.codentum', 'model-config.json'), 'utf8'))
+    const written = JSON.parse(await readFile(join(root, '.codentum', 'agent-config.json'), 'utf8'))
 
-    expect(written.schema).toBe('codentum.model-config.v1')
+    expect(written.schema).toBe('codentum.agent-config.v1')
     expect(written.global).toMatchObject({ model: 'qwen-plus' })
     expect(written.orchestrator).toMatchObject({ model: 'qwen3-max', effort: 'xhigh' })
     expect(written.agents.coder).toMatchObject({ model: 'deepseek-v4-pro' })
@@ -59,7 +59,7 @@ describe('模型配置桥', () => {
   it('密钥走环境变量，绝不写进配置文件', async () => {
     const root = await tempProject()
     const env = await publishModelConfig(source({ coder: { model: 'm' } }, { coder: 'sk-super-secret' }), root)
-    const raw = await readFile(join(root, '.codentum', 'model-config.json'), 'utf8')
+    const raw = await readFile(join(root, '.codentum', 'agent-config.json'), 'utf8')
 
     // ★ 这是这次改动的安全底线：把密钥写进文件会让 safeStorage 那层加密
     //   变成装饰。文件里只许出现**变量名**。
@@ -87,10 +87,27 @@ describe('模型配置桥', () => {
     //   那把 Key 就白配了，而界面上它显示「已配置」。
     const root = await tempProject()
     const env = await publishModelConfig(source({}, { qa: 'sk-qa' }), root)
-    const written = JSON.parse(await readFile(join(root, '.codentum', 'model-config.json'), 'utf8'))
+    const written = JSON.parse(await readFile(join(root, '.codentum', 'agent-config.json'), 'utf8'))
 
     expect(env[agentKeyEnvName('qa')]).toBe('sk-qa')
     expect(written.agents.qa).toEqual({ apiKeyEnv: agentKeyEnvName('qa') })
+  })
+
+  it('系统提示词随配置一起送到引擎 —— 此前它从没离开过桌面端', async () => {
+    // ★ 在这条之前，systemPrompt 存在本地、界面显示已保存，
+    //   而引擎从不读它 —— 与那把从没被解密过的 API Key 是同一种缺陷。
+    const root = await tempProject()
+    await publishModelConfig(
+      source({
+        [GLOBAL_SCOPE]: { systemPrompt: '所有代码写中文注释。' },
+        coder: { model: 'm', systemPrompt: '优先用组合。' }
+      }),
+      root
+    )
+    const written = JSON.parse(await readFile(join(root, '.codentum', 'agent-config.json'), 'utf8'))
+
+    expect(written.global.systemPrompt).toBe('所有代码写中文注释。')
+    expect(written.agents.coder.systemPrompt).toBe('优先用组合。')
   })
 
   it('环境变量名的约定与引擎侧完全一致', () => {

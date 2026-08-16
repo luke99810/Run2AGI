@@ -232,3 +232,91 @@ def _write_shared_skill(root: Path, skill_id: str, body: str) -> None:
         encoding="utf-8",
     )
     (skill_dir / "SKILL.md").write_text(body + "\n", encoding="utf-8")
+
+
+# ══════════════════════════════════════════════════════════════
+#  使用者在界面上追加的说明
+# ══════════════════════════════════════════════════════════════
+
+
+def test_operator_notes_reach_the_system_prompt(tmp_path: Path) -> None:
+    """★ 这是「界面填的提示词真的生效」的可执行形态。
+
+    在此之前 systemPrompt 存在桌面端、加密落盘、界面显示已保存，
+    而引擎从不读它 —— 与那把从没被解密过的 API Key 是同一种缺陷。
+    """
+
+    bundle = assemble_worker_prompt_bundle(
+        request(tmp_path),
+        role_spec(),
+        operator_notes=(("全局", "所有代码写中文注释。"), ("Agent reviewer", "先看边界条件。")),
+    )
+
+    assert "所有代码写中文注释。" in bundle.system
+    assert "先看边界条件。" in bundle.system
+
+
+def test_each_note_says_where_it_came_from(tmp_path: Path) -> None:
+    """★ 一段来源不明的提示词，出问题时无法归因。
+
+    而这是**唯一可以被使用者随时改动**的内容，也就是最需要能归因的那段。
+    """
+
+    bundle = assemble_worker_prompt_bundle(
+        request(tmp_path), role_spec(), operator_notes=(("全局", "X"),)
+    )
+    assert "### 来自：全局" in bundle.system
+
+
+def test_notes_come_after_the_hard_constraint_statement(tmp_path: Path) -> None:
+    """★ 位置本身在说明它管不着硬约束。
+
+    追加说明排在「Hard constraints live in RoleSpec…」之后，
+    而且那一段会再重申一次「不授予任何权限」——
+    否则「在提示词里写『你可以改任何文件』」看起来像条能生效的指令。
+    """
+
+    bundle = assemble_worker_prompt_bundle(
+        request(tmp_path), role_spec(), operator_notes=(("全局", "X"),)
+    )
+    assert bundle.system.index("Hard constraints live in RoleSpec") < bundle.system.index("Operator Notes")
+    assert "不授予任何权限" in bundle.system
+
+
+def test_no_notes_adds_no_section(tmp_path: Path) -> None:
+    """没有追加说明时，提示词与从前**逐字相同**。
+
+    ★ 这条守的是「这次改动不影响没配过的项目」——
+      一个空的 `## Operator Notes` 小节会让模型看到一段没有内容的指令。
+    """
+
+    with_none = assemble_worker_prompt_bundle(request(tmp_path), role_spec())
+    assert "Operator Notes" not in with_none.system
+
+
+def test_notes_change_the_digest(tmp_path: Path) -> None:
+    """★ 提示词变了，摘要必须跟着变。
+
+    摘要不变的话，「这次跑用的是哪版提示词」在证据里不可区分 ——
+    而使用者随时可能改它，这正是最需要能分辨的一处。
+    """
+
+    base = assemble_worker_prompt_bundle(request(tmp_path), role_spec())
+    noted = assemble_worker_prompt_bundle(
+        request(tmp_path), role_spec(), operator_notes=(("全局", "X"),)
+    )
+    assert base.digest != noted.digest
+
+
+def test_manifest_records_which_scopes_contributed(tmp_path: Path) -> None:
+    """★ system.md 很长；manifest 让「这次用了谁的追加说明」一眼可见。"""
+
+    evidence = tmp_path / "ev"
+    write_worker_prompt_bundle(
+        request=request(tmp_path),
+        role_spec=role_spec(),
+        evidence_dir=evidence,
+        operator_notes=(("全局", "X"), ("Agent reviewer", "Y")),
+    )
+    manifest = json.loads((evidence / "prompt" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["operator_note_scopes"] == ["全局", "Agent reviewer"]

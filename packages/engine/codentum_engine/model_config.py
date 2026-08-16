@@ -68,8 +68,14 @@ __all__ = [
     "load_model_config",
 ]
 
-SCHEMA = "codentum.model-config.v1"
-CONFIG_FILENAME = "model-config.json"
+SCHEMA = "codentum.agent-config.v1"
+CONFIG_FILENAME = "agent-config.json"
+"""★ 从 `model-config.json` 改名而来（同一天内，无外部消费者）。
+
+改名的理由是文件名得说真话：它现在除了模型接入，还装各层的系统提示词。
+一个叫 `model-config` 的文件里放提示词，下一个人找提示词时不会想到打开它 ——
+**名字不准确的代价，是它会持续误导每一个后来的人。**
+"""
 
 ORCHESTRATOR_ROLE = "planner"
 """「主 Agent」在代码里的角色 id。
@@ -92,10 +98,23 @@ class ModelOverride:
     effort: str | None = None
     base_url: str | None = None
     api_key_env: str | None = None
+    system_prompt: str | None = None
+    """这一层追加的系统提示词。
+
+    ★ 合并规则与上面几个字段**不同**：模型是「覆盖」（高层赢），
+      提示词是「叠加」（各层都生效，按 全局 → 主Agent → 该Agent 依次拼接）。
+
+      理由是使用者的直觉：在全局写了一条团队规范，又给 coder 补一句
+      具体要求，他期望**两条都生效** —— 而不是后者让前者消失。
+      两种合并规则放在同一个类里是刻意的取舍：字段少、语义各自写清楚，
+      好过拆成两套结构再想办法让它们保持一致。
+    """
 
     @property
     def is_empty(self) -> bool:
-        return not any((self.model, self.effort, self.base_url, self.api_key_env))
+        return not any(
+            (self.model, self.effort, self.base_url, self.api_key_env, self.system_prompt)
+        )
 
     def over(self, base: ModelOverride) -> ModelOverride:
         """把自己叠在 `base` 上：自己有值的字段生效，没值的沿用 base。"""
@@ -105,6 +124,7 @@ class ModelOverride:
             effort=self.effort or base.effort,
             base_url=self.base_url or base.base_url,
             api_key_env=self.api_key_env or base.api_key_env,
+            system_prompt=self.system_prompt or base.system_prompt,
         )
 
 
@@ -246,6 +266,35 @@ class ModelConfig:
         )
 
 
+    def resolve_prompt(self, role: str) -> tuple[tuple[str, str], ...]:
+        """某个角色要追加的系统提示词，按生效顺序返回 `(层名, 文本)`。
+
+        ★ **叠加，不是覆盖** —— 与 `resolve()` 的规则刻意不同。
+
+          在全局写了一条团队规范、又给 coder 补一句具体要求的人，
+          期望的是两条都生效。若按覆盖处理，给某个 Agent 写一句话
+          会让全局那条**静默消失**，而现象是「模型不守规范了」，
+          没有人会想到去查提示词的合并规则。
+
+        ★ 顺序是 全局 → 主 Agent → 该 Agent：从最普适到最具体。
+          模型对靠后的内容更敏感，而越具体的要求越该压过泛泛的规范。
+
+        ★ 返回层名而不是拼好的字符串：调用方要把来源标进提示词，
+          让读证据的人看得出哪一段是谁加的。一段来源不明的提示词，
+          出问题时无法归因。
+        """
+
+        ordered: list[tuple[str, str]] = []
+        if self.global_.system_prompt:
+            ordered.append(("全局", self.global_.system_prompt))
+        if role == ORCHESTRATOR_ROLE and self.orchestrator.system_prompt:
+            ordered.append(("主 Agent", self.orchestrator.system_prompt))
+        agent = self.agents.get(role)
+        if agent is not None and agent.system_prompt:
+            ordered.append((f"Agent {role}", agent.system_prompt))
+        return tuple(ordered)
+
+
 def _override_from(raw: Any) -> ModelOverride:
     if not isinstance(raw, dict):
         return ModelOverride()
@@ -260,6 +309,7 @@ def _override_from(raw: Any) -> ModelOverride:
         effort=_clean(effort),
         base_url=_clean(raw.get("baseUrl")),
         api_key_env=_clean(raw.get("apiKeyEnv")),
+        system_prompt=_clean(raw.get("systemPrompt")),
     )
 
 
@@ -271,7 +321,7 @@ def _clean(value: Any) -> str | None:
 
 
 def load_model_config(state_dir: Path | str) -> ModelConfig:
-    """从 `<state_dir>/model-config.json` 读三级配置。
+    """从 `<state_dir>/agent-config.json` 读三级配置。
 
     ★ 文件不存在 = 没有任何覆盖，一切走默认。这是**正常状态**，不是错误：
       没配过的项目就该这样。

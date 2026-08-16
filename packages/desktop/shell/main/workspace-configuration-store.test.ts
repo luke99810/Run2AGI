@@ -154,3 +154,23 @@ async function writeCorruptedKey(directory: string, roleId: string): Promise<voi
   const { writeFile } = await import('node:fs/promises')
   await writeFile(path, JSON.stringify(file, null, 2), 'utf8')
 }
+
+describe('系统提示词的送出', () => {
+  it('提示词出现在 endpoints() 里 —— 它第一次离开桌面端', async () => {
+    const store = new WorkspaceConfigurationStore(await root())
+    await store.initialize()
+    await store.saveAgent('coder', { systemPrompt: '优先用组合。' })
+
+    expect(store.endpoints()['coder']).toEqual({ systemPrompt: '优先用组合。' })
+  })
+
+  it('空白提示词不进表 —— 清空 = 不追加，不是追加一段空白', async () => {
+    // ★ 追加空白会在提示词里留下一个没有内容的小节，
+    //   模型看到一个空指令，而使用者以为自己已经删掉了。
+    const store = new WorkspaceConfigurationStore(await root())
+    await store.initialize()
+    await store.saveAgent('coder', { systemPrompt: '   \n  ' })
+
+    expect(store.endpoints()['coder']).toBeUndefined()
+  })
+})

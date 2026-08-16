@@ -184,7 +184,7 @@ export function resolveSidecarLaunch(app: Pick<App, 'isPackaged' | 'getAppPath'>
  * 不需要知道配置是怎么存的 —— 也因此这段链路能在没有 Electron 的测试里跑。
  */
 export interface ModelConfigSource {
-  endpoints(): Record<string, { model?: string; effort?: string; baseUrl?: string }>
+  endpoints(): Record<string, { model?: string; effort?: string; baseUrl?: string; systemPrompt?: string }>
   resolveSecrets(): { readonly keysByRole: Record<string, string>; readonly undecryptable: readonly string[] }
 }
 
@@ -200,7 +200,7 @@ export function agentKeyEnvName(role: string): string {
 
 
 /**
- * 把三级模型配置写成引擎读的 `<项目>/.codentum/model-config.json`，
+ * 把三级 Agent 配置（模型接入 + 系统提示词）写成引擎读的 `<项目>/.codentum/agent-config.json`，
  * 并返回要注入引擎进程的各 Agent 专属 Key 环境变量。
  *
  * ★ 做成模块级纯函数而不是私有方法：这段是整条链路上**唯一有逻辑**的部分，
@@ -242,7 +242,7 @@ export async function publishModelConfig(
   }
 
   const payload = {
-    schema: 'codentum.model-config.v1',
+    schema: 'codentum.agent-config.v1',
     updatedAt: new Date().toISOString(),
     global: endpoints[GLOBAL_SCOPE] ?? {},
     orchestrator: endpoints[ORCHESTRATOR_SCOPE] ?? {},
@@ -251,7 +251,7 @@ export async function publishModelConfig(
 
   const directory = join(projectRoot, '.codentum')
   await mkdir(directory, { recursive: true })
-  await writeFile(join(directory, 'model-config.json'), `${JSON.stringify(payload, null, 2)}
+  await writeFile(join(directory, 'agent-config.json'), `${JSON.stringify(payload, null, 2)}
 `, {
     encoding: 'utf8',
     mode: 0o600

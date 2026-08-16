@@ -50,6 +50,7 @@ def assemble_worker_prompt_bundle(
     *,
     context: ContextBundle | None = None,
     skills_dir: Path | str | None = None,
+    operator_notes: Sequence[tuple[str, str]] = (),
 ) -> WorkerPromptBundle:
     """Render model input from already-enforced worker constraints."""
 
@@ -58,7 +59,7 @@ def assemble_worker_prompt_bundle(
     if context is not None and context.role != role_spec.id:
         raise PromptBundleError(f"context role {context.role!r} does not match RoleSpec[{role_spec.id}]")
 
-    system = _render_system(role_spec, skills_dir=skills_dir)
+    system = _render_system(role_spec, skills_dir=skills_dir, operator_notes=operator_notes)
     user = _render_user(request, context=context)
     digest = _digest({"schema_version": 1, "system": system, "user": user})
     return WorkerPromptBundle(system=system, user=user, digest=digest)
@@ -71,6 +72,7 @@ def write_worker_prompt_bundle(
     evidence_dir: Path | str,
     context: ContextBundle | None = None,
     skills_dir: Path | str | None = None,
+    operator_notes: Sequence[tuple[str, str]] = (),
 ) -> WorkerPromptBundle:
     """Write system/user prompts and a stable manifest under evidence_dir."""
 
@@ -79,6 +81,7 @@ def write_worker_prompt_bundle(
         role_spec,
         context=context,
         skills_dir=skills_dir,
+        operator_notes=operator_notes,
     )
     prompt_dir = Path(evidence_dir) / "prompt"
     prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -93,6 +96,10 @@ def write_worker_prompt_bundle(
         "attempt": request.attempt,
         "system_path": "system.md",
         "user_path": "user.md",
+        # ★ 记下**哪几层**追加了说明。提示词本身已在 system.md 里，
+        #   但那份文件很长；这一行让「这次跑用了谁的追加说明」可以直接
+        #   从 manifest 看出来，而不必去读整份提示词做 diff。
+        "operator_note_scopes": [scope for scope, _ in operator_notes],
         "context_refs": list(context.refs) if context is not None else [],
         "skill_refs": list(_active_skill_ids(role_spec)),
         "skill_source": "project_shared" if skills_dir is not None else "builtin",
@@ -125,7 +132,12 @@ def load_worker_prompt_bundle(evidence_dir: Path | str) -> WorkerPromptBundle:
     return WorkerPromptBundle(system=system, user=user, digest=digest)
 
 
-def _render_system(role_spec: RoleSpec, *, skills_dir: Path | str | None = None) -> str:
+def _render_system(
+    role_spec: RoleSpec,
+    *,
+    skills_dir: Path | str | None = None,
+    operator_notes: Sequence[tuple[str, str]] = (),
+) -> str:
     role_prompt = _role_prompt_section(role_spec)
     lines = [
         "# Codentum Worker",
@@ -143,8 +155,40 @@ def _render_system(role_spec: RoleSpec, *, skills_dir: Path | str | None = None)
         "",
         *role_prompt,
         *_skill_prompt_sections(role_spec, skills_dir=skills_dir),
+        *_operator_note_sections(operator_notes),
     ]
     return "\n".join(lines)
+
+
+def _operator_note_sections(notes: Sequence[tuple[str, str]]) -> list[str]:
+    """使用者在界面上追加的说明，按层依次拼接。
+
+    ★ 放在**最后**：模型对靠后的内容更敏感，而这段是最具体的要求。
+      但它排在那句「Hard constraints live in RoleSpec, mounts, tool surface,
+      and gates」**之后**，位置本身就在说明它管不着硬约束。
+
+    ★ 每段都标出**来自哪一层**。一段来源不明的提示词，出问题时无法归因 ——
+      而这是唯一可以被使用者随时改动的内容，也就是最需要能归因的那段。
+
+    ★ 这里刻意再重申一次边界：追加说明不能授予权限。否则「在提示词里写
+      『你可以修改任何文件』」看起来像是一条可以生效的指令，
+      而实际拦它的是工具边界与门禁 —— 让模型清楚这一点，
+      比让它去试然后被拦住更省事。
+    """
+
+    if not notes:
+        return []
+    lines = [
+        "## Operator Notes",
+        "",
+        "以下内容由使用者在控制台追加，**按作用域从宽到窄排列**。",
+        "它们是工作方式上的补充说明，**不授予任何权限** —— "
+        "可写路径、可用工具、验收标准仍由 RoleSpec、挂载、工具面与门禁决定。",
+        "",
+    ]
+    for scope, text in notes:
+        lines.extend([f"### 来自：{scope}", "", text.strip(), ""])
+    return lines
 
 
 def _role_prompt_section(role_spec: RoleSpec) -> list[str]:

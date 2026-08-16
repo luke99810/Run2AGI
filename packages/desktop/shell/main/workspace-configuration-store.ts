@@ -192,11 +192,18 @@ export class WorkspaceConfigurationStore {
     return { keysByRole, undecryptable }
   }
 
-  /** 各层显式配置的接入参数，用于生成引擎读的 `model-config.json`。 */
-  endpoints(): Record<string, ModelEndpoint> {
-    const table: Record<string, ModelEndpoint> = {}
+  /** 各层显式配置的接入参数与系统提示词，用于生成引擎读的 `agent-config.json`。 */
+  endpoints(): Record<string, ModelEndpoint & { systemPrompt?: string }> {
+    const table: Record<string, ModelEndpoint & { systemPrompt?: string }> = {}
     for (const agent of this.#agents) {
-      if (agent.endpoint !== undefined) table[agent.roleId] = agent.endpoint
+      const prompt = agent.systemPrompt.trim()
+      if (agent.endpoint === undefined && prompt === '') continue
+      table[agent.roleId] = {
+        ...(agent.endpoint ?? {}),
+        // ★ 提示词一直存在这里，只是从来没有人把它送出去过。
+        //   这一行是它第一次离开桌面端。
+        ...(prompt === '' ? {} : { systemPrompt: prompt })
+      }
     }
     return table
   }

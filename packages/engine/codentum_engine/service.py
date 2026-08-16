@@ -932,6 +932,18 @@ class EngineService:
 
         return table
 
+
+    def resolve_prompt_for(self, role: str) -> tuple[tuple[str, str], ...]:
+        """某个角色要追加的系统提示词（含来源层名）。
+
+        ★ 与 `resolve_model_for` 的合并规则**不同**：模型是覆盖，提示词是叠加。
+          在全局写了团队规范、又给 coder 补一句要求的人，期望两条都生效 ——
+          按覆盖处理会让全局那条静默消失，而现象是「模型不守规范了」，
+          没人会想到去查提示词的合并规则。
+        """
+
+        return self._model_config().resolve_prompt(role)
+
     def _model_config(self) -> ModelConfig:
         """读界面写下来的三级模型配置（全局 / 主 Agent / 各子 Agent）。
 
@@ -1080,6 +1092,10 @@ class EngineService:
                 role_spec_resolver=self._role_spec_for_request,
                 context_char_budget=self.config.context_char_budget,
                 project_state_dir=self.config.resolved_state_dir(),
+                # ★ 界面上追加的系统提示词。装配层负责「配置从哪来」，
+                #   harness 只管把它渲染进提示词 —— 它不该知道
+                #   `.codentum/agent-config.json` 的存在。
+                operator_note_resolver=self.resolve_prompt_for,
             )
 
         return build_local_worker_runtime(

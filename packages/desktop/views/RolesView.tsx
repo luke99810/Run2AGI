@@ -344,7 +344,11 @@ export function RolesView({ snapshot, listConfigurations, saveConfiguration, rem
           <section className="agent-config-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-config-title">
             <header><div><span>{editing.custom ? '本地自定义配置' : `${editing.id} · 系统 RoleSpec`}</span><h2 id="agent-config-title">{editing.custom ? editing.label : `配置${editing.label}`}</h2></div><button className="icon-button" type="button" onClick={() => setEditing(null)} aria-label="关闭"><Icon name="close" size={19} /></button></header>
             {editing.custom ? <label><span>Agent 名称</span><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：前端开发 Agent" /></label> : null}
-            <label><span>系统提示词</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="补充该 Agent 的工作方式。硬约束请写入 RoleSpec，不要只依赖提示词。" /></label>
+            <label><span>追加系统提示词</span><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="补充该 Agent 的工作方式。硬约束请写入 RoleSpec —— 这里写的内容不授予任何权限。" /></label>
+            {/* ★ 说清合并规则。提示词是**叠加**（各层都生效），
+                   而模型接入是**覆盖**（高层赢）—— 同一个弹窗里两种规则，
+                   不写明白使用者一定会按错的那个去理解。 */}
+            <p className="dialog-note prompt-note">追加的提示词会**与上层叠加**（全局 → 主 Agent → 该 Agent 依次拼接，各层都生效），与模型接入「高层覆盖低层」的规则不同。它会带着来源标注写进每次执行的 <code>prompt/system.md</code>，可在证据里核对。</p>
             <div className="agent-document-row"><div><strong>系统文档</strong><span>{selectedConfig?.systemDocumentName ?? '未添加，仅支持 Markdown'}</span></div><button className="secondary-button compact-button" type="button" onClick={() => void chooseSystemDocument()}>添加 .md</button>{selectedConfig?.systemDocumentName === undefined ? null : <button className="secondary-button compact-button" type="button" onClick={() => void clearSystemDocument(editing.id).then(replace).catch((reason: unknown) => setError(String(reason)))}>移除</button>}</div>
             <fieldset className="agent-endpoint">
               <legend>模型接入</legend>
@@ -369,7 +373,7 @@ export function RolesView({ snapshot, listConfigurations, saveConfiguration, rem
               )}
               <p className="dialog-note">留空 = 跟随上一层（该 Agent → 主 Agent → RoleSpec → 全局 → 启动默认）。API Key 保存在本机安全存储，只在拉起引擎时作为环境变量注入，不写入任何文件。</p>
             </fieldset>
-            <p className="dialog-note">系统提示词目前仅本地保存，B 的 Harness 尚未消费它 —— 模型接入配置已接通引擎，提示词尚未。这里不把两者说成同一种状态。</p>
+
             <footer><button type="button" className="secondary-button" onClick={() => setEditing(null)}>取消</button><button type="button" className="primary-button" disabled={editing.custom && name.trim() === ''} onClick={() => void saveEditing()}>保存 Agent 配置</button></footer>
           </section>
         </div>
