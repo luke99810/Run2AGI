@@ -17,11 +17,14 @@
     "test:watch": "vitest",
     "build": "npm run typecheck && npm run test && electron-vite build",
     "screenshot": "node scripts/screenshot-smoke.mjs",
+    "engine:build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../delivery/codentum_delivery/packaging/build-engine.ps1",
     "sidecar:build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../delivery/codentum_delivery/packaging/build-sidecar.ps1",
+    "runtime:build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../delivery/codentum_delivery/packaging/build-runtime.ps1",
     "sidecar:test": "python ../delivery/codentum_delivery/sidecar.py --self-test",
     "release:metadata": "node scripts/prepare-release.mjs",
-    "dist:win": "npm run sidecar:build && npm run build && electron-builder --win nsis",
-    "dist:dir": "npm run sidecar:build && npm run build && electron-builder --dir --win"
+    "dist:win": "npm run runtime:build && npm run build && electron-builder --win nsis",
+    "dist:dir": "npm run runtime:build && npm run build && electron-builder --dir --win",
+    "release:verify-signature": "powershell -NoProfile -ExecutionPolicy Bypass -File ../delivery/codentum_delivery/packaging/verify-signature.ps1 -InstallerPath release/Codentum-Setup.exe"
   },
   "dependencies": {
     "electron-updater": "^6.6.2",
@@ -60,6 +63,11 @@
       {
         "from": "../delivery/dist/codentum-sidecar",
         "to": "python/codentum-sidecar",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../delivery/dist/codentum-engine",
+        "to": "python/codentum-engine",
         "filter": ["**/*"]
       }
     ],
