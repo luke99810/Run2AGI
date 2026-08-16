@@ -156,20 +156,62 @@ def test_fields_fall_through_independently(tmp_path: Path) -> None:
     assert resolved.base_url == "https://gw.example/v1"
 
 
-def test_role_spec_outranks_global_but_not_the_agent(tmp_path: Path) -> None:
-    """★ RoleSpec 的 modelPolicy 是角色**固有的能力要求**。
+def test_global_outranks_the_role_spec_default(tmp_path: Path) -> None:
+    """★ 这条曾经是反的，**端到端一跑就发现那是错的**。
 
-    出题方与做题方必须用不同模型（admission 的 check_role_model_isolation
-    就在查这个），那不该被一个笼统的全局值覆盖。
-    而使用者针对这个角色的显式配置排最高 —— 那是明示意图。
+    第一版把 RoleSpec 排在全局之上，理由是「modelPolicy 是角色固有的能力要求」。
+    实测：11 个角色里 10 个写了 defaultModel，唯一没写的 guardian 恰好是
+    唯一 usesModel=false 的角色 —— 于是「全局模型」对**所有会调模型的角色
+    都不生效**，是一个点了没有任何效果的设置。
+
+    ★ 错在把两样东西混为一谈：`defaultModel` 名字就叫默认值，
+      真正的约束是 `mustDifferFrom`。默认值就该被显式配置覆盖。
     """
 
     _write(tmp_path, {"global": {"model": "qwen-plus"}})
-    specs = (_spec("qa", "deepseek-v4-pro"),)
-    assert resolve(load_model_config(tmp_path), "qa", specs).model == "deepseek-v4-pro"
+    specs = (_spec("coder", "deepseek-v4-pro"),)
+    resolved = resolve(load_model_config(tmp_path), "coder", specs)
+    assert resolved.model == "qwen-plus", "全局模型没有生效 —— 它又变成死设置了"
+    assert resolved.source["model"] == "global"
 
-    _write(tmp_path, {"global": {"model": "qwen-plus"}, "agents": {"qa": {"model": "my-model"}}})
-    assert resolve(load_model_config(tmp_path), "qa", specs).model == "my-model"
+    # 该 Agent 的显式配置仍然最高
+    _write(tmp_path, {"global": {"model": "qwen-plus"}, "agents": {"coder": {"model": "my-model"}}})
+    assert resolve(load_model_config(tmp_path), "coder", specs).model == "my-model"
+
+
+def test_global_does_not_break_model_isolation(tmp_path: Path) -> None:
+    """★ 全局覆盖 RoleSpec，**但不能压过 mustDifferFrom**。
+
+    `mustDifferFrom` 说的是「同一模型既写又审 → 盲区重叠 → 评审失效」。
+    若全局值让 qa 和 coder 落到同一个模型，这条不变量就破了 ——
+    而破的方式是**静默**的：评审照常进行，只是评审不再独立。
+
+    所以撞上隔离时该角色保留自己的默认值，并把来源标成 roleSpecIsolation，
+    让界面能解释「为什么这个角色没跟随全局」。
+    """
+
+    _write(tmp_path, {"global": {"model": "same-model"}})
+    specs = tuple(load_builtin_role_specs())  # qa 真的声明了 mustDifferFrom=[coder]
+    coder = resolve(load_model_config(tmp_path), "coder", specs)
+    qa = resolve(load_model_config(tmp_path), "qa", specs)
+
+    assert coder.model == "same-model", "coder 应当跟随全局"
+    assert qa.model != coder.model, "隔离被全局值破掉了 —— 同一模型既写又审"
+    assert qa.source["model"] == "roleSpecIsolation", "没有说明为什么它不跟随全局"
+
+
+def test_explicit_per_agent_config_still_wins_over_isolation(tmp_path: Path) -> None:
+    """★ 使用者**针对某个角色显式配置**的模型仍然最高，即使撞上隔离。
+
+    那是明示意图，而准入的 check_role_model_isolation 会当场拒绝并说明。
+    **「拦在准入」比「悄悄替他改掉」好** —— 后者会让使用者以为自己配上了。
+    """
+
+    _write(tmp_path, {"agents": {"qa": {"model": "qwen-coder-plus-1106"}}})
+    specs = tuple(load_builtin_role_specs())
+    qa = resolve(load_model_config(tmp_path), "qa", specs)
+    assert qa.model == "qwen-coder-plus-1106"
+    assert qa.source["model"] == "agent", "显式配置被隔离逻辑悄悄改掉了"
 
 
 # ══════════════════════════════════════════════════════════════

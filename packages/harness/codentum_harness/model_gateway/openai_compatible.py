@@ -409,6 +409,27 @@ def _int_field_any(obj: object, names: Sequence[str], *, default: int | None = N
     raise ValueError(f"missing integer response field, tried: {', '.join(names)}")
 
 
+class MalformedToolArgumentsError(ValueError):
+    """模型给出的工具调用参数无法用成一个对象。
+
+    ★ 为什么要一个**类型**而不是靠错误消息分辨：
+
+      工具参数畸形有两种，都由模型自己可以纠正：
+        · 被截断    → JSON 解不开
+        · 解得开但不是对象（数组、裸字符串、数字）
+
+      而 agent_runner 的回推恢复原先靠 `"JSON object text" in str(exc)`
+      这个子串判断，只覆盖了第一种。第二种直接把整个 packet 打成失败 ——
+      2026-08-16 真机跑第一次就撞上：前三轮写文件、跑测试全部正常，
+      第四轮一次畸形调用让整次执行作废。
+
+    ★ **靠错误消息的措辞来分支，是一种一改文案就断的耦合。**
+      改文案不会有任何测试变红，而恢复能力会静默消失。
+
+    ★ 继承 ValueError：既有的 `except ValueError` 调用方不受影响。
+    """
+
+
 def _json_mapping_field(obj: object, name: str) -> Mapping[str, Any]:
     raw = _required_field(obj, name)
     if isinstance(raw, str):
@@ -440,13 +461,17 @@ def _json_mapping_field(obj: object, name: str) -> Mapping[str, Any]:
             except json.JSONDecodeError as exc:
                 # ★ 报错要带上实际内容的开头，否则"must be JSON object text"
                 #   这句话本身不含任何可用于排查的信息。
-                raise ValueError(
+                raise MalformedToolArgumentsError(
                     f"response field {name!r} must be JSON object text; got {raw[:200]!r}"
                 ) from exc
     else:
         parsed = raw
     if not isinstance(parsed, Mapping):
-        raise ValueError(f"response field {name!r} must be a JSON object")
+        # ★ 解得开但不是对象（数组 / 裸字符串 / 数字）—— 同样是模型自己
+        #   能纠正的畸形，走同一个可恢复类型。
+        raise MalformedToolArgumentsError(
+            f"response field {name!r} must be a JSON object; got {type(parsed).__name__} {str(parsed)[:200]!r}"
+        )
     return {str(key): value for key, value in parsed.items()}
 
 

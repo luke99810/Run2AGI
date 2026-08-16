@@ -173,6 +173,9 @@ function layerLabel(layer?: string): string {
     case 'agent': return '该 Agent'
     case 'orchestrator': return '主 Agent'
     case 'roleSpec': return '角色定义'
+    // ★ 这一档必须能解释清楚，否则使用者会看到「配了全局但这个 Agent
+    //   没跟随」而不知为何 —— 而原因恰恰是一条在保护他的不变量。
+    case 'roleSpecIsolation': return '角色定义（隔离约束：与被评审方不能同模型）'
     case 'global': return '全局'
     case 'fallback': return '启动默认'
     default: return '未知'

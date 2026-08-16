@@ -317,7 +317,9 @@ def test_cloud_catalog_covers_every_role() -> None:
             has_global = True
         roles_in_catalog.update(str(r) for r in rs)
 
-    all_roles = {spec.id for spec in load_builtin_role_specs()}
+    # ★ 必须 str()：`spec.id` 是 Literal[...]，与 `roles_in_catalog` 的
+    #   set[str] 相减会被 mypy 判为操作数类型不符（4c8f2d1 引入，门禁当场红）。
+    all_roles = {str(spec.id) for spec in load_builtin_role_specs()}
     missing = all_roles - roles_in_catalog
     assert not missing, f"云 catalog 未覆盖这些角色：{sorted(missing)}"
     assert has_global, "catalog 至少要有一条全局 Skill（roles 为空或 '*'）"

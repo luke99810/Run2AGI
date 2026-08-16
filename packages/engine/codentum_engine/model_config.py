@@ -128,7 +128,14 @@ class ModelOverride:
         )
 
 
-Layer = Literal["agent", "orchestrator", "roleSpec", "global", "fallback"]
+Layer = Literal[
+    "agent",
+    "orchestrator",
+    "roleSpec",
+    "roleSpecIsolation",
+    "global",
+    "fallback",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,16 +203,43 @@ class ModelConfig:
         优先级（高 → 低）：
 
             该子 Agent  >  主 Agent（仅当 role 就是主 Agent）
-                        >  RoleSpec.modelPolicy  >  全局  >  命令行默认
+                        >  全局  >  RoleSpec.modelPolicy  >  命令行默认
 
         ★ 主 Agent 那一层**只对主 Agent 生效**，不是「所有角色的第二默认」。
           否则给主 Agent 换个强模型，会把所有子 Agent 一起换掉 ——
           而使用者的本意恰恰是「只对主 Agent」。
 
-        ★ RoleSpec 排在全局**之上**：RoleSpec 里的 modelPolicy 是角色固有的
-          能力要求（例如出题方与做题方必须用不同模型，见 admission 的
-          check_role_model_isolation），它不该被一个笼统的全局值覆盖。
-          而使用者在界面上针对这个角色的显式配置排在最高 —— 那是明示意图。
+        ════════════════════════════════════════════════════
+         ★ 全局为什么必须排在 RoleSpec 之上（这里改过一次）
+        ════════════════════════════════════════════════════
+
+        第一版把 RoleSpec 排在全局之上，理由是「modelPolicy 是角色固有的
+        能力要求」。**端到端一跑就发现那是错的**：
+
+            11 个角色里 10 个写了 defaultModel，
+            唯一没写的 guardian 恰好是唯一 usesModel=false 的角色。
+
+        也就是说「全局模型」对**所有真正会调模型的角色都不生效** ——
+        它是一个点了没有任何效果的设置。而这正是使用者点名要的功能。
+
+        ★ 错在把两样东西混为一谈：`defaultModel` 名字就叫**默认值**，
+          而真正的约束是 `mustDifferFrom`。默认值就该被显式配置覆盖。
+
+        ════════════════════════════════════════════════════
+         ★ 但全局不能压过隔离约束
+        ════════════════════════════════════════════════════
+
+        `mustDifferFrom` 声明的是「同一模型既写又审 → 盲区重叠 → 评审失效」。
+        若全局值让 qa 和 coder 落到同一个模型，这条不变量就破了 ——
+        而破的方式是**静默**的：评审照常进行，只是评审不再独立。
+
+        所以：全局覆盖 RoleSpec，**但当这么做会撞上 mustDifferFrom 时，
+        该角色保留自己的 RoleSpec 默认值**，并把来源标成
+        `roleSpecIsolation` —— 让界面能解释「为什么这个角色没跟随全局」。
+
+        ★ 使用者**针对某个角色显式配置**的模型仍然最高，即使它撞上隔离 ——
+          那是明示意图，而准入的 check_role_model_isolation 会当场拒绝并说明。
+          「拦在准入」比「悄悄替他改掉」好：后者会让使用者以为自己配上了。
         """
 
         source: dict[str, Layer] = {}
@@ -223,20 +257,35 @@ class ModelConfig:
         spec_model = spec.modelPolicy.defaultModel if spec and spec.modelPolicy else None
         spec_effort = spec.modelPolicy.defaultEffort if spec and spec.modelPolicy else None
 
-        model = pick(
-            "model",
-            (agent.model, "agent"),
-            (orch.model, "orchestrator"),
-            (spec_model, "roleSpec"),
-            (self.global_.model, "global"),
-            (fallback_model, "fallback"),
-        )
+        # ★ 全局排在 RoleSpec 之上（见 docstring），但要先看隔离约束。
+        global_model = self.global_.model
+        if (
+            global_model
+            and not agent.model
+            and not orch.model
+            and spec_model
+            and self._breaks_isolation(role, global_model, role_specs)
+        ):
+            # 跟随全局会撞上 mustDifferFrom —— 保留本角色的 RoleSpec 默认值，
+            # 并把这件事标进 source，让界面能解释「为什么它没跟随全局」。
+            global_model = None
+            source["model"] = "roleSpecIsolation"
+            model: str | None = spec_model
+        else:
+            model = pick(
+                "model",
+                (agent.model, "agent"),
+                (orch.model, "orchestrator"),
+                (global_model, "global"),
+                (spec_model, "roleSpec"),
+                (fallback_model, "fallback"),
+            )
         effort = pick(
             "effort",
             (agent.effort, "agent"),
             (orch.effort, "orchestrator"),
-            (spec_effort, "roleSpec"),
             (self.global_.effort, "global"),
+            (spec_effort, "roleSpec"),
             (fallback_effort, "fallback"),
         )
         base_url = pick(
@@ -265,6 +314,35 @@ class ModelConfig:
             source=source,
         )
 
+
+
+    def _breaks_isolation(
+        self, role: str, candidate: str, role_specs: tuple[RoleSpec, ...]
+    ) -> bool:
+        """跟随 `candidate` 会不会撞上本角色的 mustDifferFrom。
+
+        ★ 比的是对方的 **RoleSpec 默认值 + 全局**两种可能落点，
+          而不只是默认值：如果全局也会把对方改成 candidate，那照样撞。
+
+        ★ 不做递归解析：本仓库的 mustDifferFrom 只有 helper/qa/reviewer → coder，
+          而 coder 自己没有 mustDifferFrom。真要出现相互声明，
+          递归会绕不出来 —— 一层足够，且不会挂死。
+        """
+
+        spec = next((s for s in role_specs if s.id == role), None)
+        if spec is None or spec.modelPolicy is None:
+            return False
+        for other_id in spec.modelPolicy.mustDifferFrom or ():
+            other = next((s for s in role_specs if s.id == other_id), None)
+            if other is None or other.modelPolicy is None:
+                continue
+            other_agent = self.agents.get(str(other_id), ModelOverride())
+            other_model = (
+                other_agent.model or self.global_.model or other.modelPolicy.defaultModel
+            )
+            if other_model and other_model == candidate:
+                return True
+        return False
 
     def resolve_prompt(self, role: str) -> tuple[tuple[str, str], ...]:
         """某个角色要追加的系统提示词，按生效顺序返回 `(层名, 文本)`。

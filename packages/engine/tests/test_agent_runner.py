@@ -24,6 +24,7 @@ from codentum_contracts.interfaces import (
 )
 from codentum_contracts.state import ModelRouting, PacketId
 from codentum_engine.agent_runner import AgentRunnerConfig, build_agent_runner
+from codentum_harness.model_gateway import MalformedToolArgumentsError
 from codentum_harness.prompt_bundle import write_worker_prompt_bundle
 from codentum_roles.loader import load_builtin_role_specs
 
@@ -477,7 +478,12 @@ def test_truncated_tool_arguments_are_recoverable_not_fatal(prepared: Path) -> N
         async def invoke(self, req: ModelRequest) -> ModelResponse:
             self.seen.append(req)
             if len(self.seen) == 1:
-                raise ValueError("response field 'arguments' must be JSON object text; got '{\"content\": \"…")
+                # ★ 用生产代码真正抛的那个类型，而不是裸 ValueError。
+                #   夹具与生产不一致时，这条测试守的就不是真的那条路径了 ——
+                #   2026-08-16 改成按类型分支后，它正是以这种方式失败的。
+                raise MalformedToolArgumentsError(
+                    "response field 'arguments' must be JSON object text; got '{\"content\": \"…"
+                )
             return ModelResponse(
                 text="",
                 tool_calls=(ToolCall(id="1", name="write_file", input={"path": "a.py", "content": "x=1"}),)
@@ -494,7 +500,11 @@ def test_truncated_tool_arguments_are_recoverable_not_fatal(prepared: Path) -> N
 
     assert outcome.status == "completed", getattr(outcome, "detail", "")
     joined = "\n".join(m.content for m in gateway.session.seen[1].messages)
-    assert "参数被截断" in joined
+    # ★ 守「模型拿到了可操作的建议」，不钉死某一句文案 ——
+    #   钉死文案会让每次措辞调整都变成一次假失败，
+    #   而真正要保住的是「它知道该怎么改」。
+    assert "写短一些" in joined, "没告诉模型该怎么改，那就不是自我纠正"
+    assert "JSON object text" in joined, "没把实际原因带给模型"
 
 
 # ══════════════════════════════════════════════════════════════

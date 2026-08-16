@@ -840,7 +840,8 @@ class EngineService:
 
         import asyncio
 
-        gateway = build_model_gateway(self._gateway_config())
+        # ★ 主 Agent 可能配了自己的接入地址，按它那一层取。
+        gateway = build_model_gateway(self._gateway_config(role=ORCHESTRATOR_ROLE))
 
         # ★ 主 Agent（planner）走三级解析里属于自己的那一层。
         #   此前这里写死 `self.config.model` —— 也就是界面上「只给主 Agent
@@ -1012,13 +1013,29 @@ class EngineService:
             ),
         )
 
-    def _gateway_config(self) -> ModelGatewayConfig:
+    def _gateway_config(self, *, role: str = _GLOBAL_DEFAULT_ROLE) -> ModelGatewayConfig:
+        """默认网关的配置。
+
+        ★ `base_url` 必须从三级解析里取 —— 这里曾经**根本不传**，
+          于是「全局接入地址」是个死设置：它只在某个角色单独配了 baseUrl 时
+          才被 `_gateways_by_role` 用到，全局那一层没有任何人读。
+
+          这与「全局模型曾经被 RoleSpec 压住」是同一类缺陷，而且更隐蔽：
+          模型至少还能从别处看出来用了哪个，接入地址错了只会表现为
+          「连不上」或「连到了另一个部署」，完全不指向配置。
+
+        ★ 实测触发：专属部署（`llm-xxx.cn-beijing.maas.aliyuncs.com`）
+          必须靠 baseUrl 才连得上，公共端点的默认值在那里是错的。
+        """
+
+        resolved = self.resolve_model_for(role)
         return ModelGatewayConfig.bailian(
             pricing={
                 model: TokenPricingConfig.from_pricing(price)
                 for model, price in audited_bailian_pricing().items()
             },
             api_key_env=self._key_env or "",
+            base_url=resolved.base_url,
         )
 
     def _workers_root(self) -> Path:
@@ -1040,13 +1057,9 @@ class EngineService:
         if self._key_env is None:
             return None
 
-        gateway_config = ModelGatewayConfig.bailian(
-            pricing={
-                model: TokenPricingConfig.from_pricing(price)
-                for model, price in audited_bailian_pricing().items()
-            },
-            api_key_env=self._key_env,
-        )
+        # ★ 走同一个构造口，别再手搓一份 —— 手搓的那份正是漏掉 base_url 的地方。
+        #   两处各建一份网关配置，改了一处忘了另一处不会有任何东西报错。
+        gateway_config = self._gateway_config()
 
         if self.config.worker_runtime_mode == "team":
             return build_team_worker_runtime(

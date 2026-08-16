@@ -53,6 +53,7 @@ from codentum_contracts.interfaces import (
     WorkerOutcome,
 )
 from codentum_contracts.state import EvidenceRef
+from codentum_harness.model_gateway import MalformedToolArgumentsError
 from codentum_harness.prompt_bundle import load_worker_prompt_bundle
 
 from .acceptance import split_command, vacuity_check
@@ -298,21 +299,31 @@ class _AgentRun:
                         tools=tools,
                     ),
                 )
-            except ValueError as exc:
-                if "JSON object text" not in str(exc) or turn >= self._config.max_turns:
+            except MalformedToolArgumentsError as exc:
+                # ★ 按**类型**分支，不按错误消息的措辞。
+                #
+                #   原先写的是 `"JSON object text" not in str(exc)` —— 只覆盖
+                #   「被截断」那一种。2026-08-16 真机第一次跑就撞上另一种：
+                #   参数解得开、但不是对象，于是这条恢复不触发，
+                #   前三轮已经写好文件、跑过测试的一次执行整个作废。
+                #
+                #   **靠错误消息的措辞来分支，是一改文案就断的耦合** ——
+                #   而改文案不会有任何测试变红，恢复能力会静默消失。
+                if turn >= self._config.max_turns:
                     raise
-                logger.warning("工具调用参数被截断，回推让模型重写（第 %d 轮）", turn)
+                logger.warning("工具调用参数畸形，回推让模型重写（第 %d 轮）：%s", turn, exc)
                 return {
                     "turn": turn,
                     "response": None,
                     "messages": [
-                        ModelMessage(role="assistant", content="（上一次工具调用输出被截断）"),
+                        ModelMessage(role="assistant", content="（上一次工具调用参数无法解析）"),
                         ModelMessage(
                             role="user",
                             content=(
-                                "[系统] 你上一次的工具调用**参数被截断了**（单次输出超长）。"
-                                "请重新调用，并把内容写短一些 —— "
-                                "例如一次只写一个文件、去掉冗长注释。"
+                                "[系统] 你上一次的工具调用**参数无法解析**："
+                                f"{exc}\n"
+                                "请重新调用。参数必须是一个 JSON 对象；"
+                                "若内容较长，请写短一些 —— 例如一次只写一个文件、去掉冗长注释。"
                             ),
                         ),
                     ],
