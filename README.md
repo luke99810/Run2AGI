@@ -4,6 +4,8 @@
 
 Codentum 是一个本地优先的桌面软件：输入一份软件需求，系统自动编排一支专业化的 Agent 团队，完成从架构设计、编码、评审、测试到打包交付的完整流程。全过程在可视化界面中实时呈现，每一次状态变更都附有证据溯源。
 
+> 开源地址：[GitHub](https://github.com/luke99810/Run2AGI) · [Gitee](https://gitee.com/Codentum/codentum)
+
 ---
 
 ## 为什么需要 Codentum
@@ -26,13 +28,13 @@ Codentum 是一个本地优先的桌面软件：输入一份软件需求，系�
 Codentum 的目标不是让模型更听话，而是让模型**在结构上无法犯错**——凡是依赖提示词约束行为的位置，都用结构性约束使其不可能发生。由此划分系统的确定性边界：
 
 | 错误类型 | 处理方式 | 具体机制 |
-|---|---|---|
+|---|---|
 | **不可恢复的错误** | 确定性代码（零 LLM 调用） | 状态机、路径锁、准入校验、门禁、预算、守卫 |
 | **可恢复的错误** | 模型重试 | 代码生成、评审、测试，失败后重试即可 |
 
 这条边界是 AI Infra 的架构第一原则：**大模型是概率性的不可靠组件，基础设施的任务是让由不可靠组件组成的系统变得可靠**。方法不是增加提示词，而是将「必须确定」的部分从模型手中收回，交给软件工程。
 
-完整设计依据见 [`docs/00-总体设计方案.md`](docs/00-总体设计方案.md)。
+
 
 ---
 
@@ -54,7 +56,7 @@ Codentum 采用控制 / 执行 / 数据 / 上下文 / 进化五平面架构，�
 进化平面  (Evolution Plane)    经验沉淀 L0→L1 · 判据影子档位 · 证伪门（L2→L3，暂缓）
 ```
 
-> 进化平面已标注实现状态。`L2→L3 证伪门`暂缓的原因不是技术难度，而是**证据当前不可得**：一条经验的证伪门只能是「判据冻结下，带它运行与不带它运行出现显著差异」，而当前单 packet 完成率约 20–40%，噪声远大于信号。理由与边界见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)。
+> 进化平面已标注实现状态。`L2→L3 证伪门`暂缓的原因不是技术难度，而是**证据当前不可得**：一条经验的证伪门只能是「判据冻结下，带它运行与不带它运行出现显著差异」，而当前单 packet 完成率约 20–40%，噪声远大于信号。
 
 **同构关系**：控制平面 `reconcile` → Kubernetes controller manager；`.codentum/` → etcd；`WorkPacket` → Pod spec。控制平面不 import 执行平面的任何模块，WorkerRuntime 通过构造函数注入——执行平面可整体替换而控制平面零改动。
 
@@ -101,7 +103,7 @@ pending ──► ready ──► running ──► review ──► accepted
 
 Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻结：Architect 写 `contracts/`，Coder 只读挂载）。WorkerRuntime 是控制平面与执行平面的唯一接口——控制平面通过 `SpawnRequest` 发起任务、通过 `SettleRequest` 收集证据，不接触任何模型调用细节。
 
-执行段由 LangGraph 控制流图驱动（推理 → 工具调用 → 自验 → 收敛），前后两段无模型参与，详见 [ADR-0004](docs/adr/0004-执行平面改用-LangGraph.md)。控制平面不使用 LangGraph，原因有三：控制平面零 LLM；状态存于 Git 文件，与 checkpointer 的自有持久化冲突；幂等与崩溃恢复由确定性代码保证更易论证。
+执行段由 LangGraph 控制流图驱动（推理 → 工具调用 → 自验 → 收敛），前后两段无模型参与。控制平面不使用 LangGraph，原因有三：控制平面零 LLM；状态存于 Git 文件，与 checkpointer 的自有持久化冲突；幂等与崩溃恢复由确定性代码保证更易论证。
 
 ### `.codentum/` 状态目录
 
@@ -127,7 +129,7 @@ Worker 在独立的 Git worktree 中执行，确保数据隔离（I3 契约冻�
 六条不变量构成系统的可靠性骨架。角色、流程、工具均可替换，不变量不可破坏。
 
 | ID | 名称 | 内容 | 强制执行机制 |
-|---|---|---|---|
+|---|---|---|
 | **I1** | 单写者 | 任一路径同一时刻仅被一个 in-progress packet 拥有 | 所有权图 + 前缀树锁 + Git hook |
 | **I2** | 验收可判定 | 每个 packet ≥1 条机器可判定的验收谓词 | 准入校验器（确定性） |
 | **I3** | 契约冻结 | 仅 Architect 可写 `contracts/`，Coder 只读 | 只读挂载 + hook + Guardian |
@@ -150,7 +152,7 @@ Codentum 用一组**因果算子**为判据缺陷制造信号。它们共享同�
 ### 验收侧：六层判据
 
 | 层 | 修的是 | 手法 |
-|---|---|---|
+|---|---|
 | 1–3 | 拿控制面簿记当证据 · 门禁同洞 · 声称完成但未改文件 | 检查是否存在 X |
 | 4 | 改了文件，但未达到验收标准 | 实际执行谓词 |
 | 5 | 达到验收标准，但**验收标准是空的** | `vacuity_check`：移走实现，测试必须变红 |
@@ -173,7 +175,7 @@ Codentum 用一组**因果算子**为判据缺陷制造信号。它们共享同�
 
 变异脚本自身有三个控制点：**基线绿**、**至少一条被杀死**、**正对照（塞入一条空规则）必须存活**。缺少第三点，「全部被杀死」的结论与「杀死判定永远为真」在证据上不可区分。等价变异体连同判定理由记录于 `scripts/lib/equivalent_mutants.py`，每次运行都打印完整清单——隐藏的排除项等于没有排除项。
 
-详见 [ADR-0008](docs/adr/0008-进化层-经验沉淀与判据因果检验.md)、[ADR-0010](docs/adr/0010-验收第六层-集成谓词的桩化检验.md)、[ADR-0011](docs/adr/0011-判据的生命周期-影子档位-资产负债表-缺口报告.md)。
+
 
 ---
 
@@ -218,18 +220,18 @@ MCP 由引擎连接一次，工具进入主 Agent 的工具面，所有 packet �
 python -m codentum_engine --project-root <项目> --mcp-config-dir packages/roles/mcp
 ```
 
-不指定 `--mcp-config-dir` 则完全不接 MCP，内置工具照常可用。runner 接收的是**已连接的工具箱**而非配置目录——「每个 packet 连接一次」（8 路并行 = 48 个 npx 进程）因此在结构上不可表达，见 [ADR-0009](docs/adr/0009-MCP-连接点归属与共享工具箱.md)。
+不指定 `--mcp-config-dir` 则完全不接 MCP，内置工具照常可用。runner 接收的是**已连接的工具箱**而非配置目录——「每个 packet 连接一次」（8 路并行 = 48 个 npx 进程）因此在结构上不可表达，。
 
 **默认开启**
 
 | id | 用途 | 凭据 | 实测 |
-|---|---|---|---|
+|---|---|---|
 | `playwright` | 端到端测试、浏览器自动化 | 无需 | ✅ 连接成功，24 个工具 |
 
 **默认关闭 · 需凭据**
 
 | id | 用途 | 需要的凭据 |
-|---|---|---|
+|---|---|
 | `github` | 仓库、Issue、PR、提交历史 | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | `sentry` | 线上错误追踪 | `SENTRY_ACCESS_TOKEN` |
 | `postgres` | 只读查询与 schema 检查 | `POSTGRES_CONNECTION_STRING` |
@@ -239,7 +241,7 @@ python -m codentum_engine --project-root <项目> --mcp-config-dir packages/role
 **默认关闭 · 会绕过本项目不变量**
 
 | id | 风险 | 绕过的不变量 |
-|---|---|---|
+|---|---|
 | `git` | **R3** | 控制平面的状态机与 worktree 隔离 |
 | `filesystem` | R2 | 工作区边界（内置 `write_file` 的路径穿越检查） |
 | `browser` | R1 | 无，但与 `playwright` 完全重叠 |
@@ -252,16 +254,16 @@ python -m codentum_engine --project-root <项目> --mcp-config-dir packages/role
 
 ## 技术栈
 
-| 层次 | 技术选型 | 决策依据 |
-|---|---|---|
-| 核心引擎 | Python 3.11+ | ADR-0003 |
-| 桌面端 | TypeScript + Electron + React | ADR-0003 |
-| 契约定义 | JSON Schema → Pydantic（Python）+ TypeScript 类型（生成） | ADR-0003 |
-| Agent 编排 | LangGraph（仅执行平面） | ADR-0004 |
-| 类型门禁 | mypy strict + ruff + Pydantic v2 | ADR-0003 |
-| 模型适配 | 阿里云百炼（Qwen）默认，Anthropic 可切换 | ADR-0005 |
-| 状态存储 | Git 仓库（文件真源）· SQLite（派生索引） | — |
-| 任务隔离 | Git Worktree + 路径锁 | ADR-0001 |
+| 层次 | 技术选型 |
+|---|---|
+| 核心引擎 | Python 3.11+ |
+| 桌面端 | TypeScript + Electron + React |
+| 契约定义 | JSON Schema → Pydantic（Python）+ TypeScript 类型（生成） |
+| Agent 编排 | LangGraph（仅执行平面） |
+| 类型门禁 | mypy strict + ruff + Pydantic v2 |
+| 模型适配 | 阿里云百炼（Qwen）默认，Anthropic 可切换 |
+| 状态存储 | Git 仓库（文件真源）· SQLite（派生索引） |
+| 任务隔离 | Git Worktree + 路径锁 |
 
 ---
 
@@ -336,7 +338,7 @@ make verify-offline   # 零运行时依赖子集
 ```
 
 | 命令 | 验证内容 | 可无依赖运行 |
-|---|---|---|
+|---|---|
 | `make gen-check` | 生成物与 schema 一致性 | ✅ |
 | `python scripts/validate_fixtures.py` | 固件过 schema + 八项交叉检查 | ✅ |
 | `python scripts/check_boundaries.py` | 路径独占 · packages 全覆盖 · 契约冻结 | ✅ |
@@ -350,7 +352,7 @@ make verify-offline   # 零运行时依赖子集
 ### 判据自身的质量（按需运行，不进 CI 主链路）
 
 | 命令 | 产出 | 耗时 |
-|---|---|---|
+|---|---|
 | `python scripts/mutate_judgements.py --mode=strong` | 强变异存活率（判据**有没有人碰过**） | ~2 分钟 |
 | `python scripts/mutate_judgements.py --mode=weak` | 弱变异存活率（判据**边界有没有测准**） | ~5 分钟起 |
 | `python scripts/judgement_ledger.py` | 判据资产负债表（档位 × 命中 × 变异） | 秒级 |
@@ -389,22 +391,9 @@ tests/contract/test_*.py                               ← gen_contract_tests
 
 ---
 
-## 文档索引
-
-| 文档 | 内容 |
-|---|---|
-| [`docs/00-总体设计方案.md`](docs/00-总体设计方案.md) | 权威设计依据，26 章完整方案 |
-| [`docs/01-角色详细设计与Skill清单.md`](docs/01-角色详细设计与Skill清单.md) | 各角色 Harness / Loop / Graph 设计 |
-| [`docs/02-实施路线与交付计划.md`](docs/02-实施路线与交付计划.md) | 分期路线、MVP 边界、Demo 剧本 |
-| [`docs/03-团队分工与协作规范.md`](docs/03-团队分工与协作规范.md) | 协作规范 |
-| [`docs/04-模型路由表.md`](docs/04-模型路由表.md) | 按错误成本分档的模型路由策略 |
-| [`docs/adr/`](docs/adr/) | 架构决策记录（含已否决方案与理由） |
-
----
-
 ## 许可
 
-Apache-2.0（见 [`LICENSE`](LICENSE)）。依赖披露见 `docs/` 对应文档。推送前须通过 `secret-scan` 验证。
+Apache-2.0（见 [`LICENSE`](LICENSE)）。推送前须通过 `secret-scan` 验证。
 
 ---
 

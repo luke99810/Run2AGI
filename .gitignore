@@ -103,3 +103,6 @@ temp/
 .ruff_cache/
 .pytest_cache/
 /.codentum/judgements/
+
+# 本地开发启动脚本（含个人 API Key，不入库）
+start-desktop.bat
